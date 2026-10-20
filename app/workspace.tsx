@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Activity, ArrowDownToLine, ArrowRight, AudioLines, BookOpen, Check, CheckCircle2, ChevronDown, ChevronRight, CircleHelp, Clipboard, Copy, Download, FileText, Headphones, History, Layers3, Loader2, LockKeyhole, Mic, MicOff, MoreHorizontal, Pause, Phone, Play, Plus, Radio, RefreshCw, Search, Settings2, ShieldCheck, Sparkles, Square, Trash2, Upload, X } from "lucide-react";
+import { parseLiveDraft } from "../lib/live";
 import { GOALS, knowledgeFor, type Manufacturer, type Source, type Turn, type Guidance, type CallRecord } from "../lib/trade";
 
 type View = "live" | "knowledge" | "history" | "settings";
@@ -43,6 +44,7 @@ export default function Workspace() {
   const [guidance, setGuidance] = useState<Guidance | null>(null);
   const [thinking, setThinking] = useState(false);
   const [latency, setLatency] = useState(0);
+  const [liveDraft, setLiveDraft] = useState(false);
   const [manualText, setManualText] = useState("");
   const [manualRole, setManualRole] = useState<Turn["role"]>("buyer");
   const [selectedCall, setSelectedCall] = useState<string | null>(null);
@@ -129,35 +131,35 @@ export default function Workspace() {
   }
   async function copy(text: string) { try { await navigator.clipboard.writeText(text); notify("Copied to clipboard"); } catch { setError("Copy was unavailable. Select the text and copy it manually."); } }
   function payload(mode: string, conversation: Turn[], manufacturer = context.current.current, targetBuyer = context.current.buyer, targetGoal = context.current.goal) {
-    if (!manufacturer) throw new Error("Add a manufacturer first.");
+    manufacturer ||= {id:"general",name:"Your company",products:"",introduction:"",sources:[]};
     return { mode, manufacturer: { name:manufacturer.name, products:manufacturer.products }, sources:knowledgeFor(manufacturer), buyer:targetBuyer, goal:targetGoal, turns:conversation.slice(-300).map(t => ({ role:t.role, text:t.text.slice(0,6000) })) };
   }
   async function coach(conversation = context.current.turns, mode = "coach") {
-    if (!context.current.current) { openModal({ type:"manufacturer" }); return; }
     controller.current?.abort(); const aborter = new AbortController(); controller.current = aborter;
     const id = ++seq.current; setThinking(true); setError(""); const began = performance.now();
-    try { const result = await requestJSON<Guidance>("/api/coach", payload(mode, conversation), aborter.signal); if (id === seq.current) { setGuidance(result); setLatency(performance.now() - began); } }
+    try { const result = await requestJSON<Guidance>("/api/coach", payload(mode, conversation), aborter.signal); if (id === seq.current) { setGuidance(result); setLiveDraft(false); setLatency(performance.now() - began); } }
     catch (e) { if (!(e instanceof DOMException && e.name === "AbortError") && id === seq.current) setError(e instanceof Error ? e.message : "Could not generate guidance."); }
     finally { if (id === seq.current) setThinking(false); }
   }
-  function addTurn(text: string, role: Turn["role"], id = uid(), at = Date.now()) {
+  function addTurn(text: string, role: Turn["role"], id = uid(), at = Date.now(), generate = true) {
     if (!text.trim()) return;
     const existing = context.current.turns;
     const next = existing.some(t => t.id === id) ? existing.map(t => t.id === id ? { ...t, text } : t) : [...existing, { id, text:text.trim(), role, at }].sort((a,b) => a.at-b.at);
     context.current.turns = next; setTurns(next); if (!draft.current.startedAt) setStartedAt(Date.now());
+    if (!generate) return;
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(() => void coach(context.current.turns), 200);
   }
-  function submitManual(e: React.FormEvent) { e.preventDefault(); if (!manualText.trim()) return; if (!current) { openModal({type:"manufacturer"}); return; } addTurn(manualText, manualRole); setManualText(""); }
+  function submitManual(e: React.FormEvent) { e.preventDefault(); if (!manualText.trim()) return; addTurn(manualText, manualRole); setManualText(""); }
   function stopAudio() {
     peer.current?.close(); peer.current = null; channel.current = null;
     stream.current?.getTracks().forEach(track => track.stop()); stream.current = null;
     void audioContext.current?.close(); audioContext.current = null; cancelAnimationFrame(frame.current);
     if (testTimer.current) clearTimeout(testTimer.current); if (stopTimer.current) clearTimeout(stopTimer.current);
-    setLive(false); setConnecting(false); setPaused(false); setPartial(""); setHearing(false); setLevel(0); setMicTest(false);
+    setLive(false); setConnecting(false); setPaused(false); setThinking(false); setPartial(""); setHearing(false); setLevel(0); setMicTest(false);
   }
   function attachMeter(ms: MediaStream) {
-    const ctx = new AudioContext(); audioContext.current = ctx;
+    const ctx = new AudioContext(); audioContext.current = ctx; void ctx.resume();
     const analyser = ctx.createAnalyser(); analyser.fftSize = 256; ctx.createMediaStreamSource(ms).connect(analyser);
     const data = new Uint8Array(analyser.frequencyBinCount);
     const tick = () => { analyser.getByteFrequencyData(data); setLevel(Math.min(1, data.reduce((a,b) => a+b,0)/data.length/65)); frame.current = requestAnimationFrame(tick); }; tick();
@@ -170,9 +172,9 @@ export default function Workspace() {
   }
   async function startListening() {
     if (live || connecting || micTest) return;
-    if (!current || !knowledgeFor(current).length) { setView("knowledge"); if (!current) openModal({type:"manufacturer"}); else openModal({type:"source"}); return; }
     if (!configured) { setError("The AI connection is not ready. Check Connection & audio."); return; }
-    setError(""); setConnecting(true);
+    controller.current?.abort(); seq.current++; if (timer.current) clearTimeout(timer.current);
+    setError(""); setThinking(false); setConnecting(true);
     try {
       const ms = await microphone();
       const pc = new RTCPeerConnection(); peer.current = pc;
@@ -180,12 +182,20 @@ export default function Workspace() {
       const dc = pc.createDataChannel("oai-events"); channel.current = dc;
       const partials = new Map<string,string>();
       const speechTimes = new Map<string,number>();
+      let liveText = ""; let activeResponse = ""; let speechStopped = 0; let firstDelta = false;
       dc.onmessage = (message) => {
         let event; try { event = JSON.parse(message.data); } catch { return; }
-        if (event.type === "input_audio_buffer.speech_started") { setHearing(true); if (event.item_id) speechTimes.set(event.item_id,Date.now()); }
-        if (event.type === "input_audio_buffer.speech_stopped") setHearing(false);
+        if (event.type === "input_audio_buffer.speech_started") { activeResponse=""; setThinking(false); setHearing(true); if (event.item_id) speechTimes.set(event.item_id,Date.now()); }
+        if (event.type === "input_audio_buffer.speech_stopped") { setHearing(false); speechStopped=performance.now(); setThinking(true); }
+        if (event.type === "response.created") { activeResponse=event.response?.id || ""; liveText=""; firstDelta=false; setThinking(true); }
+        if ((event.type === "response.output_text.delta" || event.type === "response.text.delta") && event.response_id === activeResponse) {
+          liveText += event.delta || "";
+          const result=parseLiveDraft(liveText);
+          if (result) { setGuidance(result); setLiveDraft(true); if (!firstDelta) { firstDelta=true; setLatency(speechStopped ? performance.now()-speechStopped : 0); } }
+        }
+        if (event.type === "response.done") { if (event.response?.id === activeResponse) { setThinking(false); if (event.response.status === "failed") setError(event.response.status_details?.error?.message || "The live assistant could not generate a response. Try reconnecting."); } }
         if (event.type === "conversation.item.input_audio_transcription.delta") { const text = (partials.get(event.item_id) || "") + event.delta; partials.set(event.item_id,text); setPartial(text); }
-        if (event.type === "conversation.item.input_audio_transcription.completed") { partials.delete(event.item_id); setPartial(""); if (event.transcript?.trim()) addTurn(event.transcript,"conversation",event.item_id,speechTimes.get(event.item_id) || Date.now()); speechTimes.delete(event.item_id); }
+        if (event.type === "conversation.item.input_audio_transcription.completed") { partials.delete(event.item_id); setPartial(""); if (event.transcript?.trim()) addTurn(event.transcript,"conversation",event.item_id,speechTimes.get(event.item_id) || Date.now(),false); speechTimes.delete(event.item_id); }
         if (event.type === "conversation.item.input_audio_transcription.failed" || event.type === "error") setError(event.error?.message || "A piece of audio could not be transcribed. Add it using the text box below.");
       };
       dc.onclose = () => { if (peer.current === pc) { stopAudio(); setError("The live transcription connection ended. Your transcript is saved; reconnect to continue."); } };
@@ -193,13 +203,13 @@ export default function Workspace() {
         if (pc.connectionState === "failed") { stopAudio(); setError("The microphone connection failed. Check your network and reconnect."); }
       };
       const offer = await pc.createOffer(); await pc.setLocalDescription(offer);
-      const response = await fetch("/api/session", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({sdp:offer.sdp}), signal:AbortSignal.timeout(40_000) });
+      const response = await fetch("/api/session", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({...payload("coach",context.current.turns),sdp:offer.sdp}), signal:AbortSignal.timeout(40_000) });
       if (!response.ok) { const data = await response.json() as {error?:string}; throw new Error(data.error || "Live transcription could not connect."); }
       await pc.setRemoteDescription({ type:"answer", sdp:await response.text() });
       await new Promise<void>((resolve,reject) => { if (dc.readyState === "open") { resolve(); return; } const t = setTimeout(() => reject(new Error("The live connection timed out. Please try again.")), 20_000); dc.addEventListener("open", () => {clearTimeout(t);resolve();}, {once:true}); });
       setConnecting(false); setLive(true); if (!startedAt) setStartedAt(Date.now());
       stopTimer.current = setTimeout(() => { stopAudio(); notify("The session reached 55 minutes. Start listening again to continue."); }, 55*60*1000);
-      if (!guidance && !turns.length) void coach([],"opening");
+      notify("Live assistant connected. Suggestions stream automatically as you talk.");
     } catch (e) { stopAudio(); const message = e instanceof Error ? e.message : "Could not start the microphone."; setError(message.includes("Permission") || message.includes("NotAllowed") ? "Allow microphone access in your browser, then try again." : message); }
   }
   function togglePause() { const value = !paused; stream.current?.getAudioTracks().forEach(t => t.enabled = !value); setPaused(value); if (value) { setPartial(""); setHearing(false); } }
@@ -268,14 +278,15 @@ export default function Workspace() {
   }
   const record = calls.find(c => c.id === selectedCall);
   const filteredCalls = calls.filter(c => `${c.buyer} ${c.manufacturerName} ${c.notes}`.toLowerCase().includes(query.toLowerCase()));
-  const title = view === "live" ? "Call workspace" : view === "knowledge" ? "Company knowledge" : view === "history" ? "Call history" : "Connection & audio";
+  const title = view === "live" ? "Live assistant" : view === "knowledge" ? "Company knowledge" : view === "history" ? "Call history" : "Connection & audio";
 
+  if (configured === false && typeof window !== "undefined" && !["127.0.0.1","localhost"].includes(window.location.hostname)) return <div className="connection-gate"><div className="gate-mark"><AudioLines size={31}/></div><div className="eyebrow">TRADE ASSIST · LIVE CONVERSATION COPILOT</div><h1>Open your connected live assistant.</h1><p>This web copy does not have an AI connection. Your approved API key is on your Mac, where the live assistant runs.</p><a className="button primary" href="http://127.0.0.1:5173/" target="_blank" rel="noreferrer">Open live assistant on this Mac <ArrowRight size={16}/></a><p className="gate-help">If it does not open, double-click <strong>Start Trade Assist.command</strong> in your trade-assist folder. It now runs in the background; Terminal can be closed.</p><button className="text-button" onClick={backup}><Download size={14}/> Export any materials saved in this web copy</button><span className="muted">Import that backup in the connected app under Connection & audio.</span></div>;
   return <div className="app-shell">
     <aside className="sidebar">
       <a className="brand" href="/" aria-label="Trade Assist home"><span className="brand-mark"><AudioLines size={23}/></span><span>trade<span className="brand-light">assist</span><small>YOUR SALES COPILOT</small></span></a>
       <div className="workspace-label">WORKSPACE <LockKeyhole size={11}/></div>
       <nav aria-label="Main navigation">
-        {([{id:"live",label:"Call workspace",icon:Headphones},{id:"knowledge",label:"Company knowledge",icon:BookOpen},{id:"history",label:"Call history",icon:History}] as const).map(item => <button key={item.id} aria-label={item.label} className={`nav-item ${view === item.id ? "active" : ""}`} onClick={() => setView(item.id)}><item.icon size={18}/><span>{item.label}</span>{item.id === "live" && live && <span className="live-dot"/>}{item.id === "history" && calls.length > 0 && <span className="nav-count">{calls.length}</span>}</button>)}
+        {([{id:"live",label:"Live assistant",icon:Headphones},{id:"knowledge",label:"Company knowledge",icon:BookOpen},{id:"history",label:"Call history",icon:History}] as const).map(item => <button key={item.id} aria-label={item.label} className={`nav-item ${view === item.id ? "active" : ""}`} onClick={() => setView(item.id)}><item.icon size={18}/><span>{item.label}</span>{item.id === "live" && live && <span className="live-dot"/>}{item.id === "history" && calls.length > 0 && <span className="nav-count">{calls.length}</span>}</button>)}
       </nav>
       <div className="sidebar-divider"/>
       <div className="workspace-label">REPRESENTING <button className="tiny-button" aria-label="Add manufacturer" onClick={() => openModal({type:"manufacturer"})}><Plus size={15}/></button></div>
@@ -284,29 +295,29 @@ export default function Workspace() {
     </aside>
 
     <div className="main-shell">
-      <header className="topbar"><div className="breadcrumb">Workspace <ChevronRight size={13}/><span>{title}</span></div><div className="topbar-right"><span className={`connection-pill ${configured ? "ready" : ""}`}><span className="status-dot"/>{configured === null ? "Checking connection" : configured ? "AI connected" : "AI not connected"}</span><button className="icon-button" aria-label="How to use Trade Assist" onClick={() => setShowHelp(true)}><CircleHelp size={18}/></button></div></header>
+      <header className="topbar"><div className="breadcrumb">Workspace <ChevronRight size={13}/><span>{title}</span></div><div className="topbar-right"><span className={`connection-pill ${configured ? "ready" : ""}`}><span className="status-dot"/>{configured === null ? "Checking connection" : configured ? "AI ready" : "Open connected app"}</span><button className="icon-button" aria-label="How to use Trade Assist" onClick={() => setShowHelp(true)}><CircleHelp size={18}/></button></div></header>
       <main>
-        <div className="page-heading"><div><div className="eyebrow">{view === "live" ? "BE PRESENT. BE PREPARED." : "YOUR SALES WORKSPACE"}</div><h1>{title}<span className="heading-dot">.</span></h1><p>{view === "live" ? "The right words, backed by your knowledge." : view === "knowledge" ? "Give your copilot the facts it needs to help you sell." : view === "history" ? "Keep the conversation moving, even after you hang up." : "Get ready for your next conversation."}</p></div>{view === "live" ? <button className="button secondary" onClick={newCall} disabled={live || connecting}><Plus size={16}/> New call</button> : view === "knowledge" ? <button className="button primary" onClick={() => openModal({type:current ? "source" : "manufacturer"})}><Plus size={16}/> {current ? "Add source" : "Add manufacturer"}</button> : view === "history" ? <button className="button secondary" onClick={backup}><Download size={16}/> Export backup</button> : null}</div>
+        <div className="page-heading"><div><div className="eyebrow">{view === "live" ? "YOUR LIVE CONVERSATION ASSISTANT" : "YOUR SALES WORKSPACE"}</div><h1>{title}<span className="heading-dot">.</span></h1><p>{view === "live" ? "Listens to your call. Streams what to say next." : view === "knowledge" ? "Give your copilot the facts it needs to help you sell." : view === "history" ? "Keep the conversation moving, even after you hang up." : "Get ready for your next conversation."}</p></div>{view === "live" ? <div className="live-header-actions"><button className={`button ${live ? "stop" : "primary"}`} onClick={live ? stopAudio : startListening} disabled={connecting || !configured}>{connecting ? <Loader2 size={15} className="spin"/> : live ? <Square size={13}/> : <Mic size={15}/>} {connecting ? "Connecting…" : live ? "Stop assistant" : "Start live assistant"}</button><button className="icon-button bordered" aria-label="New call" onClick={newCall} disabled={live || connecting}><Plus size={16}/></button></div> : view === "knowledge" ? <button className="button primary" onClick={() => openModal({type:current ? "source" : "manufacturer"})}><Plus size={16}/> {current ? "Add source" : "Add manufacturer"}</button> : view === "history" ? <button className="button secondary" onClick={backup}><Download size={16}/> Export backup</button> : null}</div>
         {error && <div className="error-banner" role="alert"><CircleHelp size={17}/><span>{error}</span><button className="icon-button" aria-label="Dismiss error" onClick={() => setError("")}><X size={15}/></button></div>}
 
         {view === "live" && <>
-          {!current && <div className="onboarding-strip"><span className="step-circle">1</span><div><strong>Start with what you know.</strong><p>Add your manufacturer and product details to prepare your copilot.</p></div><button className="text-button" onClick={() => openModal({type:"manufacturer"})}>Add manufacturer <ArrowRight size={16}/></button></div>}
+          {!current && <div className="onboarding-strip"><span className="step-circle">1</span><div><strong>Add your company knowledge.</strong><p>Optional: add product details for specific answers. You can start listening right away.</p></div><button className="text-button" onClick={() => openModal({type:"manufacturer"})}>Add manufacturer <ArrowRight size={16}/></button></div>}
           <section className="call-context card" aria-label="Call details"><label><span>REPRESENTING</span><select aria-label="Manufacturer" value={activeId} onChange={e => selectManufacturer(e.target.value)} disabled={live || connecting || turns.length > 0}><option value="" disabled>Select manufacturer</option>{manufacturers.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}</select></label><label><span>WHO ARE YOU CALLING?</span><input placeholder="Buyer name or company" maxLength={500} value={buyer} onChange={e => setBuyer(e.target.value)}/></label><label className="goal-field"><span>THIS CALL’S NEXT STEP</span><select value={goal} onChange={e => setGoal(e.target.value)}>{GOALS.map(g => <option key={g}>{g}</option>)}</select></label></section>
           <div className="call-grid">
             <section className="conversation card"><div className="panel-header"><div><Radio size={17}/><h2>Conversation</h2></div><span className={`micro-status ${live && !paused ? "on" : ""}`}><span className="status-dot"/>{connecting ? "Connecting" : paused ? "Paused" : live ? "Listening" : "Microphone off"}</span></div>
               <div className="transcript" aria-live="polite">{turns.length === 0 && !partial ? <div className="transcript-empty"><div className="empty-audio"><AudioLines size={32}/></div><h3>Room for a good conversation.</h3><p>Your live transcript appears here.<br/>You focus on the person on the other end.</p><div className="audio-explainer"><Phone size={16}/><span>Call on your mobile. Use speakerphone<br/>beside your computer’s microphone.</span></div><button className="text-button" onClick={() => setShowHelp(true)}>How it works <ArrowRight size={13}/></button></div> : turns.map(t => <div className={`transcript-turn ${t.role === "you" ? "your-turn" : ""}`} key={t.id}><div className="turn-meta"><select aria-label="Speaker" value={t.role} onChange={e => { const next = turns.map(item => item.id === t.id ? {...item,role:e.target.value as Turn["role"]} : item); setTurns(next); context.current.turns=next; }}><option value="conversation">Room audio</option><option value="buyer">Buyer</option><option value="you">You</option></select><time>{nowLabel(t.at)}</time></div><p>{t.text}</p></div>)}{partial && <div className="transcript-turn partial"><div className="turn-meta">Transcribing…</div><p>{partial}</p></div>}<div ref={transcriptEnd}/></div>
               <form className="manual-entry" onSubmit={submitManual}><div className="manual-heading"><span>Or add what was said</span><select aria-label="Speaker for typed message" value={manualRole} onChange={e => setManualRole(e.target.value as Turn["role"])}><option value="buyer">Buyer</option><option value="you">You</option><option value="conversation">Room audio</option></select></div><div className="manual-input"><input aria-label="What was said" value={manualText} maxLength={6000} onChange={e => setManualText(e.target.value)} placeholder="Type a question or something you heard…"/><button type="submit" aria-label="Add message" disabled={!manualText.trim() || !configured}><ArrowRight size={17}/></button></div></form>
-              <div className="call-controls"><div className="audio-meter" aria-label={`Microphone level ${Math.round(level*100)} percent`}>{Array.from({length:13},(_,i) => <i key={i} style={{height:`${Math.round(8+Math.sin(i*1.8)**2*17)}px`,opacity:live && !paused && level > i/15 ? 1 : .2}}/>)}</div><span className="call-clock">{durationText(elapsed)}</span>{live ? <><button className="icon-button bordered" aria-label={paused ? "Resume microphone" : "Pause microphone"} onClick={togglePause}>{paused ? <Play size={16}/> : <Pause size={16}/>}</button><button className="button stop" onClick={stopAudio}><Square size={13} fill="currentColor"/> Stop listening</button></> : <button className="button primary" onClick={startListening} disabled={connecting || !configured}>{connecting ? <Loader2 size={16} className="spin"/> : <Mic size={16}/>} {connecting ? "Connecting…" : "Start listening"}</button>}</div>
+              <div className="call-controls"><div className="audio-meter" aria-label={`Microphone level ${Math.round(level*100)} percent`}>{Array.from({length:13},(_,i) => <i key={i} style={{height:`${Math.round(8+Math.sin(i*1.8)**2*17)}px`,opacity:live && !paused && level > i/15 ? 1 : .2}}/>)}</div><span className="call-clock">{durationText(elapsed)}</span>{live ? <><button className="icon-button bordered" aria-label={paused ? "Resume microphone" : "Pause microphone"} onClick={togglePause}>{paused ? <Play size={16}/> : <Pause size={16}/>}</button><button className="button stop" onClick={stopAudio}><Square size={13} fill="currentColor"/> Stop listening</button></> : <button className="button primary" onClick={startListening} disabled={connecting || !configured}>{connecting ? <Loader2 size={16} className="spin"/> : <Mic size={16}/>} {connecting ? "Connecting…" : "Start live assistant"}</button>}</div>
             </section>
 
-            <div className="guidance-column"><section className="guidance-card" aria-label="Suggested response"><div className="guidance-header"><span><Sparkles size={17}/> YOUR COPILOT</span><span className="guidance-state">{thinking ? <><Loader2 size={12} className="spin"/> Thinking</> : guidance ? <><Check size={12}/> Updated {latency ? `${(latency/1000).toFixed(1)}s` : ""}</> : "Ready when you are"}</span></div>
-              <div className="say-label">{guidance?.intent || "SAY NEXT"}</div><div className={`suggestion ${thinking ? "updating" : ""}`} aria-live="polite">{guidance ? <p>“{guidance.say}”</p> : <><h2>A little more confidence.<br/> A better next move.</h2><p className="suggestion-placeholder">Your suggested response will appear here as the conversation unfolds.</p></>}</div>
+            <div className="guidance-column"><section className="guidance-card" aria-label="Suggested response"><div className="guidance-header"><span><Sparkles size={17}/> YOUR COPILOT</span><span className="guidance-state">{thinking ? <><Loader2 size={12} className="spin"/> {live ? "Listening / responding" : "Checking facts"}</> : guidance ? <><Check size={12}/> {liveDraft ? "First words" : "Updated"} {latency ? `${(latency/1000).toFixed(1)}s` : ""}</> : "Ready when you are"}</span></div>
+              <div className="say-label">{guidance?.intent || "SAY NEXT"}</div><div className={`suggestion ${thinking ? "updating" : ""}`} aria-live="polite">{guidance ? <p>“{guidance.say}”</p> : <><h2>Your next reply<br/> appears here.</h2><p className="suggestion-placeholder">Start the live assistant. It listens and streams short suggestions automatically.</p></>}</div>
               {guidance?.ask && <div className="ask-next"><span>GOOD QUESTION TO ASK</span><p>{guidance.ask}</p></div>}
-              <div className="guidance-footer"><span><ShieldCheck size={13}/>{guidance?.evidence.length ? "References checked against your sources" : "Uses your information only"}</span>{guidance ? <button className="icon-button" aria-label="Copy suggested response" onClick={() => void copy(guidance.say)}><Copy size={15}/></button> : <button className="text-button" disabled={!current || !configured || thinking} onClick={() => void coach([],"opening")}>Draft an opening <ArrowRight size={13}/></button>}</div>
+              <div className="guidance-footer"><span><ShieldCheck size={13}/>{liveDraft ? "Live draft · uses your supplied context" : guidance?.evidence.length ? "References checked against your sources" : "Uses your information only"}</span>{guidance ? <button className="icon-button" aria-label="Copy suggested response" onClick={() => void copy(guidance.say)}><Copy size={15}/></button> : <button className="text-button" disabled={!configured || thinking} onClick={() => void coach([],"opening")}>Draft an opening <ArrowRight size={13}/></button>}</div>
             </section>
-            <section className="evidence-card card"><div className="panel-header"><div><BookOpen size={16}/><h2>Backed by your knowledge</h2></div><span className="count-badge">{guidance?.evidence.length || 0}</span></div><div className="evidence-body">{guidance?.evidence.length ? guidance.evidence.map((e,i) => <button className="evidence-item" key={i} onClick={() => { if (e.sourceId === "company-profile") openModal({type:"manufacturer",manufacturer:current}); else { const source=current?.sources.find(s => s.id === e.sourceId); if(source) openModal({type:"source",source}); } }}><div><FileText size={14}/><strong>{knowledgeFor(current!).find(s => s.id === e.sourceId)?.title || "Source"}</strong><ChevronRight size={13}/></div><p>“{e.quote}”</p></button>) : <div className="subtle-empty"><Layers3 size={23}/><p>{current ? "Relevant excerpts will appear here when a source supports your response." : "Add company and product information to ground your suggestions."}</p></div>}{guidance?.caution && <div className="caution"><CircleHelp size={15}/><p>{guidance.caution}</p></div>}{guidance && guidance.missing.length > 0 && <div className="missing-facts"><span>DETAILS TO CONFIRM</span>{guidance.missing.map(m => <p key={m}>· {m}</p>)}</div>}</div></section>
+            <section className="evidence-card card"><div className="panel-header"><div><BookOpen size={16}/><h2>Backed by your knowledge</h2></div><span className="count-badge">{guidance?.evidence.length || 0}</span></div><div className="evidence-body">{guidance?.evidence.length ? guidance.evidence.map((e,i) => <button className="evidence-item" key={i} onClick={() => { if (e.sourceId === "company-profile") openModal({type:"manufacturer",manufacturer:current}); else { const source=current?.sources.find(s => s.id === e.sourceId); if(source) openModal({type:"source",source}); } }}><div><FileText size={14}/><strong>{knowledgeFor(current!).find(s => s.id === e.sourceId)?.title || "Source"}</strong><ChevronRight size={13}/></div><p>“{e.quote}”</p></button>) : <div className="subtle-empty"><Layers3 size={23}/><p>{current ? "Live drafts use your context. Choose Get a verified answer to see supporting source excerpts." : "Add company and product information to ground your suggestions."}</p></div>}{guidance?.caution && <div className="caution"><CircleHelp size={15}/><p>{guidance.caution}</p></div>}{guidance && guidance.missing.length > 0 && <div className="missing-facts"><span>DETAILS TO CONFIRM</span>{guidance.missing.map(m => <p key={m}>· {m}</p>)}</div>}</div></section>
             <section className="next-step-card"><span className="next-step-icon"><ArrowRight size={19}/></span><div><span className="eyebrow">MOVE THE DEAL FORWARD</span><p>{guidance?.nextStep || "Listen for a need. Find a fit. Agree the next step."}</p></div></section>
-            {guidance && <button className="text-button refresh-guidance" onClick={() => void coach()} disabled={thinking}><RefreshCw size={13}/> Refresh guidance</button>}</div>
+            {guidance && <button className="text-button refresh-guidance" onClick={() => void coach()} disabled={thinking}><RefreshCw size={13}/> {liveDraft ? "Get a verified answer" : "Refresh guidance"}</button>}</div>
           </div>
           <section className="call-notes card"><div><label htmlFor="call-notes">Your call notes</label><p>Capture a requirement, detail, or promise to follow up.</p></div><textarea id="call-notes" placeholder="What matters for the next conversation?" value={notes} onChange={e => setNotes(e.target.value)} maxLength={20_000}/><div className="save-call"><select aria-label="Call outcome" value={outcome} onChange={e => setOutcome(e.target.value)}>{["Follow-up needed","Interested — next step agreed","Quotation requested","Samples requested","Not interested","No answer","Practice call"].map(o => <option key={o}>{o}</option>)}</select><button className="button secondary" onClick={saveCall} disabled={!turns.length && !notes.trim()}><CheckCircle2 size={15}/> Save call</button></div></section>
           <div className="workspace-footer"><span><LockKeyhole size={12}/> Materials and transcripts saved in this browser</span><span>Speakerphone mode <span>·</span> English <span>·</span> You do the talking</span></div>
