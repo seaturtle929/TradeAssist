@@ -1,9 +1,10 @@
 /** Published standard USD rates, checked against the pages below. Estimates are
  * based on reported usage, not the provider's final invoice or account credits. */
-export const PRICE_CHECKED_AT = "2026-10-21";
+export const PRICE_CHECKED_AT = "2026-10-20";
 export const PRICE_SOURCES = [
   { title:"GPT Realtime pricing", url:"https://developers.openai.com/api/docs/models/gpt-realtime" },
   { title:"GPT-4.1 mini pricing", url:"https://developers.openai.com/api/docs/models/gpt-4.1-mini" },
+  { title:"Buyer research model pricing", url:"https://developers.openai.com/api/docs/models/gpt-4.1" },
   { title:"GPT-4o mini transcription pricing", url:"https://developers.openai.com/api/docs/models/gpt-4o-mini-transcribe" },
   { title:"API and web search pricing", url:"https://developers.openai.com/api/docs/pricing" },
 ] as const;
@@ -30,6 +31,7 @@ const amount = (value: unknown) => validCount(value) ? value : 0;
 const bounded = (value: unknown, maximum: number) => Math.min(count(value),maximum);
 const realtimeModel = (model: string) => model === "gpt-realtime" || model === "gpt-realtime-2025-08-28";
 const textModel = (model: string) => model === "gpt-4.1-mini" || model === "gpt-4.1-mini-2025-04-14";
+const fullTextModel = (model:string) => model === "gpt-4.1" || model === "gpt-4.1-2025-04-14";
 
 /** Pass event.response.usage from response.done. Cached counts are a subset of
  * input counts; they must be subtracted before charging the uncached rate. */
@@ -102,12 +104,12 @@ export function priceTextUsage(value: unknown, model = "gpt-4.1-mini", searchCal
   const details=fields(usage.input_tokens_details);
   const cached=bounded(details.cached_tokens,input);
   const searches=count(searchCalls);
-  const recognized=textModel(model);
+  const recognized=textModel(model) || fullTextModel(model), rate=fullTextModel(model) ? {input:2,cached:.5,output:8} : {input:.4,cached:.1,output:1.6};
   let known=recognized && validCount(usage.input_tokens) && validCount(usage.output_tokens) && validCount(searchCalls);
   if(searches>0)known=false;
   if (owns(details,"cached_tokens") && (!validCount(details.cached_tokens) || count(details.cached_tokens)>input)) known=false;
   const usd=recognized
-    ? ((input-cached)*.4+cached*.1+output*1.6+searches*8000*.4)/MILLION+searches*.01
+    ? ((input-cached)*rate.input+cached*rate.cached+output*rate.output+(textModel(model) ? searches*8000*.4 : 0))/MILLION+searches*.01
     : (input*32+output*64)/MILLION+searches*(.01+8000*32/MILLION);
   return {usd,known};
 }

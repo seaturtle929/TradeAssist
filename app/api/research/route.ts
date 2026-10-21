@@ -10,7 +10,7 @@ export async function POST(request: Request) {
     const parsed = ResearchInput.safeParse(await request.json());
     if (!parsed.success) throw new AppError("Add the buyer’s company name and public company website before researching.");
     const input = {...parsed.data,website:publicResearchUrl(parsed.data.website,true)!};
-    const model = process.env.OPENAI_TEXT_MODEL || "gpt-4.1-mini";
+    const model = process.env.OPENAI_RESEARCH_MODEL || "gpt-4.1";
     const searchResponse = await openAI("responses",{
       model,store:false,instructions:RESEARCH_INSTRUCTIONS,input:JSON.stringify(input),max_output_tokens:2400,
       tools:[{type:"web_search",search_context_size:"medium"}],tool_choice:"required",include:["web_search_call.action.sources"],

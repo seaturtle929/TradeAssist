@@ -8,7 +8,7 @@ Double-click **Start Trade Assist.command**. It runs in the background and opens
 
 1. Add a manufacturer and product categories in **Company knowledge**.
 2. Paste an anyone-with-the-link Google Drive file or folder link. Read the preview, then choose **Save to company memory**. Linked sources retain their original URL and read date. **Refresh** reads the original again and shows a preview before replacing saved text. Manual text and PDF uploads remain available.
-3. Enter the buyer company and website in **Know your buyer**, then research before calling. Facts include source links. Possible pain points are hypotheses to explore, not established problems.
+3. Enter the buyer company and website in **Know your buyer**, then research before calling. Facts include source links. Possible pain points are hypotheses to explore, not established problems. Research uses a dedicated GPT-4.1 model for business purchasing context; live replies keep their existing Realtime model. Each possible need points to an actual cited fact, and its question is phrased for you to ask the buyer.
 4. In **Connection & audio**, choose your tone, preferences, example replies and phrases to avoid. Settings save automatically. **Edit wording & teach my voice** saves a preferred reply as a style example; examples never establish company facts. Restart the assistant to apply changed voice settings.
 5. Test phone audio with your Mac microphone and speakerphone mode. Start the live assistant. The app listens and displays text; it does not dial, change your caller ID or inject audio into the phone call.
 6. Save the call for transcript, notes, buyer brief, estimated AI cost, recap and editable follow-up. It never sends email.
