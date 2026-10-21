@@ -1,7 +1,11 @@
 import { type AIResponse, AppError, authorize, errorResponse, openAI, outputText } from "../../../lib/ai-server";
 import { CoachInput, cleanReferenceText, guidanceSchema, summarySchema, SYSTEM, validationSchema, verifyEvidence } from "../../../lib/coach";
 import type { Guidance } from "../../../lib/trade";
+import { responseCharge } from "../../../lib/usage-server";
+import type { UsageEntry } from "../../../lib/costs";
+import { cleanSpokenReply } from "../../../lib/live";
 export async function POST(request: Request) {
+  const charges:UsageEntry[]=[];
   try {
     await authorize(request);
     const parsed = CoachInput.safeParse(await request.json());
@@ -17,10 +21,11 @@ export async function POST(request: Request) {
       text: { format: { type: "json_schema", name: summary ? "call_summary" : "live_guidance", strict: true, schema: summary ? summarySchema : guidanceSchema } },
     });
     const result = await response.json() as AIResponse;
+    charges.push(responseCharge(result,"coach",process.env.OPENAI_TEXT_MODEL || "gpt-4.1-mini"));
     const text = outputText(result);
     if (!text || result.status === "incomplete") throw new AppError("The AI response was incomplete. Try again.", 502);
     const data = JSON.parse(text);
-    if (summary) return Response.json(data, { headers:{"Cache-Control":"no-store"} });
+    if (summary) return Response.json({...data,_charges:charges}, { headers:{"Cache-Control":"no-store"} });
     let guidance = verifyEvidence(data as Guidance, input.sources);
     if (/\b(our|we|certif|complian|guarantee|lead time|minimum order|MOQ|USD|FOB|days|\d)/i.test(guidance.say)) {
       const check = await openAI("responses", {
@@ -30,9 +35,10 @@ export async function POST(request: Request) {
         text:{format:{type:"json_schema",name:"claim_support",strict:true,schema:validationSchema}},
       });
       const checked = await check.json() as AIResponse;
+      charges.push(responseCharge(checked,"coach",process.env.OPENAI_TEXT_MODEL || "gpt-4.1-mini"));
       const verdict = JSON.parse(outputText(checked) || "{}");
-      if (verdict.supported !== true) guidance = { say:"Let me confirm those details with our team so I can give you an accurate answer. What specific requirements should I check?", ask:"What requirements would a new supplier need to meet?", intent:"Confirm before committing", nextStep:"Capture the buyer’s requirements and follow up with confirmed details.", caution:verdict.reason || "The proposed answer could not be fully supported by your materials.", evidence:[], missing:["Confirm the requested details with the manufacturer"] };
+      if (verdict.supported !== true) guidance = { say:["I’ll check that with the factory before I give you a definite answer.","I don’t have that confirmed yet. Let me verify it.","Let me get you a confirmed answer on that."][input.turns.length % 3], ask:"", intent:"Confirm before committing", nextStep:"Capture the buyer’s requirements and follow up with confirmed details.", caution:verdict.reason || "The proposed answer could not be fully supported by your materials.", evidence:[], missing:["Confirm the requested details with the manufacturer"] };
     }
-    return Response.json(guidance, { headers: { "Cache-Control": "no-store" } });
-  } catch (error) { return errorResponse(error); }
+    return Response.json({...guidance,say:cleanSpokenReply(guidance.say),_charges:charges}, { headers: { "Cache-Control": "no-store" } });
+  } catch (error) { const response=errorResponse(error); return Response.json({...await response.json() as Record<string,unknown>,_charges:charges},{status:response.status}); }
 }

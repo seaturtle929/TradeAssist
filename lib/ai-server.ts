@@ -38,5 +38,5 @@ export function errorResponse(error: unknown) {
   if (error instanceof Error && ["TimeoutError", "AbortError"].includes(error.name)) return Response.json({ error: "The AI request took too long. Please try again.", code: "timeout" }, { status: 504 });
   return Response.json({ error: "The connection failed. Check your connection and try again." }, { status: 502 });
 }
-export type AIResponse = { status?: string; output?: { content?: { text?: string }[] }[] };
+export type AIResponse = { id?:string; model?:string; usage?:unknown; status?: string; output?: { content?: { text?: string }[] }[] };
 export function outputText(result: AIResponse) { return result.output?.flatMap(item => item.content || []).map(item => item.text || "").join("") || ""; }

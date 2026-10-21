@@ -4,21 +4,29 @@ import { useEffect, useRef, useState } from "react";
 import { Activity, ArrowDownToLine, ArrowRight, AudioLines, BookOpen, Check, CheckCircle2, ChevronDown, ChevronRight, CircleHelp, Clipboard, Copy, Download, FileText, Headphones, History, Layers3, Loader2, LockKeyhole, Mic, MicOff, MoreHorizontal, Pause, Phone, Play, Plus, Radio, RefreshCw, Search, Settings2, ShieldCheck, Sparkles, Square, Trash2, Upload, X } from "lucide-react";
 import { parseLiveDraft } from "../lib/live";
 import { audioSignal, createMicrophonePipeline, microphoneConstraints, type AudioMode } from "../lib/audio";
-import { GOALS, knowledgeFor, type Manufacturer, type Source, type Turn, type Guidance, type CallRecord } from "../lib/trade";
+import { GOALS, knowledgeFor, type Manufacturer, type Source, type Turn, type Guidance, type CallRecord, type BuyerBrief } from "../lib/trade";
+import { DEFAULT_VOICE, type VoiceProfile } from "../lib/sales-playbook";
+import { DEFAULT_BUDGET, budgetDecision, monthSpend, formatUsd, priceRealtimeUsage, priceTranscriptionUsage, type UsageEntry, type BudgetSettings } from "../lib/costs";
+import { selectKnowledge } from "../lib/knowledge";
+import { BuyerBriefInput, VoiceProfileInput } from "../lib/coach";
+import { BuyerResearchPanel, VoiceSettings, SpendingPanel } from "../components/sales-panels";
 
 type View = "live" | "knowledge" | "history" | "settings";
 type Modal = { type: "manufacturer"; manufacturer?: Manufacturer } | { type: "source"; source?: Source } | null;
 const STORAGE = "trade-assist-v1";
 const AUDIO_STORAGE = "trade-assist-audio-v1";
+const FEATURE_STORAGE = "trade-assist-features-v1";
+const USAGE_STORAGE = "trade-assist-usage-v1";
 const uid = () => crypto.randomUUID();
 const durationText = (seconds: number) => `${Math.floor(seconds / 60).toString().padStart(2,"0")}:${Math.floor(seconds % 60).toString().padStart(2,"0")}`;
 const nowLabel = (at: number) => new Date(at).toLocaleTimeString("en-US", { hour:"numeric", minute:"2-digit" });
 function downloadFile(name: string, contents: string, type = "text/plain") {
   const url = URL.createObjectURL(new Blob([contents], { type })); const anchor = document.createElement("a"); anchor.href = url; anchor.download = name; anchor.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
-async function requestJSON<T>(path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
+async function requestJSON<T>(path: string, body?: unknown, signal?: AbortSignal, onCharges?: (charges:UsageEntry[])=>void): Promise<T> {
   const response = await fetch(path, { method: body === undefined ? "GET" : "POST", headers: body === undefined ? {} : { "Content-Type":"application/json" }, ...(body === undefined ? {} : { body:JSON.stringify(body) }), signal });
-  const data = await response.json().catch(() => ({ error: "The server returned an unreadable response." })) as T & {error?: string};
+  const data = await response.json().catch(() => ({ error: "The server returned an unreadable response." })) as T & {error?: string;_charges?:UsageEntry[]};
+  if(Array.isArray(data._charges))onCharges?.(data._charges);
   if (!response.ok) throw new Error(data.error || "The request failed."); return data;
 }
 
@@ -53,6 +61,21 @@ export default function Workspace() {
   const [summarizing, setSummarizing] = useState(false);
   const [query, setQuery] = useState("");
   const [outcome, setOutcome] = useState("Follow-up needed");
+  const [voice, setVoice] = useState<VoiceProfile>(DEFAULT_VOICE);
+  const [buyerBrief, setBuyerBrief] = useState<BuyerBrief|null>(null);
+  const [budget, setBudget] = useState<BudgetSettings>(DEFAULT_BUDGET);
+  const [usageEntries,setUsageEntries] = useState<UsageEntry[]>([]);
+  const [callCostUsd,setCallCostUsd] = useState(0);
+  const [replyEdit,setReplyEdit] = useState<string|null>(null);
+  const [driveUrl,setDriveUrl] = useState("");
+  const [driveLoading,setDriveLoading] = useState(false);
+  const [drivePreview,setDrivePreview] = useState<{sources:Source[];warnings:string[]}|null>(null);
+  const [knowledgeQuery,setKnowledgeQuery] = useState("");
+  const recentReplies = useRef<string[]>([]);
+  const callGeneration = useRef(0);
+  const callHandle = useRef("");
+  const spendState = useRef({budget,entries:usageEntries,callUsd:callCostUsd});
+  spendState.current={budget,entries:usageEntries,callUsd:callCostUsd};
   const [level, setLevel] = useState(0);
   const [micTest, setMicTest] = useState(false);
   const [deviceId, setDeviceId] = useState("");
@@ -86,10 +109,10 @@ export default function Workspace() {
   const [formProducts, setFormProducts] = useState("");
   const [formText, setFormText] = useState("");
   const current = manufacturers.find(m => m.id === activeId);
-  const context = useRef({ current, buyer, goal, turns });
-  context.current = { current, buyer, goal, turns };
-  const draft = useRef({ startedAt, elapsed, notes, outcome, buyer, goal, turns, activeId });
-  draft.current = { startedAt, elapsed, notes, outcome, buyer, goal, turns, activeId };
+  const context = useRef({ current, buyer, goal, turns, voice, buyerBrief });
+  context.current = { current, buyer, goal, turns, voice, buyerBrief };
+  const draft = useRef({ startedAt, elapsed, notes, outcome, buyer, goal, turns, activeId,callCostUsd,buyerBrief });
+  draft.current = { startedAt, elapsed, notes, outcome, buyer, goal, turns, activeId,callCostUsd,buyerBrief };
 
   useEffect(() => {
     try {
@@ -105,11 +128,25 @@ export default function Workspace() {
       }
       const audio = JSON.parse(localStorage.getItem(AUDIO_STORAGE) || "null");
       if (audio) { setDeviceId(typeof audio.deviceId === "string" ? audio.deviceId : ""); setAudioMode(audio.mode === "headset" ? "headset" : "speakerphone"); setInputGain(Math.min(8,Math.max(1,Number(audio.gain) || 4))); }
+      const features=JSON.parse(localStorage.getItem(FEATURE_STORAGE) || "null");
+      if(features) { if(features.voice)setVoice({...DEFAULT_VOICE,...features.voice}); if(features.buyerBrief)setBuyerBrief(features.buyerBrief); if(features.buyer)setBuyer(features.buyer); recentReplies.current=Array.isArray(features.recentReplies) ? features.recentReplies.slice(-12) : []; }
+      const usage=JSON.parse(localStorage.getItem(USAGE_STORAGE) || "null");
+      if(usage) { if(usage.budget)setBudget({...DEFAULT_BUDGET,...usage.budget}); if(Array.isArray(usage.entries))setUsageEntries(usage.entries.filter((e:UsageEntry)=>typeof e.id==="string"&&Number.isFinite(e.usd)&&e.usd>=0)); setCallCostUsd(Math.max(0,Number(usage.callUsd)||0)); }
     } catch { setError("Your saved workspace could not be read. Import a backup or add your materials again."); }
     setHydrated(true);
     requestJSON<{configured:boolean}>("/api/status").then(data => setConfigured(data.configured)).catch(e => { setConfigured(false); setError(e.message); });
-    return () => { audioGeneration.current++; captureBusy.current=false; peer.current?.close(); stream.current?.getTracks().forEach(t => t.stop()); rawStream.current?.getTracks().forEach(t => t.stop()); void audioContext.current?.close(); cancelAnimationFrame(frame.current); controller.current?.abort(); if (timer.current) clearTimeout(timer.current); if (testTimer.current) clearTimeout(testTimer.current); if (stopTimer.current) clearTimeout(stopTimer.current); };
+    return () => { audioGeneration.current++; captureBusy.current=false; const oldPeer=peer.current;peer.current=null;oldPeer?.close(); if(callHandle.current)void fetch("/api/session/stop",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({handle:callHandle.current}),keepalive:true}).catch(()=>{}); callHandle.current=""; stream.current?.getTracks().forEach(t => t.stop()); rawStream.current?.getTracks().forEach(t => t.stop()); void audioContext.current?.close(); cancelAnimationFrame(frame.current); controller.current?.abort(); if (timer.current) clearTimeout(timer.current); if (testTimer.current) clearTimeout(testTimer.current); if (stopTimer.current) clearTimeout(stopTimer.current); };
   }, []);
+  useEffect(()=>{
+    if(!hydrated)return;
+    try { localStorage.setItem(FEATURE_STORAGE,JSON.stringify({voice,buyerBrief,buyer,recentReplies:recentReplies.current})); localStorage.setItem(USAGE_STORAGE,JSON.stringify({budget,entries:usageEntries,callUsd:callCostUsd})); }
+    catch { setError("Your settings or usage could not be saved. Export a backup before closing this page."); }
+  },[hydrated,voice,buyerBrief,buyer,budget,usageEntries,callCostUsd]);
+  useEffect(()=>{
+    if(!hydrated || !live)return;
+    const decision=budgetDecision(budget,callCostUsd,usageEntries);
+    if(!decision.allowed) {stopAudio();setError(decision.reason+" The AI assistant stopped; your phone call can continue.");}
+  },[budget,callCostUsd,usageEntries,hydrated,live]);
   useEffect(() => {
     if (!hydrated) return;
     try { localStorage.setItem(AUDIO_STORAGE,JSON.stringify({deviceId,mode:audioMode,gain:inputGain})); } catch { /* Workspace storage reports errors separately. */ }
@@ -125,7 +162,7 @@ export default function Workspace() {
     if (!hydrated) return;
     try { localStorage.setItem(STORAGE, JSON.stringify({ version:1, manufacturers, calls, activeId, draft: draft.current })); }
     catch { setError("Browser storage is full or unavailable. Export a backup before closing this page."); }
-  }, [hydrated, manufacturers, calls, activeId, turns, notes, buyer, goal, elapsed, outcome, startedAt]);
+  }, [hydrated, manufacturers, calls, activeId, turns, notes, buyer, goal, elapsed, outcome, startedAt,callCostUsd,buyerBrief]);
   useEffect(() => { if (toast) { const t = setTimeout(() => setToast(""), 4000); return () => clearTimeout(t); } }, [toast]);
   useEffect(() => { if (!live || paused) return; const t = setInterval(() => setElapsed(n => n+1), 1000); return () => clearInterval(t); }, [live, paused]);
   useEffect(() => { const container = transcriptEnd.current?.parentElement; if (container && (turns.length || partial)) container.scrollTop = container.scrollHeight; }, [turns, partial]);
@@ -149,6 +186,26 @@ export default function Workspace() {
   }, []);
 
   function notify(message: string) { setToast(message); }
+  function recordCharges(charges:UsageEntry[],countCall=true) {
+    const state=spendState.current; let entries=[...state.entries],delta=0;
+    for(const charge of charges) {
+      if(typeof charge.id!=="string" || !Number.isFinite(charge.usd) || charge.usd<0 || !Number.isFinite(charge.at))continue;
+      const previous=entries.find(e=>e.id===charge.id);
+      if(previous && previous.usd>=charge.usd)continue;
+      if(previous)entries=entries.map(e=>e.id===charge.id ? charge : e); else entries.push(charge);
+      if(countCall && charge.kind!=="document")delta+=charge.usd-(previous?.usd || 0);
+    }
+    spendState.current={...state,entries,callUsd:state.callUsd+delta}; setUsageEntries(entries);setCallCostUsd(state.callUsd+delta);
+    const decision=budgetDecision(state.budget,state.callUsd+delta,entries);
+    if(!decision.allowed && peer.current) {stopAudio();setError(decision.reason+" The AI assistant stopped; your phone call can continue.");}
+  }
+  async function billableJSON<T>(path:string,body?:unknown,signal?:AbortSignal):Promise<T> {
+    const generation=callGeneration.current;
+    const state=spendState.current, document=path==="/api/extract" || path==="/api/drive";
+    const decision=budgetDecision(document ? {...state.budget,perCallUsd:Number.MAX_VALUE} : state.budget,document ? 0 : state.callUsd,state.entries,path==="/api/research" ? .08 : document ? .1 : .02);
+    if(!decision.allowed)throw new Error(decision.reason+" Adjust limits in Connection & audio to continue.");
+    return requestJSON<T>(path,body,signal,charges=>recordCharges(charges,generation===callGeneration.current && (body as {mode?:string}|undefined)?.mode!=="summary"));
+  }
   function openModal(value: Modal) {
     setError(""); setModal(value);
     if (value?.type === "manufacturer") { setFormName(value.manufacturer?.name || ""); setFormProducts(value.manufacturer?.products || ""); setFormText(value.manufacturer?.introduction || ""); }
@@ -157,12 +214,13 @@ export default function Workspace() {
   async function copy(text: string) { try { await navigator.clipboard.writeText(text); notify("Copied to clipboard"); } catch { setError("Copy was unavailable. Select the text and copy it manually."); } }
   function payload(mode: string, conversation: Turn[], manufacturer = context.current.current, targetBuyer = context.current.buyer, targetGoal = context.current.goal) {
     manufacturer ||= {id:"general",name:"Your company",products:"",introduction:"",sources:[]};
-    return { mode, manufacturer: { name:manufacturer.name, products:manufacturer.products }, sources:knowledgeFor(manufacturer), buyer:targetBuyer, goal:targetGoal, turns:conversation.slice(-300).map(t => ({ role:t.role, text:t.text.slice(0,6000) })) };
+    const query=conversation.slice(-5).map(t=>t.text).join(" ")+" "+manufacturer.products;
+    return { mode, manufacturer: { name:manufacturer.name, products:manufacturer.products }, sources:selectKnowledge(knowledgeFor(manufacturer),query), buyer:targetBuyer, goal:targetGoal, voice:context.current.voice,buyerBrief:mode==="summary" ? null : context.current.buyerBrief,recentReplies:recentReplies.current.slice(-12), turns:conversation.slice(-300).map(t => ({ role:t.role, text:t.text.slice(0,6000) })) };
   }
   async function coach(conversation = context.current.turns, mode = "coach") {
     controller.current?.abort(); const aborter = new AbortController(); controller.current = aborter;
     const id = ++seq.current; setThinking(true); setError(""); const began = performance.now();
-    try { const result = await requestJSON<Guidance>("/api/coach", payload(mode, conversation), aborter.signal); if (id === seq.current) { setGuidance(result); setLiveDraft(false); setLatency(performance.now() - began); } }
+    try { const result = await billableJSON<Guidance>("/api/coach", payload(mode, conversation), aborter.signal); if (id === seq.current) { setGuidance(result); recentReplies.current=[...recentReplies.current,result.say].slice(-12);setLiveDraft(false); setLatency(performance.now() - began); } }
     catch (e) { if (!(e instanceof DOMException && e.name === "AbortError") && id === seq.current) setError(e instanceof Error ? e.message : "Could not generate guidance."); }
     finally { if (id === seq.current) setThinking(false); }
   }
@@ -179,6 +237,7 @@ export default function Workspace() {
   function stopAudio() {
     audioGeneration.current++; captureBusy.current=false;
     const pc = peer.current; peer.current = null; channel.current = null; pc?.close();
+    const handle=callHandle.current;callHandle.current="";if(handle)void fetch("/api/session/stop",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({handle}),keepalive:true}).catch(()=>{});
     stream.current?.getTracks().forEach(track => track.stop()); stream.current = null;
     rawStream.current?.getTracks().forEach(track => track.stop()); rawStream.current = null; gainNode.current = null;
     void audioContext.current?.close(); audioContext.current = null; cancelAnimationFrame(frame.current);
@@ -210,6 +269,8 @@ export default function Workspace() {
   async function startListening() {
     if (captureBusy.current || live || connecting || micTest) return;
     if (!configured) { setError("The AI connection is not ready. Check Connection & audio."); return; }
+    const limit=budgetDecision(spendState.current.budget,spendState.current.callUsd,spendState.current.entries,.03);
+    if(!limit.allowed) {setError(limit.reason+" Adjust limits in Connection & audio to continue.");return;}
     controller.current?.abort(); seq.current++; if (timer.current) clearTimeout(timer.current);
     const generation = ++audioGeneration.current; captureBusy.current=true;
     setError(""); setThinking(false); setConnecting(true);
@@ -221,6 +282,13 @@ export default function Workspace() {
       const partials = new Map<string,string>();
       const speechTimes = new Map<string,number>();
       let liveText = ""; let activeResponse = ""; let speechStopped = 0; let firstDelta = false;
+      const usageIds=new Set<string>();const sessionId=uid();let model="gpt-realtime";
+      const sessionTotals=new Map<string,{usd:number;known:boolean}>();
+      const meterUsage=(kind:"live"|"transcription",price:{usd:number;known:boolean})=>{
+        const now=new Date(),key=`${sessionId}:${kind}:${now.getFullYear()}-${now.getMonth()}`;
+        const previous=sessionTotals.get(key),total={usd:(previous?.usd || 0)+price.usd,known:(previous?.known ?? true)&&price.known};sessionTotals.set(key,total);
+        recordCharges([{id:key,at:now.getTime(),kind,...total,model:kind==="live" ? model : "gpt-4o-mini-transcribe"}]);
+      };
       dc.onmessage = (message) => {
         if (peer.current !== pc) return;
         let event; try { event = JSON.parse(message.data); } catch { return; }
@@ -232,9 +300,24 @@ export default function Workspace() {
           const result=parseLiveDraft(liveText);
           if (result) { setGuidance(result); setLiveDraft(true); if (!firstDelta) { firstDelta=true; setLatency(speechStopped ? performance.now()-speechStopped : 0); } }
         }
-        if (event.type === "response.done") { if (event.response?.id === activeResponse) { setThinking(false); if (event.response.status === "failed") setError(event.response.status_details?.error?.message || "The live assistant could not generate a response. Try reconnecting."); } }
+        if (event.type === "response.done") {
+          if(event.response?.usage && !usageIds.has(event.response.id)) {usageIds.add(event.response.id);meterUsage("live",priceRealtimeUsage(event.response.usage,model));}
+          if(peer.current!==pc)return;
+          const completed=parseLiveDraft(liveText); if(completed && event.response?.id===activeResponse)recentReplies.current=[...recentReplies.current,completed.say].slice(-12);
+          if (event.response?.id === activeResponse) { setThinking(false); if (event.response.status === "failed") setError(event.response.status_details?.error?.message || "The live assistant could not generate a response. Try reconnecting."); }
+          const lookups=event.response?.status==="completed" && event.response.id===activeResponse ? (event.response.output || []).filter((item:{type:string;name?:string})=>item.type==="function_call"&&item.name==="lookup_company_knowledge") : [];
+          let answeredLookup=false;
+          for(const lookup of lookups) {
+            let query="";try{query=String(JSON.parse(lookup.arguments).query || "").slice(0,6000);}catch{}
+            if(!query.trim() || typeof lookup.call_id!=="string")continue;
+            const sources=context.current.current ? selectKnowledge(knowledgeFor(context.current.current),query,24_000) : [];
+            dc.send(JSON.stringify({type:"conversation.item.create",item:{type:"function_call_output",call_id:lookup.call_id,output:JSON.stringify({sources,notice:"Original reference excerpts only. If no explicit support, confirm with the factory."})}}));
+            answeredLookup=true;
+          }
+          if(answeredLookup)dc.send(JSON.stringify({type:"response.create",response:{tool_choice:"none"}}));
+        }
         if (event.type === "conversation.item.input_audio_transcription.delta") { const text = (partials.get(event.item_id) || "") + event.delta; partials.set(event.item_id,text); setPartial(text); }
-        if (event.type === "conversation.item.input_audio_transcription.completed") { partials.delete(event.item_id); setPartial(""); if (event.transcript?.trim()) addTurn(event.transcript,"conversation",event.item_id,speechTimes.get(event.item_id) || Date.now(),false); speechTimes.delete(event.item_id); }
+        if (event.type === "conversation.item.input_audio_transcription.completed") { partials.delete(event.item_id); setPartial(""); if (event.transcript?.trim()) addTurn(event.transcript,"conversation",event.item_id,speechTimes.get(event.item_id) || Date.now(),false); speechTimes.delete(event.item_id); if(event.usage && !usageIds.has("transcribe:"+event.item_id)) {usageIds.add("transcribe:"+event.item_id);meterUsage("transcription",priceTranscriptionUsage(event.usage));} }
         if (event.type === "conversation.item.input_audio_transcription.failed" || event.type === "error") setError(event.error?.message || "A piece of audio could not be transcribed. Add it using the text box below.");
       };
       dc.onclose = () => { if (peer.current === pc) { stopAudio(); setError("The live transcription connection ended. Your transcript is saved; reconnect to continue."); } };
@@ -245,6 +328,7 @@ export default function Workspace() {
       const response = await fetch("/api/session", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({...payload("coach",context.current.turns),audioMode,sdp:offer.sdp}), signal:AbortSignal.timeout(40_000) });
       ensureAudioCurrent(generation);
       if (!response.ok) { const data = await response.json() as {error?:string}; throw new Error(data.error || "Live transcription could not connect."); }
+      callHandle.current=response.headers.get("X-Trade-Call") || "";model=response.headers.get("X-Trade-Model") || "gpt-realtime";
       const answer = await response.text(); ensureAudioCurrent(generation);
       await pc.setRemoteDescription({ type:"answer", sdp:answer }); ensureAudioCurrent(generation);
       await new Promise<void>((resolve,reject) => { if (dc.readyState === "open") { resolve(); return; } const t = setTimeout(() => reject(new Error("The live connection timed out. Please try again.")), 20_000); dc.addEventListener("open", () => {clearTimeout(t);resolve();}, {once:true}); dc.addEventListener("close", () => {clearTimeout(t);reject(new Error("Audio setup was stopped."));}, {once:true}); });
@@ -264,18 +348,20 @@ export default function Workspace() {
   function saveCall() {
     stopAudio(); if (!turns.length && !notes.trim()) { notify("Add a conversation or notes before saving a call."); return; }
     if (timer.current) clearTimeout(timer.current); controller.current?.abort(); seq.current++; setThinking(false);
-    const call: CallRecord = { id:uid(), manufacturerId:activeId, manufacturerName:current?.name || "Manufacturer", buyer:buyer || "Unnamed buyer", goal, startedAt:startedAt || Date.now(), duration:elapsed, turns, notes, outcome };
-    setCalls(previous => [call,...previous]); setSelectedCall(call.id); setView("history"); setTurns([]); context.current.turns = []; setNotes(""); setStartedAt(0); setElapsed(0); setGuidance(null); setBuyer(""); setOutcome("Follow-up needed"); notify("Call saved to this browser");
+    callGeneration.current++;
+    const call: CallRecord = { id:uid(), manufacturerId:activeId, manufacturerName:current?.name || "Manufacturer", buyer:buyer || "Unnamed buyer", goal, startedAt:startedAt || Date.now(), duration:elapsed, turns, notes, outcome,estimatedCostUsd:callCostUsd,buyerBrief };
+    setCalls(previous => [call,...previous]); setSelectedCall(call.id); setView("history"); setTurns([]); context.current.turns = []; setNotes(""); setStartedAt(0); setElapsed(0); setGuidance(null); setBuyer("");setBuyerBrief(null);setCallCostUsd(0);spendState.current.callUsd=0; setOutcome("Follow-up needed"); notify("Call saved to this browser");
   }
   function newCall() {
     if (turns.length || notes.trim()) { saveCall(); setView("live"); return; }
-    stopAudio(); setView("live"); setGuidance(null); setError(""); setStartedAt(0); setElapsed(0); setBuyer(""); setSelectedCall(null);
+    callGeneration.current++; controller.current?.abort();seq.current++;if(timer.current)clearTimeout(timer.current);
+    stopAudio(); setView("live"); setGuidance(null); setError(""); setStartedAt(0); setElapsed(0); setBuyer("");setBuyerBrief(null);setCallCostUsd(0);spendState.current.callUsd=0; setSelectedCall(null);
   }
   async function summarize(call: CallRecord) {
     const manufacturer = manufacturers.find(m => m.id === call.manufacturerId);
     if (!manufacturer) { setError("This manufacturer's profile is no longer available."); return; }
     setSummarizing(true); setError("");
-    try { const summary = await requestJSON<NonNullable<CallRecord["summary"]>>("/api/coach", payload("summary",call.turns,manufacturer,call.buyer,call.goal)); setCalls(previous => previous.map(c => c.id === call.id ? {...c,summary} : c)); }
+    try { const summary = await billableJSON<NonNullable<CallRecord["summary"]>>("/api/coach", payload("summary",call.turns,manufacturer,call.buyer,call.goal)); setCalls(previous => previous.map(c => c.id === call.id ? {...c,summary} : c)); }
     catch(e) { setError(e instanceof Error ? e.message : "Could not summarize call."); } finally { setSummarizing(false); }
   }
   function saveForm(e: React.FormEvent) {
@@ -286,8 +372,8 @@ export default function Workspace() {
     } else if (current) {
       if (!formText.trim()) { setError("Add some source text before saving."); return; }
       const total = knowledgeFor(current).filter(s => s.id !== modal.source?.id).reduce((n,s) => n+s.text.length,0) + formText.length;
-      if (total > 160_000) { setError("This manufacturer's materials exceed 160,000 characters. Shorten the source text."); return; }
-      const source: Source = { id:modal.source?.id || uid(), title:formName.trim(), text:formText.trim(), addedAt:new Date().toISOString() };
+      if (total > 500_000) { setError("This manufacturer's library supports 500,000 characters. Split larger libraries across manufacturers."); return; }
+      const source: Source = { ...modal.source, id:modal.source?.id || uid(), title:formName.trim(), text:formText.trim(), addedAt:modal.source?.addedAt || new Date().toISOString() };
       setManufacturers(previous => previous.map(m => m.id === current.id ? {...m,sources:modal.source ? m.sources.map(s => s.id === source.id ? source : s) : [...m.sources,source]} : m));
     }
     setModal(null); setGuidance(null); notify("Knowledge saved to this browser");
@@ -298,14 +384,15 @@ export default function Workspace() {
     setFormName(file.name);
     if (/\.pdf$/i.test(file.name)) {
       setExtracting(true);
-      try { const data = await new Promise<string>((resolve,reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = reject; reader.readAsDataURL(file); }); const result = await requestJSON<{text:string}>("/api/extract", {name:file.name,data}); setFormText(result.text); notify("PDF extracted. Review the text before saving."); }
+      try { const data = await new Promise<string>((resolve,reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = reject; reader.readAsDataURL(file); }); const result = await billableJSON<{text:string}>("/api/extract", {name:file.name,data}); setFormText(result.text); notify("PDF extracted. Review the text before saving."); }
       catch(e) { setError(e instanceof Error ? e.message : "The PDF could not be read."); } finally { setExtracting(false); }
     } else if (/\.(txt|md|csv|tsv|json)$/i.test(file.name)) { const text = await file.text(); if (text.length > 100_000) { setError("Each source can contain up to 100,000 characters. Split this file into smaller sources."); return; } setFormText(text); }
     else setError("Supported files: PDF, TXT, Markdown, CSV, TSV, and JSON. Paste text from other formats.");
   }
-  function backup() { downloadFile(`trade-assist-backup-${new Date().toISOString().slice(0,10)}.json`, JSON.stringify({version:1,manufacturers,calls,activeId,draft:draft.current},null,2),"application/json"); }
+  function backup() { downloadFile(`trade-assist-backup-${new Date().toISOString().slice(0,10)}.json`, JSON.stringify({version:1,manufacturers,calls,activeId,draft:draft.current,features:{voice,buyerBrief},usage:{budget,entries:usageEntries}},null,2),"application/json"); }
   async function restore(file?: File) {
     if (!file) return;
+    if(live || connecting) {setError("Stop the live assistant before importing a backup.");return;}
     try {
       if (file.size > 8_000_000) throw new Error("Backup too large.");
       const data = JSON.parse(await file.text());
@@ -313,11 +400,45 @@ export default function Workspace() {
       const existing = new Set(manufacturers.map(m => m.id)), callIds = new Set(calls.map(c => c.id));
       setManufacturers(previous => [...previous,...data.manufacturers.filter((m:Manufacturer) => !existing.has(m.id))]); setCalls(previous => [...data.calls.filter((c:CallRecord) => !callIds.has(c.id)),...previous]);
       if (!activeId && data.manufacturers[0]) setActiveId(data.manufacturers[0].id); notify("Backup imported. Existing records were kept.");
+      const importedVoice=VoiceProfileInput.safeParse(data.features?.voice);if(importedVoice.success && data.features?.voice)setVoice(importedVoice.data);
+      if(Array.isArray(data.usage?.entries))recordCharges(data.usage.entries.filter((entry:UsageEntry)=>entry && typeof entry.id==="string" && typeof entry.model==="string" && ["live","transcription","coach","research","document"].includes(entry.kind) && Number.isFinite(entry.at) && Number.isFinite(entry.usd) && entry.usd>=0),false);
+      const limits=data.usage?.budget;
+      if(limits && typeof limits.enabled==="boolean" && Number.isFinite(limits.perCallUsd) && limits.perCallUsd>=0 && limits.perCallUsd<=10_000 && Number.isFinite(limits.monthlyUsd) && limits.monthlyUsd>=0 && limits.monthlyUsd<=10_000)setBudget(limits);
+      if(!turns.length && !notes.trim()) {
+        const restoredDraft=data.draft;
+        if(restoredDraft && Array.isArray(restoredDraft.turns) && restoredDraft.turns.every((turn:Turn)=>turn && typeof turn.id==="string" && typeof turn.text==="string" && ["buyer","you","conversation"].includes(turn.role))) {
+          callGeneration.current++;const restoredTurns=restoredDraft.turns.slice(-300).map((turn:Turn)=>({...turn,text:turn.text.slice(0,6000)}));setTurns(restoredTurns);context.current.turns=restoredTurns;
+          setBuyer(String(restoredDraft.buyer || "").slice(0,500));setGoal(GOALS.includes(restoredDraft.goal) ? restoredDraft.goal : GOALS[0]);setNotes(String(restoredDraft.notes || "").slice(0,20_000));setStartedAt(Number(restoredDraft.startedAt)||0);setElapsed(Math.max(0,Number(restoredDraft.elapsed)||0));setOutcome(String(restoredDraft.outcome || "Follow-up needed").slice(0,100));
+          if([...manufacturers,...data.manufacturers].some((m:Manufacturer)=>m.id===restoredDraft.activeId))setActiveId(restoredDraft.activeId);
+          const cost=Math.max(0,Number(restoredDraft.callCostUsd)||0);setCallCostUsd(cost);spendState.current.callUsd=cost;
+        }
+        const importedBrief=BuyerBriefInput.safeParse(data.features?.buyerBrief || restoredDraft?.buyerBrief);
+        if(importedBrief.success){setBuyerBrief(importedBrief.data);if(!restoredDraft?.buyer)setBuyer(importedBrief.data.company);}
+      }
     } catch { setError("This file is not a valid Trade Assist backup."); }
   }
   function selectManufacturer(id: string) {
-    if (live || connecting || turns.length) { setError("Save the current call before switching manufacturers."); return; }
-    setActiveId(id); setGuidance(null); setError("");
+    if (live || connecting || turns.length || driveLoading) { setError("Finish the current call or import before switching manufacturers."); return; }
+    setActiveId(id); setGuidance(null);setDrivePreview(null); setError("");
+  }
+  async function previewDrive(url=driveUrl) {
+    if(!current || driveLoading || live || connecting)return;
+    const manufacturerId=current.id;setError("");setDriveLoading(true);setDrivePreview(null);setDriveUrl(url);
+    try {
+      const result=await billableJSON<{sources:Source[];warnings:string[]}>("/api/drive",{url});
+      if(context.current.current?.id!==manufacturerId)throw new Error("Select the original manufacturer before importing this document.");
+      setDrivePreview(result);
+    }catch(e){setError(e instanceof Error ? e.message : "The Drive link could not be read.");}finally{setDriveLoading(false);}
+  }
+  function saveDriveMemory() {
+    if(!current || !drivePreview || live || connecting)return;
+    const sources=[...current.sources];
+    for(const source of drivePreview.sources) {const index=sources.findIndex(s=>s.id===source.id || (s.originUrl&&s.originUrl===source.originUrl));if(index>=0)sources[index]={...source,addedAt:sources[index].addedAt};else sources.push(source);}
+    if(sources.reduce((n,s)=>n+s.text.length,0)+current.introduction.length>500_000){setError("This would exceed the 500,000-character library limit. Import fewer documents or use another manufacturer profile.");return;}
+    setManufacturers(previous=>previous.map(m=>m.id===current.id ? {...m,sources} : m));setDrivePreview(null);setDriveUrl("");setGuidance(null);notify("Drive documents saved in your searchable company memory");
+  }
+  function driveImportCard() {
+    return <section className="card drive-import"><div className="panel-header"><div><BookOpen size={17}/><h2>Import from Google Drive</h2></div><span className="category-label">Anyone-with-link access</span></div><p>Paste a Google Doc, Sheet, Slides, PDF, or folder link. Read the preview once, then save it in this manufacturer’s memory.</p><form onSubmit={e=>{e.preventDefault();void previewDrive();}}><label htmlFor="drive-link">Google Drive file or folder link</label><div className="drive-link-row"><input id="drive-link" type="url" placeholder="https://docs.google.com/document/d/…" value={driveUrl} onChange={e=>setDriveUrl(e.target.value)} required disabled={driveLoading || live || connecting}/><button className="button primary" disabled={driveLoading || live || connecting || !driveUrl.trim()}>{driveLoading ? <Loader2 size={15} className="spin"/> : <ArrowRight size={15}/>} {driveLoading ? "Reading documents…" : "Read link"}</button></div></form><small>Documents stay saved in this browser. Refresh a linked source when the original changes. Private sign-in-only files are not supported by this link importer.</small>{drivePreview && <div className="drive-preview"><strong>{drivePreview.sources.length} document{drivePreview.sources.length===1 ? "" : "s"} ready · {drivePreview.sources.reduce((n,s)=>n+s.text.length,0).toLocaleString()} characters</strong>{drivePreview.warnings.map((warning,i)=><p className="import-warning" key={i}>{warning}</p>)}{drivePreview.sources.map(s=><details key={s.id}><summary>{s.title} <span>{s.text.length.toLocaleString()} characters</span></summary><a href={s.originUrl} target="_blank" rel="noreferrer">Open original document ↗</a><pre>{s.text}</pre></details>)}<div className="button-row"><button className="button primary" onClick={saveDriveMemory} disabled={!drivePreview.sources.length || live || connecting}><Check size={15}/> Save to company memory</button><button className="button secondary" onClick={()=>setDrivePreview(null)}>Discard preview</button></div></div>}</section>;
   }
   const record = calls.find(c => c.id === selectedCall);
   const filteredCalls = calls.filter(c => `${c.buyer} ${c.manufacturerName} ${c.notes}`.toLowerCase().includes(query.toLowerCase()));
@@ -356,8 +477,9 @@ export default function Workspace() {
 
         {view === "live" && <>
           {!current && <div className="onboarding-strip"><span className="step-circle">1</span><div><strong>Add your company knowledge.</strong><p>Optional: add product details for specific answers. You can start listening right away.</p></div><button className="text-button" onClick={() => openModal({type:"manufacturer"})}>Add manufacturer <ArrowRight size={16}/></button></div>}
-          <section className="call-context card" aria-label="Call details"><label><span>REPRESENTING</span><select aria-label="Manufacturer" value={activeId} onChange={e => selectManufacturer(e.target.value)} disabled={live || connecting || turns.length > 0}><option value="" disabled>Select manufacturer</option>{manufacturers.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}</select></label><label><span>WHO ARE YOU CALLING?</span><input placeholder="Buyer name or company" maxLength={500} value={buyer} onChange={e => setBuyer(e.target.value)}/></label><label className="goal-field"><span>THIS CALL’S NEXT STEP</span><select value={goal} onChange={e => setGoal(e.target.value)}>{GOALS.map(g => <option key={g}>{g}</option>)}</select></label></section>
-          {audioControls()}
+          <section className="call-context card" aria-label="Call details"><label><span>REPRESENTING</span><select aria-label="Manufacturer" value={activeId} onChange={e => selectManufacturer(e.target.value)} disabled={live || connecting || turns.length > 0}><option value="" disabled>Select manufacturer</option>{manufacturers.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}</select></label><label><span>WHO ARE YOU CALLING?</span><input placeholder="Buyer name or company" maxLength={500} value={buyer} onChange={e => {setBuyer(e.target.value);setBuyerBrief(null);}} disabled={live || connecting}/></label><label className="goal-field"><span>THIS CALL’S NEXT STEP</span><select value={goal} onChange={e => setGoal(e.target.value)}>{GOALS.map(g => <option key={g}>{g}</option>)}</select></label></section>
+          {!live && <BuyerResearchPanel buyer={buyer} brief={buyerBrief} onBrief={setBuyerBrief} products={current?.products || ""} disabled={live || connecting} request={billableJSON}/>} {audioControls()}
+          <div className="feature-cost-strip"><span>Estimated AI cost this call <strong>{formatUsd(callCostUsd)}</strong></span><span>This month <strong>{formatUsd(monthSpend(usageEntries))}</strong>{budget.enabled ? ` / ${formatUsd(budget.monthlyUsd)}` : ""}</span><button className="text-button" onClick={()=>setView("settings")}>Spending controls</button></div>
           <div className="call-grid">
             <section className="conversation card"><div className="panel-header"><div><Radio size={17}/><h2>Conversation</h2></div><span className={`micro-status ${live && !paused ? "on" : ""}`}><span className="status-dot"/>{connecting ? "Connecting" : paused ? "Paused" : live ? "Listening" : "Microphone off"}</span></div>
               <div className="transcript" aria-live="polite">{turns.length === 0 && !partial ? <div className="transcript-empty"><div className="empty-audio"><AudioLines size={32}/></div><h3>Room for a good conversation.</h3><p>Your live transcript appears here.<br/>You focus on the person on the other end.</p><div className="audio-explainer"><Phone size={16}/><span>Call on your mobile. Use speakerphone<br/>beside your computer’s microphone.</span></div><button className="text-button" onClick={() => setShowHelp(true)}>How it works <ArrowRight size={13}/></button></div> : turns.map(t => <div className={`transcript-turn ${t.role === "you" ? "your-turn" : ""}`} key={t.id}><div className="turn-meta"><select aria-label="Speaker" value={t.role} onChange={e => { const next = turns.map(item => item.id === t.id ? {...item,role:e.target.value as Turn["role"]} : item); setTurns(next); context.current.turns=next; }}><option value="conversation">Room audio</option><option value="buyer">Buyer</option><option value="you">You</option></select><time>{nowLabel(t.at)}</time></div><p>{t.text}</p></div>)}{partial && <div className="transcript-turn partial"><div className="turn-meta">Transcribing…</div><p>{partial}</p></div>}<div ref={transcriptEnd}/></div>
@@ -372,17 +494,17 @@ export default function Workspace() {
             </section>
             <section className="evidence-card card"><div className="panel-header"><div><BookOpen size={16}/><h2>Backed by your knowledge</h2></div><span className="count-badge">{guidance?.evidence.length || 0}</span></div><div className="evidence-body">{guidance?.evidence.length ? guidance.evidence.map((e,i) => <button className="evidence-item" key={i} onClick={() => { if (e.sourceId === "company-profile") openModal({type:"manufacturer",manufacturer:current}); else { const source=current?.sources.find(s => s.id === e.sourceId); if(source) openModal({type:"source",source}); } }}><div><FileText size={14}/><strong>{knowledgeFor(current!).find(s => s.id === e.sourceId)?.title || "Source"}</strong><ChevronRight size={13}/></div><p>“{e.quote}”</p></button>) : <div className="subtle-empty"><Layers3 size={23}/><p>{current ? "Live drafts use your context. Choose Get a verified answer to see supporting source excerpts." : "Add company and product information to ground your suggestions."}</p></div>}{guidance?.caution && <div className="caution"><CircleHelp size={15}/><p>{guidance.caution}</p></div>}{guidance && guidance.missing.length > 0 && <div className="missing-facts"><span>DETAILS TO CONFIRM</span>{guidance.missing.map(m => <p key={m}>· {m}</p>)}</div>}</div></section>
             {!live && !liveDraft && guidance?.nextStep && <section className="next-step-card"><span className="next-step-icon"><ArrowRight size={19}/></span><div><span className="eyebrow">MOVE THE DEAL FORWARD</span><p>{guidance.nextStep}</p></div></section>}
-            {guidance && <button className="text-button refresh-guidance" onClick={() => void coach()} disabled={thinking}><RefreshCw size={13}/> {liveDraft ? "Get a verified answer" : "Refresh guidance"}</button>}</div>
+            {guidance && <button className="text-button" onClick={()=>setReplyEdit(guidance.say)}>Edit wording & teach my voice</button>}{replyEdit!==null && <div className="reply-edit card"><label htmlFor="preferred-reply">How would you say this?</label><textarea id="preferred-reply" maxLength={600} value={replyEdit} onChange={e=>setReplyEdit(e.target.value)}/><div className="button-row"><button className="button primary small" disabled={!replyEdit.trim()} onClick={()=>{const text=replyEdit.trim();setVoice(v=>({...v,examples:[...v.examples.filter(e=>e!==text),text].slice(-6)}));setGuidance(g=>g ? {...g,say:text} : g);setReplyEdit(null);notify("Preferred wording saved for future calls");}}>Remember my wording</button><button className="text-button" onClick={()=>setReplyEdit(null)}>Cancel</button></div><small>Saved as a style example. It does not establish product facts. Restart the live assistant to apply new voice settings.</small></div>}{guidance && <button className="text-button refresh-guidance" onClick={() => void coach()} disabled={thinking}><RefreshCw size={13}/> {liveDraft ? "Get a verified answer" : "Refresh guidance"}</button>}</div>
           </div>
           <section className="call-notes card"><div><label htmlFor="call-notes">Your call notes</label><p>Capture a requirement, detail, or promise to follow up.</p></div><textarea id="call-notes" placeholder="What matters for the next conversation?" value={notes} onChange={e => setNotes(e.target.value)} maxLength={20_000}/><div className="save-call"><select aria-label="Call outcome" value={outcome} onChange={e => setOutcome(e.target.value)}>{["Follow-up needed","Interested — next step agreed","Quotation requested","Samples requested","Not interested","No answer","Practice call"].map(o => <option key={o}>{o}</option>)}</select><button className="button secondary" onClick={saveCall} disabled={!turns.length && !notes.trim()}><CheckCircle2 size={15}/> Save call</button></div></section>
           <div className="workspace-footer"><span><LockKeyhole size={12}/> Materials and transcripts saved in this browser</span><span>Speakerphone mode <span>·</span> English <span>·</span> You do the talking</span></div>
         </>}
 
-        {view === "knowledge" && <div className="knowledge-layout"><section className="card company-card"><div className="panel-header"><div><Layers3 size={17}/><h2>{current ? current.name : "Your manufacturer"}</h2></div>{current && <button className="text-button" disabled={live || connecting} onClick={() => openModal({type:"manufacturer",manufacturer:current})}>Edit profile</button>}</div>{current ? <div className="company-profile"><span className="category-label">{current.products || "Product category not added"}</span><p>{current.introduction || "Add a company description, capabilities, and approved selling points in Edit profile."}</p><div className="profile-stats"><div><strong>{current.sources.length}</strong><span>source documents</span></div><div><strong>{knowledgeFor(current).reduce((n,s) => n+s.text.length,0).toLocaleString()}</strong><span>characters of knowledge</span></div></div></div> : <div className="large-empty"><BookOpen size={34}/><h2>Give your copilot something to work with.</h2><p>Add a manufacturer, then paste product details or upload your materials.</p><button className="button primary" onClick={() => openModal({type:"manufacturer"})}><Plus size={16}/> Add your first manufacturer</button></div>}</section>{current && <><div className="section-heading"><div><h2>Source library</h2><p>Review and update these whenever your terms change.</p></div><span>{current.sources.length} sources</span></div><div className="source-grid">{current.sources.map(s => <article className="card source-card" key={s.id}><span className="source-icon"><FileText size={22}/></span><h3>{s.title}</h3><p>{s.text.slice(0,180)}{s.text.length > 180 ? "…" : ""}</p><div className="source-meta"><span>{s.text.length.toLocaleString()} characters · {new Date(s.addedAt).toLocaleDateString()}</span><button className="text-button" disabled={live || connecting} onClick={() => openModal({type:"source",source:s})}>Review <ArrowRight size={13}/></button></div></article>)}<button className="source-add" disabled={live || connecting} onClick={() => openModal({type:"source"})}><Plus size={24}/><strong>Add a source</strong><span>Paste details or upload a document</span></button></div><div className="info-card"><ShieldCheck size={21}/><div><strong>Useful details make useful suggestions.</strong><p>Include specifications, minimum orders, prices with currencies and units, lead times, certifications, sample policies, and negotiation limits. Keep dates and conditions attached to commercial terms.</p></div></div></>}</div>}
+        {view === "knowledge" && <div className="knowledge-layout"><section className="card company-card"><div className="panel-header"><div><Layers3 size={17}/><h2>{current ? current.name : "Your manufacturer"}</h2></div>{current && <button className="text-button" disabled={live || connecting} onClick={() => openModal({type:"manufacturer",manufacturer:current})}>Edit profile</button>}</div>{current ? <div className="company-profile"><span className="category-label">{current.products || "Product category not added"}</span><p>{current.introduction || "Add a company description, capabilities, and approved selling points in Edit profile."}</p><div className="profile-stats"><div><strong>{current.sources.length}</strong><span>source documents</span></div><div><strong>{knowledgeFor(current).reduce((n,s) => n+s.text.length,0).toLocaleString()}</strong><span>characters of knowledge</span></div></div></div> : <div className="large-empty"><BookOpen size={34}/><h2>Give your copilot something to work with.</h2><p>Add a manufacturer, then paste product details or upload your materials.</p><button className="button primary" onClick={() => openModal({type:"manufacturer"})}><Plus size={16}/> Add your first manufacturer</button></div>}</section>{current && <>{driveImportCard()}<div className="knowledge-search"><Search size={16}/><input aria-label="Search company memory" placeholder="Search your saved company memory…" value={knowledgeQuery} onChange={e=>setKnowledgeQuery(e.target.value)}/></div><div className="section-heading"><div><h2>Source library</h2><p>Review and update these whenever your terms change.</p></div><span>{current.sources.length} sources</span></div><div className="source-grid">{current.sources.filter(s=>!knowledgeQuery || `${s.title} ${s.text}`.toLowerCase().includes(knowledgeQuery.toLowerCase())).map(s => <article className="card source-card" key={s.id}><span className="source-icon"><FileText size={22}/></span><h3>{s.title}</h3>{s.originUrl && <div className="linked-source"><a href={s.originUrl} target="_blank" rel="noreferrer">Google Drive ↗</a><span>Read {new Date(s.syncedAt || s.addedAt).toLocaleDateString()}</span><button className="text-button" disabled={driveLoading || live || connecting} onClick={()=>void previewDrive(s.originUrl)}>Refresh</button></div>}<p>{s.text.slice(0,180)}{s.text.length > 180 ? "…" : ""}</p><div className="source-meta"><span>{s.text.length.toLocaleString()} characters · {new Date(s.addedAt).toLocaleDateString()}</span><button className="text-button" disabled={live || connecting} onClick={() => openModal({type:"source",source:s})}>Review <ArrowRight size={13}/></button></div></article>)}<button className="source-add" disabled={live || connecting} onClick={() => openModal({type:"source"})}><Plus size={24}/><strong>Add a source</strong><span>Paste details or upload a document</span></button></div><div className="info-card"><ShieldCheck size={21}/><div><strong>Useful details make useful suggestions.</strong><p>Include specifications, minimum orders, prices with currencies and units, lead times, certifications, sample policies, and negotiation limits. Keep dates and conditions attached to commercial terms.</p></div></div></>}</div>}
 
-        {view === "history" && <div className="history-layout"><section className="card history-list"><div className="history-search"><Search size={16}/><input aria-label="Search call history" placeholder="Search buyers, companies, notes…" value={query} onChange={e => setQuery(e.target.value)}/></div>{filteredCalls.length ? filteredCalls.map(c => <button className={`history-item ${selectedCall === c.id ? "selected" : ""}`} key={c.id} onClick={() => setSelectedCall(c.id)}><span className="history-avatar"><Phone size={16}/></span><div><strong>{c.buyer}</strong><p>{c.manufacturerName}</p><small>{new Date(c.startedAt).toLocaleDateString()} · {durationText(c.duration)}</small></div><ChevronRight size={15}/></button>) : <div className="subtle-empty"><History size={27}/><h3>{query ? "No matching calls" : "Your conversations, remembered."}</h3><p>{query ? "Try a different search." : "Save your first call to keep notes and prepare a follow-up."}</p></div>}</section><section className="card record-detail">{record ? <><div className="record-heading"><div><span className="eyebrow">{record.manufacturerName}</span><h2>{record.buyer}</h2><p>{new Date(record.startedAt).toLocaleString()} · {durationText(record.duration)}</p></div><button className="icon-button bordered" aria-label="Export call" onClick={() => downloadFile(`call-${record.id.slice(0,8)}.json`,JSON.stringify(record,null,2),"application/json")}><Download size={17}/></button></div><span className="outcome-badge">{record.outcome}</span><p className="record-goal"><strong>Goal:</strong> {record.goal}</p>{record.notes && <div className="record-section"><h3>Your notes</h3><p className="preserve">{record.notes}</p></div>}<div className="record-section"><div className="section-heading"><h3>Call recap</h3><button className="button secondary small" disabled={summarizing || !record.turns.length || !configured} onClick={() => void summarize(record)}>{summarizing ? <Loader2 size={14} className="spin"/> : <Sparkles size={14}/>} {record.summary ? "Regenerate" : "Generate recap"}</button></div>{record.summary ? <><p>{record.summary.overview}</p>{([{key:"requirements",name:"Buyer requirements"},{key:"objections",name:"Objections"},{key:"commitments",name:"Explicit commitments"},{key:"nextSteps",name:"Next steps"}] as const).map(s => record.summary![s.key].length > 0 && <div className="recap-group" key={s.key}><h4>{s.name}</h4><ul>{record.summary![s.key].map((t,i) => <li key={i}>{t}</li>)}</ul></div>)}<div className="followup-heading"><h3>Follow-up draft</h3><button className="text-button" onClick={() => void copy(record.summary!.followUp)}><Copy size={13}/> Copy</button></div><textarea className="followup-text" aria-label="Edit follow-up email draft" value={record.summary.followUp} onChange={e => setCalls(previous => previous.map(c => c.id === record.id && c.summary ? {...c,summary:{...c.summary,followUp:e.target.value}} : c))}/><small className="muted">Review before sending. Trade Assist does not send messages.</small></> : <p className="muted">Generate a recap and editable follow-up draft from the actual conversation.</p>}</div><details className="transcript-details"><summary>Full transcript <span>{record.turns.length} turns</span></summary>{record.turns.map(t => <div className="record-turn" key={t.id}><strong>{t.role === "conversation" ? "Room audio" : t.role === "buyer" ? "Buyer" : "You"}</strong><p>{t.text}</p></div>)}</details><button className="text-button danger-text" onClick={() => { if (window.confirm("Delete this saved call from this browser?")) { setCalls(previous => previous.filter(c => c.id !== record.id)); setSelectedCall(null); } }}><Trash2 size={13}/> Delete call</button></> : <div className="large-empty"><FileText size={34}/><h2>A clear next step starts with good notes.</h2><p>Select a call to review the conversation, generate a recap, and draft a follow-up.</p></div>}</section></div>}
+        {view === "history" && <div className="history-layout"><section className="card history-list"><div className="history-search"><Search size={16}/><input aria-label="Search call history" placeholder="Search buyers, companies, notes…" value={query} onChange={e => setQuery(e.target.value)}/></div>{filteredCalls.length ? filteredCalls.map(c => <button className={`history-item ${selectedCall === c.id ? "selected" : ""}`} key={c.id} onClick={() => setSelectedCall(c.id)}><span className="history-avatar"><Phone size={16}/></span><div><strong>{c.buyer}</strong><p>{c.manufacturerName}</p><small>{new Date(c.startedAt).toLocaleDateString()} · {durationText(c.duration)}</small></div><ChevronRight size={15}/></button>) : <div className="subtle-empty"><History size={27}/><h3>{query ? "No matching calls" : "Your conversations, remembered."}</h3><p>{query ? "Try a different search." : "Save your first call to keep notes and prepare a follow-up."}</p></div>}</section><section className="card record-detail">{record ? <><div className="record-heading"><div><span className="eyebrow">{record.manufacturerName}</span><h2>{record.buyer}</h2><p>{new Date(record.startedAt).toLocaleString()} · {durationText(record.duration)}</p></div><button className="icon-button bordered" aria-label="Export call" onClick={() => downloadFile(`call-${record.id.slice(0,8)}.json`,JSON.stringify(record,null,2),"application/json")}><Download size={17}/></button></div><span className="outcome-badge">{record.outcome}</span><p className="record-cost">Estimated AI cost: {formatUsd(record.estimatedCostUsd || 0)}</p><p className="record-goal"><strong>Goal:</strong> {record.goal}</p>{record.buyerBrief && <details className="transcript-details"><summary>Buyer research saved with this call</summary><p>{record.buyerBrief.summary}</p>{record.buyerBrief.facts.map((fact,i)=><p key={i}>{fact.text} <a href={fact.sourceUrl} target="_blank" rel="noreferrer">Source ↗</a></p>)}{record.buyerBrief.hypotheses.map((hypothesis,i)=><p key={i}><strong>Unconfirmed possibility:</strong> {hypothesis.painPoint} · {hypothesis.question}</p>)}</details>}{record.notes && <div className="record-section"><h3>Your notes</h3><p className="preserve">{record.notes}</p></div>}<div className="record-section"><div className="section-heading"><h3>Call recap</h3><button className="button secondary small" disabled={summarizing || !record.turns.length || !configured} onClick={() => void summarize(record)}>{summarizing ? <Loader2 size={14} className="spin"/> : <Sparkles size={14}/>} {record.summary ? "Regenerate" : "Generate recap"}</button></div>{record.summary ? <><p>{record.summary.overview}</p>{([{key:"requirements",name:"Buyer requirements"},{key:"objections",name:"Objections"},{key:"commitments",name:"Explicit commitments"},{key:"nextSteps",name:"Next steps"}] as const).map(s => record.summary![s.key].length > 0 && <div className="recap-group" key={s.key}><h4>{s.name}</h4><ul>{record.summary![s.key].map((t,i) => <li key={i}>{t}</li>)}</ul></div>)}<div className="followup-heading"><h3>Follow-up draft</h3><button className="text-button" onClick={() => void copy(record.summary!.followUp)}><Copy size={13}/> Copy</button></div><textarea className="followup-text" aria-label="Edit follow-up email draft" value={record.summary.followUp} onChange={e => setCalls(previous => previous.map(c => c.id === record.id && c.summary ? {...c,summary:{...c.summary,followUp:e.target.value}} : c))}/><small className="muted">Review before sending. Trade Assist does not send messages.</small></> : <p className="muted">Generate a recap and editable follow-up draft from the actual conversation.</p>}</div><details className="transcript-details"><summary>Full transcript <span>{record.turns.length} turns</span></summary>{record.turns.map(t => <div className="record-turn" key={t.id}><strong>{t.role === "conversation" ? "Room audio" : t.role === "buyer" ? "Buyer" : "You"}</strong><p>{t.text}</p></div>)}</details><button className="text-button danger-text" onClick={() => { if (window.confirm("Delete this saved call from this browser?")) { setCalls(previous => previous.filter(c => c.id !== record.id)); setSelectedCall(null); } }}><Trash2 size={13}/> Delete call</button></> : <div className="large-empty"><FileText size={34}/><h2>A clear next step starts with good notes.</h2><p>Select a call to review the conversation, generate a recap, and draft a follow-up.</p></div>}</section></div>}
 
-        {view === "settings" && <div className="settings-layout"><section className="card settings-card"><div className="panel-header"><div><Activity size={18}/><h2>AI connection</h2></div><span className={`connection-pill ${configured ? "ready" : ""}`}><span className="status-dot"/>{configured ? "Connected" : "Not connected"}</span></div><p>{configured ? "Your API key stays on the server. Company materials and conversation text are sent to OpenAI when you request guidance; live audio is sent only while listening." : "This server does not have the API key configured. Use the local version of Trade Assist where your key was securely saved."}</p><button className="button secondary small" onClick={() => { requestJSON<{configured:boolean}>("/api/status").then(s => {setConfigured(s.configured);notify(s.configured ? "AI connection is configured" : "No AI connection on this server");}).catch(e => setError(e.message)); }}><RefreshCw size={14}/> Check connection</button></section>{audioControls()}<section className="card settings-card"><div className="panel-header"><div><LockKeyhole size={18}/><h2>Your workspace data</h2></div><span className="category-label">Saved in this browser</span></div><p>Manufacturer profiles, sources, transcripts, and notes stay in this browser. Raw call audio is not saved by this app. Export a backup to move your workspace or protect against browser data being cleared.</p><div className="button-row"><button className="button secondary" onClick={backup}><Download size={15}/> Export backup</button><button className="button secondary" onClick={() => importInput.current?.click()}><Upload size={15}/> Import backup</button></div><input ref={importInput} hidden type="file" accept=".json" onChange={e => {void restore(e.target.files?.[0]);e.target.value="";}}/></section><section className="info-card"><Headphones size={22}/><div><strong>For your first real call</strong><p>Add and review your materials, try a typed question, and test the microphone. Room audio does not reliably identify speakers; you can correct each transcript label. Reconnect if your network interrupts listening.</p></div></section></div>}
+        {view === "settings" && <div className="settings-layout"><section className="card settings-card"><div className="panel-header"><div><Activity size={18}/><h2>AI connection</h2></div><span className={`connection-pill ${configured ? "ready" : ""}`}><span className="status-dot"/>{configured ? "Connected" : "Not connected"}</span></div><p>{configured ? "Your API key stays on the server. Company materials and conversation text are sent to OpenAI when you request guidance; live audio is sent only while listening." : "This server does not have the API key configured. Use the local version of Trade Assist where your key was securely saved."}</p><button className="button secondary small" onClick={() => { requestJSON<{configured:boolean}>("/api/status").then(s => {setConfigured(s.configured);notify(s.configured ? "AI connection is configured" : "No AI connection on this server");}).catch(e => setError(e.message)); }}><RefreshCw size={14}/> Check connection</button></section>{audioControls()}<VoiceSettings voice={voice} onChange={setVoice} disabled={live || connecting}/><SpendingPanel settings={budget} onChange={setBudget} callUsd={callCostUsd} entries={usageEntries}/><section className="card settings-card"><div className="panel-header"><div><LockKeyhole size={18}/><h2>Your workspace data</h2></div><span className="category-label">Saved in this browser</span></div><p>Manufacturer profiles, sources, transcripts, and notes stay in this browser. Raw call audio is not saved by this app. Export a backup to move your workspace or protect against browser data being cleared.</p><div className="button-row"><button className="button secondary" onClick={backup}><Download size={15}/> Export backup</button><button className="button secondary" onClick={() => importInput.current?.click()}><Upload size={15}/> Import backup</button></div><input ref={importInput} hidden type="file" accept=".json" onChange={e => {void restore(e.target.files?.[0]);e.target.value="";}}/></section><section className="info-card"><Headphones size={22}/><div><strong>For your first real call</strong><p>Add and review your materials, try a typed question, and test the microphone. Room audio does not reliably identify speakers; you can correct each transcript label. Reconnect if your network interrupts listening.</p></div></section></div>}
       </main>
     </div>
 
