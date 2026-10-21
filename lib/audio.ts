@@ -1,4 +1,44 @@
-export type AudioMode = "speakerphone" | "headset";
+export type AudioMode = "speakerphone" | "headset" | "computer";
+
+export function normalizeAudioMode(value: unknown): AudioMode {
+  return value === "computer" || value === "headset" ? value : "speakerphone";
+}
+
+const COMPUTER_AUDIO_HELP = "Use a recent version of Chrome, choose Entire Screen, and turn on Share system audio. Allow screen and system audio access in macOS Privacy & Security if asked.";
+
+/** Retain all capture tracks for cleanup; send only audio tracks to the assistant. */
+export async function captureComputerAudio(mediaDevices?: Pick<MediaDevices,"getDisplayMedia"> | null): Promise<MediaStream> {
+  if (typeof mediaDevices?.getDisplayMedia !== "function") {
+    throw new Error("This browser cannot share computer audio. " + COMPUTER_AUDIO_HELP);
+  }
+  let captured: MediaStream;
+  try {
+    // The picker requires a video surface even though Trade Assist uses audio only.
+    // Do not suppress playback: the representative still needs to hear the buyer.
+    const options: DisplayMediaStreamOptions & {audio:MediaTrackConstraints & {suppressLocalAudioPlayback:false};systemAudio:"include";windowAudio:"system";selfBrowserSurface:"exclude"} = {
+      video:true,
+      audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false,suppressLocalAudioPlayback:false},
+      systemAudio:"include",
+      windowAudio:"system",
+      selfBrowserSurface:"exclude",
+    };
+    captured = await mediaDevices.getDisplayMedia(options);
+  } catch (error) {
+    const name = error && typeof error === "object" && "name" in error ? String(error.name) : "";
+    if (name === "NotAllowedError" || name === "AbortError") {
+      throw new Error("Computer audio sharing was cancelled or blocked. " + COMPUTER_AUDIO_HELP);
+    }
+    if (name === "InvalidStateError") {
+      throw new Error("Click Test computer audio or Start listening to open the sharing picker. " + COMPUTER_AUDIO_HELP);
+    }
+    throw new Error("Computer audio could not be captured. " + COMPUTER_AUDIO_HELP);
+  }
+  if (!captured.getAudioTracks().length) {
+    captured.getTracks().forEach(track => track.stop());
+    throw new Error("No computer audio was shared. " + COMPUTER_AUDIO_HELP);
+  }
+  return captured;
+}
 
 export function microphoneConstraints(mode: AudioMode, deviceId: string): MediaTrackConstraints {
   // A phone speaker is the wanted signal, so do not remove it as room playback/noise.
