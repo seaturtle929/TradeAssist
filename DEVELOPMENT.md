@@ -9,7 +9,8 @@ TradeAssist code belongs in its private GitHub repository. Calls, client records
 3. Implement the focused change and run relevant checks. The shared offline checks are:
 
    ```sh
-   node node_modules/typescript/bin/tsc --noEmit
+   npm run check:types
+   npm run check:privacy
    npm run lint
    npm run build
    ```
@@ -26,6 +27,10 @@ TradeAssist code belongs in its private GitHub repository. Calls, client records
 - If tracked history contains sensitive material, stop before pushing and resolve it with the user. Preserve a local recovery copy; never silently rewrite their history. The initial GitHub setup's local recovery material is under `outputs/github-setup-2026-11-03/` and must remain excluded.
 
 Push only the reviewed branch. Do not use force pushes, mirror pushes or commands that publish all refs. Do not reset, clean or remove local data as a shortcut.
+
+Run `node scripts/repository-privacy-check.mjs --history <branch>` before pushing. It checks every reachable commit, not just changed files. The local setup enables `.githooks` through `git config core.hooksPath .githooks`; run that once in a new clone. The pre-commit check examines the full index, and the pre-push check scans the selected history and blocks direct main pushes. They complement manual review; pattern checks cannot prove that arbitrary business text is safe to publish.
+
+Local deployment bindings in `.openai/hosting.json` are optional and remain ignored. Configure deployment bindings and AI credentials locally when needed. Do not copy another person's runtime directory to make a clean clone work.
 
 ## Open a pull request
 
