@@ -1,5 +1,11 @@
 # TradeAssist workspace rules
 
+## GitHub transport preference
+
+- Use the private repository `https://github.com/seaturtle929/TradeAssist`.
+- The user chose GitHub Desktop for all future pushes. Prepare `codex/` branches, commits and relevant checks locally, publish through GitHub Desktop, then open a pull request. Do not substitute a terminal `git push` or a CLI command that pushes. If Desktop cannot be operated, ask the user to click **Publish branch** / **Push origin** for the prepared branch.
+- CLI/API read-only inspection and pull request creation are allowed; they do not override the Desktop-only push preference. Never extract credentials from Desktop or print tokens.
+
 ## Keep agent QA out of the user's workspace
 
 - Never run synthetic QA conversations in the user's normal TradeAssist browser origin/profile. This includes manual text tests, feedback-button tests, call-saving tests, and live-call event tests.

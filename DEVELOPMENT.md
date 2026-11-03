@@ -2,6 +2,8 @@
 
 TradeAssist code belongs in its private GitHub repository. Calls, client records, Company Brain data, imported documents, learning history and local QA evidence stay on the Mac. A Git clone does not restore those records; use the application's local backup/export workflow for data recovery.
 
+The user chose **GitHub Desktop for pushes**. Codex prepares a branch and commit, runs checks, and publishes through Desktop before opening the PR. Do not replace that step with terminal `git push`. If Desktop controls are unavailable, leave the reviewed branch ready and ask for its **Publish branch / Push origin** click. Read-only CLI/API inspection and PR creation can still be used without changing this transport preference.
+
 ## Make a change
 
 1. Inspect `git status`, the current branch and the existing diff. Preserve unfinished work. Read `AGENTS.md` before testing.
@@ -37,6 +39,10 @@ Local deployment bindings in `.openai/hosting.json` are optional and remain igno
 Describe the concrete problem and new behavior, then list checks performed and any meaningful limitations. Include whether a check used a real model or synthetic/offline inputs when relevant. Keep private logs and customer examples out of the description and attachments. Use the repository's pull request template.
 
 Attach the created pull request to the current Codex task with `attach_artifact` and give the user its link. Merge only when the user authorizes it. After merging, keep local application data intact when updating or restarting the app.
+
+## Validation baseline
+
+At the November 3 GitHub setup, a clean export passed TypeScript and the production build without local deployment bindings. Privacy checks covered the index and every published commit; the original recovery history was rejected by the upload guard as intended. The existing full-workspace lint baseline includes 43 errors and 9 warnings in `app/workspace.tsx`. Report those separately from any new diagnostics, and run focused lint for touched files. Do not claim that full-project lint passed.
 
 ## Local secrets and application data
 
