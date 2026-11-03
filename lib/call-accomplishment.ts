@@ -39,17 +39,54 @@ function activeEvaluation(text:string):{owner:string;object:string}|undefined {
   if(object&&object.length<=180)return {owner:/^we$/i.test(match[1])?'the buyer':'engineering',object};
  }
 }
-function drawingEmailOffer(buyer:Turn[]):{turn:Turn;conditional:boolean;preference?:Turn;alreadySent?:Turn}|undefined {
- const turn=buyer.findLast((row,index)=>{
-  const text=clean(row.text);
-  if(/\b(?:won't|will not|can't|cannot|not going to)\b/i.test(text)||text.includes('?'))return false;
-  if(!/\b(?:I|we)(?:'ll| will| can)\s+email\s+(?:it|that|the drawing|a drawing)(?: over| to you)?\b/i.test(text))return false;
-  return /\bdrawing\b/i.test(text)||buyer.slice(0,index).some(prior=>/\bdrawing\b/i.test(prior.text));
- });
- if(!turn)return;
+function drawingEmailOffer(buyer:Turn[]):{turn:Turn;conditional:boolean;preference?:Turn;alreadySent?:Turn;withdrawal?:{turn:Turn;text:string};otherCondition?:string}|undefined {
+ let offer:{turn:Turn;text:string}|undefined,withdrawal:{turn:Turn;text:string}|undefined,hasDrawing=false;
+ for(const row of buyer){
+  for(const part of clauses(row.text)){
+   hasDrawing ||= /\bdrawing\b/i.test(part);
+   if(!hasDrawing||part.includes('?'))continue;
+   const target='(?:it|that|the drawing|a drawing|our drawing)';
+   const withdrawn=new RegExp("\\b(?:I|we)\\s+(?:won't|will not|can't|cannot|can no longer|am not going to|are not going to)\\s+(?:email|send)\\s+"+target+"\\b",'i').test(part);
+   if(withdrawn){if(offer)withdrawal={turn:row,text:part};continue;}
+   const offered=new RegExp("\\b(?:I|we)(?:'ll| will| can)\\s+email\\s+"+target+"\\b",'i').test(part);
+   if(offered&&!/\b(?:won't|will not|can't|cannot|not going to)\b/i.test(part)){offer={turn:row,text:part};withdrawal=undefined;}
+  }
+ }
+ if(!offer)return;
+ const {turn,text}=offer;
  const preference=buyer.find(row=>{const text=clean(row.text);return /\b(?:prefer|rather|best|easier)\b/i.test(text)&&/\b(?:email|e-mail)\b/i.test(text)&&!/\b(?:not|never|don't|do not|wouldn't|would not)\b.{0,45}\b(?:email|e-mail)\b/i.test(text)&&!/\b(?:prefer|rather)\b.{0,35}\b(?:phone|telephone|call|text)\b/i.test(text);});
  const sent=buyer.slice(buyer.indexOf(turn)+1).find(row=>/\b(?:I|we)(?:'ve| have)?\s+(?:emailed|sent)\s+(?:it|the drawing)\b/i.test(clean(row.text))&&!uncertain.test(clean(row.text)));
- return {turn,conditional:/\b(?:when|once|if)\b.{0,55}\bready\b/i.test(clean(turn.text)),preference,alreadySent:sent};
+ const conditional=/\b(?:when|once|if)\b.{0,55}\bready\b/i.test(text);
+ return {turn,conditional,preference,alreadySent:sent,withdrawal,...(/\b(?:if|unless|provided|until)\b/i.test(text)||!conditional&&/\b(?:when|once)\b/i.test(text))?{otherCondition:text}:{}};
+}
+
+/** Track only explicitly stated drawing status. A later correction wins over
+ * an earlier completed status; a question or hypothetical is not progress. */
+function latestDrawingStatus(buyer:Turn[]):{turn:Turn;finished:boolean;time?:string}|undefined {
+ let latest:{turn:Turn;finished:boolean;time?:string}|undefined;
+ for(const turn of buyer){
+  for(const part of clauses(turn.text)){
+   if(!/\bdrawing\b/i.test(part)||part.includes('?')||/\b(?:if|unless|when|once|might|maybe|perhaps|would|could)\b/i.test(part))continue;
+   if(/\b(?:drawing\b.{0,40}\b(?:isn't|is not|not yet|no longer|never|has not|hasn't|is still being|still being|unfinished)|(?:haven't|have not|hasn't|has not|didn't|did not)\s+(?:yet\s+)?(?:finish(?:ed)?|complet(?:e|ed))\b.{0,30}\bdrawing)\b/i.test(part)){latest={turn,finished:false};continue;}
+   const completion=part.match(/\bdrawing\b.{0,30}\b(?:is|was|has been|'s)\s+(?:finished|completed|ready)\b|\b(?:finished|completed)\s+(?:the|our|a)\s+drawing\b/i);
+   if(completion){
+    const following=part.slice((completion.index||0)+completion[0].length);
+    const time=following.match(/^\s+(this morning|this afternoon|this evening|today|yesterday)\b/i)?.[1];
+    latest={turn,finished:true,...time?{time}:{}};
+   }
+  }
+ }
+ return latest;
+}
+
+/** Preserve the actual spoken report commitment, including any conditions in
+ * the same turn. A generated suggestion is deliberately not an input. */
+function spokenReportCommitment(segment:Turn[]):Turn|undefined {
+ return segment.findLast(turn=>turn.role==='you'&&clauses(turn.text).some(part=>
+  /\b(?:I|we)(?:'ll| will)\s+(?:(?:be sure to|make sure (?:to|that I|that we)|ensure (?:that )?(?:I|we))\s+)?(?:include|attach|send|share|provide)\b/i.test(part)
+  && /\b(?:material|test|testing|inspection|quality)\s+(?:test\s+)?reports?\b/i.test(part)
+  && !/\b(?:won't|will not|cannot|can't|not going to)\b/i.test(part)
+ ));
 }
 
 /** Prior responsibility is reusable only after this call identifies that same
@@ -119,13 +156,20 @@ export function deriveCallAccomplishment(call:ReviewCall,participant:CallPartici
   outcome=`Discovery — ${evaluation!.owner} is evaluating ${evaluation!.object}.`;
   lines.push(`${subject} is evaluating ${evaluation!.object}.`);
   const offer=drawingEmailOffer(buyer);
+  const drawingStatus=latestDrawingStatus(buyer);
+  if(drawingStatus?.finished){mark(drawingStatus.turn);lines.push(`${person} said the drawing was finished${drawingStatus.time?' '+drawingStatus.time:''}.`);}
   if(offer){
-   mark(offer.turn);mark(offer.preference);mark(offer.alreadySent);
-   lines.push(`${person} offered to email the drawing${offer.conditional?' when it is ready':''}.`);
+   mark(offer.turn);mark(offer.preference);mark(offer.alreadySent);mark(offer.withdrawal?.turn);
+   const emailTime=clean(offer.turn.text).match(/\b(?:today|tomorrow|this (?:morning|afternoon|evening)|next week|on (?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday))\b/i)?.[0];
+   if(offer.withdrawal)lines.push(`${person} later said: “${offer.withdrawal.text}”`);
+   else if(offer.otherCondition)lines.push(`${person} made a conditional offer: “${offer.otherCondition}”`);
+   else lines.push(`${person} offered to email the drawing${offer.conditional&&!drawingStatus?.finished?' when it is ready':emailTime?' '+emailTime:''}.`);
    if(offer.preference)lines.push(`${person} prefers follow-up by email.`);
    if(offer.alreadySent){lines.push(`${person} later said the drawing had been sent.`);discoveryUnknowns.push('Receipt of the drawing remains unconfirmed.');}
-   else {discoveryUnknowns.push('Sending and receipt of the drawing remain unconfirmed.');if(offer.conditional)discoveryUnknowns.push('Drawing readiness timing remains open.');}
+   else {discoveryUnknowns.push('Sending and receipt of the drawing remain unconfirmed.');if(offer.conditional&&!drawingStatus?.finished)discoveryUnknowns.push('Drawing readiness timing remains open.');}
   }
+  const reportCommitment=spokenReportCommitment(segment);
+  if(reportCommitment){mark(reportCommitment);lines.push(`Salesperson's stated next step: “${clean(reportCommitment.text)}”`);}
  }
  const boundary=deriveBuyerDeferral(segment),deferral=boundary?buyer.find(turn=>turn.id===boundary.sourceTurnId):undefined;
  if(boundary&&deferral){

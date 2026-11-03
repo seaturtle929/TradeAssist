@@ -59,7 +59,7 @@ import {ClientList,ClientPreparation,ClientHistory,CallClientAssociation} from "
 import {createClientRecord,updateClientRecord,setClientRemoved,upsertClientContact,addClientContextEntry,supersedeClientEntry,resolveClientEntry,attachCallToClient,reassociateClientCall,upsertClientCallRecord,migrateClientWorkspace,mergeCompanyClientRecords,type ClientRecord,type ClientContextEntry,type CallPreparationSnapshot} from "../lib/client-records";
 import {buildCallPreparation,isPreparationCurrent,buildClientCoachingContext,parseCallPreparation,type CallPreparationInput} from "../lib/client-coaching-context";
 import {ensureCompanyBrain,buildBrainRequest,captureLearning,rateLearning,promoteLearning,rememberBuyer,recordDecisions,normalizeExtractedFacts,learningRisk,setDefaultOpening,type CompanyBrainRecord,type LearningCapture,type LearningPair,type EditReason} from "../lib/company-brain";
-import {loadCompanyBrains,saveCompanyBrains} from "../lib/brain-store";
+import {loadCompanyBrains,saveCompanyBrains,loadWorkspaceSnapshot,saveWorkspaceSnapshot,beginCallCommit,endCallCommit} from "../lib/brain-store";
 import {migrateBrainHistory} from '../lib/brain-migration';
 import {deriveConversationState} from "../lib/conversation-state";
 import {liveRequestInstructionsFor} from "../lib/live-request";
@@ -110,6 +110,7 @@ export default function Workspace() {
   const [brainsReady,setBrainsReady]=useState(false);
   const [brainReadyEpoch,setBrainReadyEpoch]=useState(0);
   const brainHydration=useRef({epoch:0,ready:false});
+  const workspaceWriteGeneration=useRef(0);
   const [generalPlaybook,setGeneralPlaybook]=useState<GeneralPlaybookRecord>(()=>defaultGeneralPlaybook());
   const [playbookReady,setPlaybookReady]=useState(false);
   const playbookHydration=useRef(0);
@@ -288,16 +289,17 @@ export default function Workspace() {
   draft.current = { callId:activeCallId.current,recentReplies:recentReplies.current,startedAt, elapsed, notes, outcome, buyer, goal, turns, activeId,callCostUsd,buyerBrief,callType,bilingual,currentStage,stageHistory,suggestions,missingKnowledge,nextStepAt,captureWarnings,buyerQuestionLog,callContext,companyConfiguration:callConfiguration,clientId:activeClientId,contactId:activeContactId,reachViaContactId,preparation:callPreparation,outsideUpdate,wrapUp,transcriptionDiagnostics:transcriptionDiagnostics.current };
   function markCaptureWarning(message:string) { if(captureWarningsRef.current.includes(message))return;captureWarningsRef.current=[...captureWarningsRef.current,message];setCaptureWarnings(captureWarningsRef.current); }
 
-  function savedDraftHasTurns() { try { const saved=JSON.parse(localStorage.getItem(STORAGE) || "null")?.draft;return Boolean(saved?.turns?.length || saved?.suggestions?.length); } catch { return false; } }
   useEffect(() => {
     // Fast Refresh retains state. Close writes synchronously before loading
     // records so a retained ready flag cannot overwrite the saved Brain.
     const hydrationEpoch=++brainHydration.current.epoch;
     brainHydration.current.ready=false;setBrainsReady(false);
-    try {
-      const raw = localStorage.getItem(STORAGE);
-      if (raw) {
-        const saved = JSON.parse(raw);
+    void (async()=>{
+      const stored=await loadWorkspaceSnapshot<{version:number;manufacturers:Manufacturer[];calls:CallRecord[];activeId:string;draft:typeof draft.current}>();
+      const saved=stored || JSON.parse(localStorage.getItem(STORAGE) || 'null');
+      if(brainHydration.current.epoch!==hydrationEpoch)return;
+      if(saved && (!Array.isArray(saved.manufacturers)||!Array.isArray(saved.calls)))throw new Error('The saved workspace is invalid.');
+      if (saved) {
         activeCallId.current=typeof saved.draft?.callId==="string"?saved.draft.callId:uid();setCallSessionId(activeCallId.current);
         const savedBinding=CallConfigurationBindingInput.safeParse(saved.draft?.companyConfiguration);
         if(savedBinding.success&&savedBinding.data.companyId===saved.draft?.activeId){callConfigurationRef.current=savedBinding.data;setCallConfiguration(savedBinding.data);}
@@ -320,21 +322,26 @@ export default function Workspace() {
       const audio = JSON.parse(localStorage.getItem(AUDIO_STORAGE) || "null");
       if (audio) { setDeviceId(typeof audio.deviceId === "string" ? audio.deviceId : ""); setAudioMode(audio.mode === "computer" ? "computer" : audio.mode === "headset" ? "headset" : "speakerphone"); setInputGain(audio.mode==="computer" ? 1 : Math.min(8,Math.max(1,Number(audio.gain) || (audio.mode === "speakerphone" ? 4 : 1)))); }
       const features=JSON.parse(localStorage.getItem(FEATURE_STORAGE) || "null");
-      if(features) { if(features.workflowRole==='salesperson'||features.workflowRole==='manager')setWorkflowRole(features.workflowRole); setBilingual(Boolean(features.bilingual));setTranslateBuyer(features.translateBuyer!==false); if(!savedDraftHasTurns())setCallType(normalizeCallType(features.callType)); if(features.voice)setVoice({...DEFAULT_VOICE,...features.voice});  }
+      if(features) { if(features.workflowRole==='salesperson'||features.workflowRole==='manager')setWorkflowRole(features.workflowRole); setBilingual(Boolean(features.bilingual));setTranslateBuyer(features.translateBuyer!==false); if(!(saved?.draft?.turns?.length || saved?.draft?.suggestions?.length))setCallType(normalizeCallType(features.callType)); if(features.voice)setVoice({...DEFAULT_VOICE,...features.voice});  }
       const usage=JSON.parse(localStorage.getItem(USAGE_STORAGE) || "null");
       if(usage) { if(usage.budget)setBudget({...DEFAULT_BUDGET,...usage.budget}); if(Array.isArray(usage.entries))setUsageEntries(usage.entries.filter((e:UsageEntry)=>typeof e.id==="string"&&Number.isFinite(e.usd)&&e.usd>=0)); setCallCostUsd(Math.max(0,Number(usage.callUsd)||0)); }
-    } catch { setError("Your saved workspace could not be read. Import a backup or add your materials again."); }
-    setHydrated(true);
-    void loadCompanyBrains().then(saved=>{
+      const brains=await loadCompanyBrains();
       if(brainHydration.current.epoch!==hydrationEpoch)return;
-      const legacy=JSON.parse(localStorage.getItem(STORAGE)||'null');
-      const loaded=(legacy?.manufacturers||manufacturersRef.current).map((company:Manufacturer)=>{const db=saved.find(brain=>brain.companyId===company.id),local=ensureCompanyBrain(company),base=db&&db.updatedAt>local.updatedAt?db:local;const migrated=migrateBrainHistory(company,base,legacy?.calls||[],legacy?.draft?{...legacy.draft,manufacturerId:legacy.draft.activeId}:undefined);return {...company,brain:migrated};});
-      const clientMigration=migrateClientWorkspace(loaded,legacy?.calls||[],legacy?.draft);
+      if(stored&&saved.manufacturers.some((company:Manufacturer)=>!brains.some(brain=>brain.companyId===company.id)))throw new Error('The verified company records are incomplete. Existing local data was kept. Restore the verified backup before continuing; saving is disabled.');
+      const loaded=(saved?.manufacturers||[]).map((company:Manufacturer)=>{const db=brains.find(brain=>brain.companyId===company.id),local=ensureCompanyBrain(company),base=db&&(!!stored||db.updatedAt>=local.updatedAt)?db:local;const migrated=migrateBrainHistory(company,base,saved?.calls||[],saved?.draft?{...saved.draft,manufacturerId:saved.draft.activeId}:undefined);return {...company,brain:migrated};});
+      const clientMigration=migrateClientWorkspace(loaded,saved?.calls||[],saved?.draft);
+      // The first durable snapshot is committed before writes are enabled.
+      // Keep the old localStorage and Brain database unchanged for recovery.
+      const initial={version:1,manufacturers:clientMigration.companies.map(company=>{const item={...company};delete item.brain;return item;}),calls:clientMigration.calls,activeId:saved?.activeId||'',draft:clientMigration.draft || saved?.draft || draft.current};
+      const migratedBrains=clientMigration.companies.map(ensureCompanyBrain),visibleIds=new Set(migratedBrains.map(brain=>brain.companyId));
+      await saveWorkspaceSnapshot(initial,[...brains.filter(brain=>!visibleIds.has(brain.companyId)),...migratedBrains],()=>brainHydration.current.epoch===hydrationEpoch,true);
+      if(brainHydration.current.epoch!==hydrationEpoch)return;
+      if(!await loadWorkspaceSnapshot())throw new Error('The migrated workspace could not be verified.');
       manufacturersRef.current=clientMigration.companies;setManufacturers(clientMigration.companies);setCalls(clientMigration.calls);
       if(clientMigration.draft){const restored=clientMigration.draft;setActiveClientId(restored.clientId||'');setActiveContactId(restored.contactId||'');setReachViaContactId(restored.reachViaContactId||'');setCallPreparation(parseCallPreparation(restored.preparation));}
       if(clientMigration.reviewCount)setToast(`${clientMigration.reviewCount} historical associations need client identity review. Original calls were preserved.`);
-      brainHydration.current.ready=true;setBrainReadyEpoch(hydrationEpoch);setBrainsReady(true);
-    }).catch(()=>{if(brainHydration.current.epoch===hydrationEpoch)setError("Company Brain storage could not be opened. Export a backup before closing this page.");});
+      setHydrated(true);brainHydration.current.ready=true;setBrainReadyEpoch(hydrationEpoch);setBrainsReady(true);
+    })().catch(cause=>{if(brainHydration.current.epoch===hydrationEpoch)setError(cause instanceof Error&&['The verified workspace snapshot is missing.','The verified workspace snapshot is invalid.','The workspace verification marker is missing or invalid.','The verified company records are incomplete.'].some(prefix=>cause.message.startsWith(prefix))?cause.message:"The workspace could not be safely loaded or migrated. Existing local data was kept. Restore the verified backup before continuing; saving is disabled.");});
     requestJSON<{configured:boolean}>("/api/status").then(data => setConfigured(data.configured)).catch(e => { setConfigured(false); setError(e.message); });
     return () => { if(brainHydration.current.epoch===hydrationEpoch){brainHydration.current.ready=false;brainHydration.current.epoch++;}liveSession.current?.stop();audioGeneration.current++;captureBusy.current=false;channel.current=null;turnGate.current.pause(true);repAbort.current?.abort();repAudio.current?.stop(); const oldPeer=peer.current;peer.current=null;oldPeer?.close(); if(callHandle.current)void fetch("/api/session/stop",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({handle:callHandle.current}),keepalive:true}).catch(()=>{}); callHandle.current=""; stream.current?.getTracks().forEach(t => t.stop()); rawStream.current?.getTracks().forEach(t => t.stop()); void audioContext.current?.close(); cancelAnimationFrame(frame.current); controller.current?.abort(); if (timer.current) clearTimeout(timer.current); if (testTimer.current) clearTimeout(testTimer.current); if (stopTimer.current) clearTimeout(stopTimer.current); };
   }, []);
@@ -361,10 +368,11 @@ export default function Workspace() {
   }, []);
   useEffect(() => {
     if (!hydrated || !brainsReady || !brainHydration.current.ready || brainHydration.current.epoch!==brainReadyEpoch) return;
-    try { localStorage.setItem(STORAGE, JSON.stringify({ version:1, manufacturers:manufacturers.map(company=>{const stored={...company};delete stored.brain;return stored;}), calls, activeId, draft: draft.current })); }
-    catch { setError("Browser storage is full or unavailable. Export a backup before closing this page."); }
+    const epoch=brainReadyEpoch,generation=workspaceWriteGeneration.current;
+    const snapshot={version:1,manufacturers:manufacturers.map(company=>{const stored={...company};delete stored.brain;return stored;}),calls,activeId,draft:draft.current};
+    const isCurrent=()=>brainHydration.current.ready&&brainHydration.current.epoch===epoch&&workspaceWriteGeneration.current===generation&&!callSaveInFlight.current;
+    void saveWorkspaceSnapshot(snapshot,manufacturers.map(ensureCompanyBrain),isCurrent).catch(()=>{if(isCurrent())setError("Your workspace could not be saved. Export a backup before closing this page.");});
   }, [hydrated, brainsReady,brainReadyEpoch,manufacturers, calls, activeId, turns, notes, buyer, goal, elapsed, outcome, startedAt,callCostUsd,buyerBrief,callType,bilingual,currentStage,stageHistory,suggestions,missingKnowledge,nextStepAt,captureWarnings,buyerQuestionLog,callContext,callConfiguration,activeClientId,activeContactId,reachViaContactId,callPreparation,outsideUpdate,wrapUp]);
-  useEffect(()=>{const current=()=>brainHydration.current.ready&&brainHydration.current.epoch===brainReadyEpoch;if(!hydrated||!brainsReady||!current())return;void saveCompanyBrains(manufacturers.map(ensureCompanyBrain),current).catch(()=>{if(current())setError("Company Brain could not be saved. Export a backup before closing this page.");});},[hydrated,brainsReady,brainReadyEpoch,manufacturers]);
   useEffect(()=>{
     if(!hydrated||!brainsReady||!brainHydration.current.ready||brainHydration.current.epoch!==brainReadyEpoch||!current||!buyer.trim()||!turns.length||activeClientId)return;
     const brain=ensureCompanyBrain(current),binding=callConfigurationRef.current,state=deriveConversationState({callId:activeCallId.current,turns,callContext,stageMap:binding?configurationStageMap(binding.snapshot,{includeRetired:true}):brain.playbook.stages,companyConfiguration:binding});
@@ -1225,11 +1233,13 @@ export default function Workspace() {
   }
   async function saveCall(options:{forNewCall?:boolean;wrapUp?:ClientCallWrapUp}={}) {
     if(savedSessionGuard.current||callSaveInFlight.current)return false;
+    if(!hydrated||!brainsReady||!brainHydration.current.ready||brainHydration.current.epoch!==brainReadyEpoch){setError('The workspace is still loading or could not be saved. Your review is retained.');return false;}
     if(preparingBrief||uploadingBackground){setError("Wait for preparation or file reading to finish before saving. Your review is retained.");return false;}
     if(options.wrapUp&&options.wrapUp.callId!==activeCallId.current){setError('This review belongs to a different call. Your draft is preserved.');return false;}
     if(repSpeaking||hearing||turnGate.current.state.repPending||pendingBuyerItems.current.size){setError('Wait for captured speech to finish transcribing before saving. Coaching validation does not block saving.');return false;}
     const actualOutcome=options.wrapUp?.outcome?.trim()||outcome.trim()||'Outcome not recorded';
-    callSaveInFlight.current=true;setSavingCall(true);setError('');
+    try { beginCallCommit(); } catch { setError('Another call is being saved. Retry when it finishes.');return false; }
+    callSaveInFlight.current=true;workspaceWriteGeneration.current++;setSavingCall(true);setError('');
     try {
       // Capture before resetting. A failed persistence retry keeps this call ID.
       let call=activeCallRecord(actualOutcome,Date.now());
@@ -1240,14 +1250,12 @@ export default function Workspace() {
       const nextBrain=recordDecisions(remembered,call);
       const nextCompanies=manufacturersRef.current.map(company=>company.id===call.manufacturerId?{...company,brain:nextBrain}:company);
       const nextCalls=upsertClientCallRecord(calls,call);
-      const persist=(draftValue:unknown)=>localStorage.setItem(STORAGE,JSON.stringify({version:1,manufacturers:nextCompanies.map(company=>{const stored={...company};delete stored.brain;return stored;}),calls:nextCalls,activeId,draft:draftValue}));
-      // Persist the dated call before awaiting the separate Brain transaction.
-      // Retrying either write upserts the same ID, never a second call.
-      persist(draft.current);
-      await saveCompanyBrains(nextCompanies.map(ensureCompanyBrain));
+      const nextDraft={callId:uid(),activeId,clientId:call.clientId,contactId:call.contactId,reachViaContactId:call.reachViaContactId,buyer:call.buyer,goal:GOALS[0],callContext:{...defaultCallContext(GOALS[0]),stageId:call.callContext?.stageId||'cold_call'},startedAt:0,elapsed:0,turns:[],notes:'',outcome:'',suggestions:[],recentReplies:[],buyerBrief:null,callType:'discovery',bilingual,stageHistory:[],missingKnowledge:[],nextStepAt:'',captureWarnings:[],buyerQuestionLog:[],callCostUsd:0,outsideUpdate:''};
+      // A single transaction commits the call, its reviewed recap, the client
+      // updates and the cleared draft. A retry uses the same call ID.
+      await saveWorkspaceSnapshot({version:1,manufacturers:nextCompanies.map(company=>{const stored={...company};delete stored.brain;return stored;}),calls:nextCalls,activeId,draft:nextDraft},nextCompanies.map(ensureCompanyBrain));
       queueBuyerTranslations(call.turns,'background');translationQueue.current?.backgroundScope(`draft-${callGeneration.current}`,callGeneration.current);
       stopAudio();controller.current?.abort();seq.current++;setThinking(false);setCheckingFacts(false);
-      persist({callId:uid(),activeId,clientId:call.clientId,contactId:call.contactId,reachViaContactId:call.reachViaContactId,buyer:call.buyer,goal:GOALS[0],callContext:{...defaultCallContext(GOALS[0]),stageId:call.callContext?.stageId||'cold_call'},startedAt:0,elapsed:0,turns:[],notes:'',outcome:'',suggestions:[],recentReplies:[],buyerBrief:null,callType:'discovery',bilingual,stageHistory:[],missingKnowledge:[],nextStepAt:'',captureWarnings:[],buyerQuestionLog:[],callCostUsd:0,outsideUpdate:''});
       savedSessionGuard.current=true;manufacturersRef.current=nextCompanies;setManufacturers(nextCompanies);setCalls(nextCalls);
       context.current.current=nextCompanies.find(company=>company.id===call.manufacturerId);
       setHistoryClientId(call.clientId||null);setSelectedCall(call.id);setView('history');setPacketLanguage(bilingual?'zh':'en');
@@ -1256,7 +1264,7 @@ export default function Workspace() {
       notify('Call saved. Transcript, coaching review status and selected client updates are stored.');
       return true;
     }catch(cause){setError('Save did not finish. Your review is retained; retry safely without creating another call. '+(cause instanceof Error?cause.message:''));return false;}
-    finally{callSaveInFlight.current=false;setSavingCall(false);}
+    finally{endCallCommit();callSaveInFlight.current=false;setSavingCall(false);}
   }
   async function saveContactsFromRecap(call:CallRecord,contacts:WrapUpContact[]) {
     if(callSaveInFlight.current)throw Error('Another save is in progress. Retry when it finishes.');
@@ -1326,33 +1334,47 @@ export default function Workspace() {
   async function restore(file?: File) {
     if (!file) return;
     if(live || connecting) {setError("Stop the live assistant before importing a backup.");return;}
+    if(callSaveInFlight.current || !brainsReady || !brainHydration.current.ready){setError("Wait for the workspace to finish loading or saving before importing.");return;}
     const importGeneration=callGeneration.current,importAudioGeneration=audioGeneration.current;
+    let importCommit=false;
     try {
-      if (file.size > 8_000_000) throw new Error("Backup too large.");
+      if (file.size > 100_000_000) throw new Error("Backup too large (maximum 100 MB).");
       const data = JSON.parse(await file.text());
       if(importGeneration!==callGeneration.current||importAudioGeneration!==audioGeneration.current){setError("The active call changed during import. Try importing again after stopping the assistant.");return;}
       if (data.version !== 1 || !Array.isArray(data.manufacturers) || !Array.isArray(data.calls) || !data.manufacturers.every((m: Manufacturer) => typeof m.id === "string" && typeof m.name === "string" && typeof m.products === "string" && typeof m.introduction === "string" && Array.isArray(m.sources) && m.sources.every(s => typeof s.id === "string" && typeof s.title === "string" && typeof s.text === "string")) || !data.calls.every((c: CallRecord) => typeof c.id === "string" && Array.isArray(c.turns) && typeof c.buyer === "string")) throw new Error("Invalid backup.");
       if(data.generalPlaybook&&playbookReady){const incoming=normalizeGeneralPlaybook(data.generalPlaybook);if(incoming.updatedAt>generalPlaybookRef.current.updatedAt){await saveGeneralPlaybook(incoming);generalPlaybookRef.current=incoming;setGeneralPlaybook(incoming);}}
       const existing = new Set(manufacturers.map(m => m.id)), callIds = new Set(calls.map(c => c.id));
       const mergedCompanies=[...manufacturersRef.current.map(company=>{const imported=data.manufacturers.find((m:Manufacturer)=>m.id===company.id);if(!imported?.brain||imported.brain.companyId!==company.id)return company;const local=ensureCompanyBrain(company),incoming=ensureCompanyBrain(imported),pairs=new Map(local.learning.map(pair=>[pair.id,pair]));for(const pair of incoming.learning)if(pair.companyId===company.id&&!pairs.has(pair.id))pairs.set(pair.id,pair);return {...company,brain:{...(incoming.updatedAt>local.updatedAt?incoming:local),clients:mergeCompanyClientRecords(company.id,local.clients||[],incoming.clients||[]),learning:[...pairs.values()],updatedAt:Date.now()}};}),...data.manufacturers.filter((m:Manufacturer)=>!existing.has(m.id)).map((m:Manufacturer)=>({...m,brain:ensureCompanyBrain(m)}))];
-      const importingDraft=!hasUnfinishedDraft()?data.draft:undefined;
+      const hasDraft=hasUnfinishedDraft();
+      const matchingDraft=hasDraft && !!data.draft?.callId && data.draft.callId===activeCallId.current;
+      // An old backup may contain earlier edits even when the call ID matches.
+      // Ask before replacing an active review; never silently discard it.
+      const matchingDraftDiffers=matchingDraft && JSON.stringify(data.draft)!==JSON.stringify(draft.current);
+      const replaceMatchingDraft=matchingDraft && (!matchingDraftDiffers || window.confirm('This backup contains the same unfinished call. Restore its draft and reviewed recap? This replaces the current draft, which may contain newer edits. Export the current workspace first if you want to keep both.'));
+      const importingDraft=(!hasDraft||replaceMatchingDraft)?data.draft:undefined;
+      if(importingDraft && (!Array.isArray(importingDraft.turns) || !importingDraft.turns.every((turn:Turn)=>turn && typeof turn.id==='string' && typeof turn.text==='string' && ['buyer','you','conversation'].includes(turn.role)) || (importingDraft.callId!==undefined && typeof importingDraft.callId!=='string') || (importingDraft.suggestions!==undefined && !Array.isArray(importingDraft.suggestions)) || (importingDraft.wrapUp && (importingDraft.wrapUp.callId!==importingDraft.callId || typeof importingDraft.wrapUp.recap!=='string' || typeof importingDraft.wrapUp.outcome!=='string' || !Array.isArray(importingDraft.wrapUp.memory) || !Array.isArray(importingDraft.wrapUp.contacts)))))throw new Error('The backup contains an invalid unfinished call. No draft was replaced.');
       const migration=migrateClientWorkspace(mergedCompanies,[...data.calls.filter((c:CallRecord)=>!callIds.has(c.id)),...calls],importingDraft);
+      if(importGeneration!==callGeneration.current||importAudioGeneration!==audioGeneration.current)throw new Error('The active call changed during import. Try again.');
+      beginCallCommit();importCommit=true;callSaveInFlight.current=true;workspaceWriteGeneration.current++;
+      const importedActiveId=importingDraft?.activeId || activeId || data.manufacturers[0]?.id || '';
+      await saveWorkspaceSnapshot({version:1,manufacturers:migration.companies.map(company=>{const stored={...company};delete stored.brain;return stored;}),calls:migration.calls,activeId:importedActiveId,draft:migration.draft || importingDraft || draft.current},migration.companies.map(ensureCompanyBrain));
       manufacturersRef.current=migration.companies;setManufacturers(migration.companies);setCalls(migration.calls);
       if(migration.draft)data.draft=migration.draft;
-      if (!activeId && data.manufacturers[0]) setActiveId(data.manufacturers[0].id); notify("Backup imported. Existing records were kept.");
+      if (!activeId && data.manufacturers[0]) setActiveId(data.manufacturers[0].id); notify(hasDraft&&!replaceMatchingDraft?"Backup records imported. Your current unfinished call was kept; the backup draft was not restored.":"Backup imported. Existing call records were kept.");
       if(typeof data.features?.bilingual==="boolean")setBilingual(data.features.bilingual);
       if(typeof data.features?.translateBuyer==="boolean")setTranslateBuyer(data.features.translateBuyer);
       const importedVoice=VoiceProfileInput.safeParse(data.features?.voice);if(importedVoice.success && data.features?.voice)setVoice(importedVoice.data);
       if(Array.isArray(data.usage?.entries))recordCharges(data.usage.entries.filter((entry:UsageEntry)=>entry && typeof entry.id==="string" && typeof entry.model==="string" && ["live","transcription","coach","research","document"].includes(entry.kind) && Number.isFinite(entry.at) && Number.isFinite(entry.usd) && entry.usd>=0),false);
       const limits=data.usage?.budget;
       if(limits && typeof limits.enabled==="boolean" && Number.isFinite(limits.perCallUsd) && limits.perCallUsd>=0 && limits.perCallUsd<=10_000 && Number.isFinite(limits.monthlyUsd) && limits.monthlyUsd>=0 && limits.monthlyUsd<=10_000)setBudget(limits);
-      if(!hasUnfinishedDraft()) {
+      if(!hasDraft||replaceMatchingDraft) {
         const restoredDraft=data.draft;
         if(restoredDraft && Array.isArray(restoredDraft.turns) && restoredDraft.turns.every((turn:Turn)=>turn && typeof turn.id==="string" && typeof turn.text==="string" && ["buyer","you","conversation"].includes(turn.role))) {
-          resetActiveCall();activeCallId.current=typeof restoredDraft.callId==="string"&&restoredDraft.callId?restoredDraft.callId:uid();setCallSessionId(activeCallId.current);recentReplies.current=Array.isArray(restoredDraft.recentReplies)?restoredDraft.recentReplies.filter((line:unknown)=>typeof line==="string").slice(-12):[];const restoredTurns=restoredDraft.turns.slice(-300).map((turn:Turn)=>({...turn,text:turn.text.slice(0,6000)}));setTurns(restoredTurns);context.current.turns=restoredTurns;setRestoredTurnCount(restoredTurns.length);setDraftRestoreRevision(value=>value+1);
+          resetActiveCall();activeCallId.current=typeof restoredDraft.callId==="string"&&restoredDraft.callId?restoredDraft.callId:uid();setCallSessionId(activeCallId.current);recentReplies.current=Array.isArray(restoredDraft.recentReplies)?restoredDraft.recentReplies.filter((line:unknown)=>typeof line==="string").slice(-12):[];const restoredTurns=restoredDraft.turns.map((turn:Turn)=>({...turn}));setTurns(restoredTurns);context.current.turns=restoredTurns;setRestoredTurnCount(restoredTurns.length);setDraftRestoreRevision(value=>value+1);
           const restoredBinding=CallConfigurationBindingInput.safeParse(restoredDraft.companyConfiguration);
           const binding=restoredBinding.success&&restoredBinding.data.companyId===restoredDraft.activeId?restoredBinding.data:undefined;
           callConfigurationRef.current=binding;setCallConfiguration(binding);
+          transcriptionDiagnostics.current={sessions:Array.isArray(restoredDraft.transcriptionDiagnostics?.sessions)?restoredDraft.transcriptionDiagnostics.sessions:[],turns:Array.isArray(restoredDraft.transcriptionDiagnostics?.turns)?restoredDraft.transcriptionDiagnostics.turns:[]};
           setOutsideUpdate(typeof restoredDraft.outsideUpdate==='string'?restoredDraft.outsideUpdate:'');setWrapUp(restoredDraft.wrapUp?.callId===restoredDraft.callId?restoredDraft.wrapUp:undefined);
           const clientId=restoredDraft.clientId||'',contactId=restoredDraft.contactId||'',routeId=restoredDraft.reachViaContactId||'',preparation=parseCallPreparation(restoredDraft.preparation);
           context.current.clientId=clientId;context.current.contactId=contactId;context.current.reachViaContactId=routeId;setReachViaContactId(routeId);context.current.preparation=preparation;setActiveClientId(clientId);setActiveContactId(contactId);setCallPreparation(preparation);savedSessionGuard.current=false;setShowClientList(true);
@@ -1364,7 +1386,8 @@ export default function Workspace() {
         const importedBrief=BuyerBriefInput.safeParse(data.features?.buyerBrief || restoredDraft?.buyerBrief);
         if(importedBrief.success){setBuyerBrief(importedBrief.data);if(!restoredDraft?.buyer)setBuyer(importedBrief.data.company);}
       }
-    } catch { setError("This file is not a valid Trade Assist backup."); }
+    } catch(cause) { setError('Backup import did not finish. Existing records were kept. '+(cause instanceof Error?cause.message:'')); }
+    finally {if(importCommit){endCallCommit();callSaveInFlight.current=false;}}
   }
   function selectManufacturer(id: string) {
     if (live || connecting || hasUnfinishedDraft() || driveLoading) { setError("Finish and save the current conversation or import before switching manufacturers."); return; }
