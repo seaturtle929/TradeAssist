@@ -1,0 +1,73 @@
+.stage-stream-card{overflow:hidden;background:#fff;border:1px solid #94a3b8;border-radius:10px;box-shadow:0 2px 8px #0f172a08;color:#0f172a}
+.stage-stream-card .guidance-header{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:16px 20px;background:#eff6ff;border-bottom:1px solid #bfdbfe}
+.stage-stream-card .guidance-state{display:flex;align-items:center;gap:5px;color:#475569;font-size:11px;letter-spacing:0;text-transform:none;white-space:nowrap}
+.reply-feed-wrap{position:relative}
+.reply-feed-scroll{height:640px;max-height:75vh;min-height:360px;overflow-y:auto;overscroll-behavior:contain;scrollbar-gutter:stable;overflow-anchor:none;background:#f8fafc;padding:16px 16px 48px}
+.reply-feed-scroll:focus-visible{outline:3px solid #93c5fd;outline-offset:-3px}
+.reply-feed-entry{margin:0 0 14px;padding:15px 17px 10px;border:1px solid #d5deea;border-radius:9px;background:#fff;color:#1e293b}
+.reply-feed-entry:last-child{margin-bottom:0}
+.reply-feed-latest{border-color:#93b4ee;background:#f2f7ff;box-shadow:0 2px 5px #1d4ed808}
+.reply-feed-meta{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px}
+.reply-feed-label{display:inline-flex;align-items:center;gap:4px;color:#475569;font-size:10px;line-height:1.5;font-weight:650}
+.reply-feed-latest .reply-feed-label{color:#1d4ed8}
+.reply-feed-label.reply-feed-used{color:#166534}
+.reply-feed-meta time{font-size:10px;color:#64748b;font-variant-numeric:tabular-nums;white-space:nowrap}
+.reply-feed-buyer{color:#475569;font-size:12px;line-height:1.65;margin:0 0 12px;white-space:pre-wrap;overflow-wrap:anywhere}
+.reply-feed-buyer>span{font-size:9px;font-weight:750;letter-spacing:.05em;color:#64748b;margin-right:6px}
+.reply-feed-move{margin:0 0 14px;padding:10px 12px;border-left:3px solid #93b4ee;background:#eff6ff;color:#1e3a5f;font-size:14px;line-height:1.6;overflow-wrap:anywhere}
+.reply-feed-move>strong{display:block;margin-bottom:3px;color:#334155;font-size:11px;font-weight:700}
+.reply-feed-wording-label{margin:0 0 5px;color:#475569;font-size:11px;font-weight:700;line-height:1.5}
+.reply-feed-script{margin:0;color:#142035;font-family:var(--font-sans);font-size:19px;font-weight:550;line-height:1.6;letter-spacing:-.1px;white-space:pre-wrap;overflow-wrap:anywhere}
+.reply-feed-latest .reply-feed-script{font-size:23px;font-weight:600;line-height:1.5;color:#0f172a}
+.reply-feed-actions{display:flex;justify-content:space-between;align-items:center;gap:10px;padding-top:11px;margin-top:11px;border-top:1px solid #e2e8f0}
+.stage-feedback{display:flex;gap:3px;flex-wrap:wrap;align-items:center}
+.stage-feedback button{display:inline-flex;align-items:center;gap:2px;font-size:11px;line-height:1.5;color:#475569;border:1px solid transparent;border-radius:4px;background:transparent;padding:4px 7px}
+.stage-feedback button:hover:not(:disabled){background:#eff6ff;border-color:#bfdbfe;color:#1e40af}
+.stage-feedback button[aria-pressed=true]{background:#ecfdf5;border-color:#a7f3d0;color:#065f46}
+.stage-feedback button:disabled{opacity:.5}
+.reply-feed-actual{font-size:12px;line-height:1.7;color:#334155;background:#f0fdf4;border-left:3px solid #86efac;padding:8px 10px;margin:12px 0 0;overflow-wrap:anywhere}
+.reply-feed-actual strong{display:block;font-size:9px;font-weight:700;color:#166534;margin-bottom:3px;letter-spacing:.05em}
+.reply-feed-caution{font-size:11px;line-height:1.6;color:#854d0e;background:#fffbeb;border:1px solid #fde68a;border-radius:5px;padding:8px 10px;margin:12px 0 0}
+.reply-feed-details{margin-top:4px;color:#475569}
+.reply-feed-details>summary{cursor:pointer;font-size:10px;line-height:1.6;padding:6px 1px}
+.reply-feed-details>summary>span{display:inline-flex;align-items:center;gap:3px;margin-left:7px;color:#1d4ed8}
+.reply-feed-detail-content{padding:7px 0 5px;font-size:11px;line-height:1.65}
+.reply-feed-detail-content>p{margin:8px 0}
+.reply-feed-tags{display:flex;gap:5px;flex-wrap:wrap}
+.reply-feed-tags>span{font-size:10px;line-height:1.5;color:#334155;padding:3px 7px;border:1px solid #dbe3ee;background:#f1f5f9;border-radius:4px}
+.reply-feed-source{display:flex;gap:6px;align-items:flex-start;overflow-wrap:anywhere}
+.reply-feed-source>svg{flex-shrink:0;margin-top:3px;color:#1d4ed8}
+.reply-feed-skipped{background:#f8fafc;border-style:dashed}
+.reply-feed-unfinished{font-size:12px;line-height:1.65;color:#64748b;margin:0 0 5px}
+.reply-feed-pending{padding:12px 16px;color:#475569;border-left:2px solid #93c5fd;margin:14px 0 0}
+.reply-feed-pending>span{display:flex;align-items:center;gap:7px;font-size:12px;line-height:1.6}
+.reply-feed-pending>p{margin:5px 0 0;font-size:12px;line-height:1.6}
+.reply-feed-pending .reply-feed-buyer{margin-bottom:7px}
+.reply-feed-empty{padding:70px 15px;color:#475569}
+.reply-feed-empty h2{font-family:var(--font-sans);font-size:24px;line-height:1.4;font-weight:550;color:#1e293b;margin:0 0 13px}
+.reply-feed-empty p{font-size:13px;line-height:1.75;max-width:350px;margin:0 0 16px}
+.reply-feed-status{display:flex;align-items:center;gap:7px;padding:11px 20px;border-top:1px solid #e2e8f0;font-size:11px;line-height:1.6;color:#475569;background:#fff;min-height:41px}
+.stage-back-latest{position:absolute;left:50%;bottom:12px;transform:translateX(-50%);display:inline-flex;align-items:center;gap:6px;padding:8px 12px;border:1px solid #93c5fd;border-radius:20px;background:#eff6ff;box-shadow:0 3px 10px #0f172a18;color:#1d4ed8;font-size:11px;font-weight:650;white-space:nowrap;z-index:3}
+.stage-back-latest>span{background:#1d4ed8;color:#fff;border-radius:10px;min-width:17px;line-height:17px;text-align:center;padding:0 4px;font-size:10px}
+@media(max-width:1100px){.reply-feed-scroll{padding-left:12px;padding-right:12px}.reply-feed-entry{padding-left:14px;padding-right:14px}.reply-feed-latest .reply-feed-script{font-size:22px}}
+@media(max-width:760px){.stage-stream-card .guidance-header{padding:14px 15px}.reply-feed-scroll{height:560px;max-height:70vh;min-height:320px}.reply-feed-script{font-size:18px}.reply-feed-latest .reply-feed-script{font-size:21px}.reply-feed-status{padding:10px 15px}}
+@media(max-width:440px){.stage-stream-card .guidance-header{gap:6px}.stage-stream-card .guidance-state{font-size:10px}.reply-feed-scroll{padding:12px 10px 46px}.reply-feed-entry{padding:13px 12px 9px}.reply-feed-script{font-size:17px}.reply-feed-latest .reply-feed-script{font-size:20px}.reply-feed-buyer{font-size:11px}.stage-feedback button{font-size:10px;padding:4px 5px}}
+
+.reply-feed-editor{margin-top:12px;padding:13px;background:#f8fafc;border:1px solid #cbd5e1;border-radius:6px;display:flex;flex-direction:column;gap:10px}
+.reply-feed-editor>label:first-child{font-size:13px;font-weight:600;color:#1e293b}
+.reply-feed-editor textarea{width:100%;min-height:110px;padding:10px;font:14px/1.6 var(--font-sans);color:#0f172a;background:#fff;border:1px solid #94a3b8;border-radius:5px;resize:vertical}
+.reply-feed-editor>div{display:flex;align-items:center;gap:14px}
+.reply-feed-voice-option{display:flex;align-items:center;gap:8px;font-size:12px;color:#334155;line-height:1.5}
+.reply-feed-voice-option input{width:15px;height:15px;flex-shrink:0;accent-color:#1d4ed8}
+.reply-feed-editor small{font-size:11px;line-height:1.6;color:#475569}
+
+.reply-edit-reasons{display:flex;flex-wrap:wrap;gap:5px}.reply-edit-reasons button{font-size:11px;padding:6px 8px;border:1px solid #cbd5e1;border-radius:5px;color:#475569;background:white}.reply-edit-reasons button[aria-pressed=true]{background:#dbeafe;border-color:#93c5fd;color:#1d4ed8}
+
+.reply-verification-diff{margin-top:12px;padding:10px 12px;border:1px solid #cbd5e1;border-radius:8px;background:#f8fafc;color:#334155;font-size:13px}
+.reply-verification-diff summary{cursor:pointer;font-weight:600}
+.reply-verification-diff p{margin:10px 0 0}
+.reply-verification-diff strong,.reply-verification-diff del,.reply-verification-diff ins{display:block}
+.reply-verification-diff del{color:#9f1239;background:#fff1f2;padding:6px;text-decoration:line-through}
+.reply-verification-diff ins{color:#166534;background:#f0fdf4;padding:6px;text-decoration:none}
+
+.reply-learning-attribution{font-size:12px;line-height:1.6;color:#334155;overflow-wrap:anywhere;margin:12px 0}

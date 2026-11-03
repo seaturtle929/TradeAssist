@@ -1,5 +1,6 @@
 import { getChatGPTUser } from "../app/chatgpt-auth";
-export class AppError extends Error { constructor(message: string, public status = 400, public code = "request_error") { super(message); } }
+import {upstreamFailure} from './upstream-error';
+export class AppError extends Error { constructor(message: string, public status = 400, public code = "request_error",public requestId?:string) { super(message); } }
 export async function authorize(request?: Request) {
   const user = await getChatGPTUser();
   if (!user) throw new AppError("Sign in to your private workspace to continue.", 401, "unauthorized");
@@ -15,25 +16,20 @@ export function apiKey() {
   if (!key) throw new AppError("AI is not connected on this server. Open the local app where your key was securely saved.", 503, "not_configured");
   return key;
 }
-export async function openAI(path: string, body: unknown, isForm = false, timeout = 35_000) {
+export async function openAI(path: string, body: unknown, isForm = false, timeout = 35_000, parentSignal?:AbortSignal) {
   const response = await fetch(`https://api.openai.com/v1/${path}`, {
     method: "POST", headers: { Authorization: `Bearer ${apiKey()}`, ...(!isForm ? { "Content-Type": "application/json" } : {}) },
-    body: isForm ? body as FormData : JSON.stringify(body), signal: AbortSignal.timeout(timeout),
+    body: isForm ? body as FormData : JSON.stringify(body), signal: parentSignal ? AbortSignal.any([parentSignal,AbortSignal.timeout(timeout)]) : AbortSignal.timeout(timeout),
   });
   if (!response.ok) {
-    const payload = await response.json().catch(() => ({})) as { error?: { code?: string; type?: string; message?: string } };
-    const code = payload.error?.code || payload.error?.type || "upstream_error";
-    const message = code === "insufficient_quota" ? "Your API project needs available credits. Add credits in OpenAI Platform, then try again."
-      : response.status === 401 ? "The AI connection was rejected. Reconnect your API key."
-      : response.status === 429 ? "The AI service is busy. Wait a moment and try again."
-      : response.status === 403 ? "Your API project does not have access to this model. Check its model permissions."
-      : (payload.error?.message || "The AI service could not complete this request.").replace(/sk-[\w-]+/g, "[redacted]");
-    throw new AppError(message, response.status >= 500 ? 502 : response.status, code);
+    const failure=upstreamFailure(response.status,await response.text(),path,response.headers.get('x-request-id')||response.headers.get('openai-request-id'));
+    console.warn('[Trade Assist AI]',JSON.stringify({path,...failure}));
+    throw new AppError(failure.message,failure.status,failure.code,failure.requestId);
   }
   return response;
 }
 export function errorResponse(error: unknown) {
-  if (error instanceof AppError) return Response.json({ error: error.message, code: error.code }, { status: error.status });
+  if (error instanceof AppError) return Response.json({ error: error.message, code: error.code,...error.requestId?{requestId:error.requestId}:{} }, { status: error.status });
   if (error instanceof SyntaxError) return Response.json({ error: "The request was not valid JSON." }, { status: 400 });
   if (error instanceof Error && ["TimeoutError", "AbortError"].includes(error.name)) return Response.json({ error: "The AI request took too long. Please try again.", code: "timeout" }, { status: 504 });
   return Response.json({ error: "The connection failed. Check your connection and try again." }, { status: 502 });

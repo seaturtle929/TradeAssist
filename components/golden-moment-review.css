@@ -1,0 +1,40 @@
+.golden-moment-action { margin-top: 14px; }
+.golden-moment-review { margin-top: 14px; padding: 18px; border: 1px solid #94a3b8; border-radius: 8px; background: #f8fafc; color: #0f172a; }
+.golden-moment-review header, .general-playbook-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.golden-moment-review h3, .general-playbook-panel h2 { margin: 0; font-size: 18px; line-height: 1.4; color: #0f172a; }
+.golden-moment-review p, .general-playbook-panel p { margin: 8px 0; font-size: 13px; line-height: 1.7; color: #334155; }
+.golden-moment-snapshot { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; margin: 18px 0; }
+.golden-moment-snapshot > div { min-width: 0; }
+.golden-moment-snapshot > .golden-moment-wide { grid-column: 1 / -1; }
+.golden-moment-snapshot dt { margin-bottom: 5px; font-size: 12px; font-weight: 650; color: #334155; }
+.golden-moment-snapshot dd { margin: 0; padding: 10px 12px; border: 1px solid #cbd5e1; border-radius: 5px; background: #fff; color: #0f172a; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; line-height: 1.65; }
+.golden-moment-snapshot dd.golden-moment-empty { color: #64748b; font-style: italic; }
+.golden-moment-review label.golden-moment-why { display: flex; flex-direction: column; gap: 7px; font-size: 13px; font-weight: 600; color: #0f172a; }
+.golden-moment-why select { min-height: 40px; padding: 9px 10px; border: 1px solid #94a3b8; border-radius: 5px; color: #0f172a; background: #fff; font-size: 13px; }
+.golden-moment-why textarea { width: 100%; min-height: 110px; padding: 10px 12px; border: 1px solid #94a3b8; border-radius: 5px; color: #0f172a; background: #fff; font: 14px/1.6 var(--font-sans, sans-serif); resize: vertical; }
+.golden-moment-lesson { margin: 14px 0; padding: 12px; border: 1px solid #bfdbfe; border-radius: 5px; background: #eff6ff; }
+.golden-moment-lesson p { white-space: pre-wrap; overflow-wrap: anywhere; }
+.golden-pattern-preview { margin: 16px 0; padding: 15px; border: 1px solid #bfdbfe; border-radius: 7px; background: #eff6ff; }
+.golden-pattern-preview h4 { margin: 0 0 8px; font-size: 14px; color: #1e3a8a; }
+.golden-pattern-preview p { color: #1e3a8a; }
+.golden-pattern-preview .golden-moment-why textarea { min-height: 105px; font-weight: 400; }
+.golden-pattern-preview p.golden-pattern-validation { color: #92400e; }
+.golden-pattern-template { margin: 10px 0; padding: 12px; border-radius: 5px; background: #fff; color: #0f172a; font: 13px/1.7 var(--font-sans, sans-serif); white-space: pre-wrap; overflow-wrap: anywhere; }
+.golden-moment-review label.golden-pattern-confirm { display: flex; align-items: flex-start; gap: 9px; color: #0f172a; font-size: 13px; line-height: 1.65; margin: 16px 0; }
+.golden-pattern-confirm input { flex-shrink: 0; width: 17px; height: 17px; margin: 3px 0 0; accent-color: #1d4ed8; }
+.golden-moment-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.golden-moment-error { color: #9f1239 !important; }
+.golden-moment-status { color: #166534 !important; }
+.general-playbook-panel { margin: 22px 0; padding: 22px; border: 1px solid #cbd5e1; border-radius: 10px; color: #0f172a; background: #fff; }
+.general-playbook-panel > h3 { margin: 24px 0 10px; font-size: 15px; color: #0f172a; }
+.general-playbook-pattern, .company-golden-moment { border: 1px solid #cbd5e1; border-radius: 7px; padding: 15px; margin-top: 12px; }
+.general-playbook-pattern h4 { margin: 0; color: #0f172a; font-size: 15px; }
+.general-playbook-pattern small, .company-golden-moment small { display: block; margin-top: 7px; color: #475569; font-size: 12px; line-height: 1.6; }
+.company-golden-moment summary { cursor: pointer; color: #0f172a; font-size: 13px; font-weight: 600; line-height: 1.6; }
+.general-playbook-panel code { background: #f1f5f9; color: #1e3a8a; border-radius: 3px; padding: 2px 4px; }
+.golden-moment-review :is(button, select, input, textarea):focus-visible, .general-playbook-panel summary:focus-visible { outline: 3px solid #2563eb; outline-offset: 3px; }
+@media (max-width: 700px) {
+  .golden-moment-review, .general-playbook-panel { padding: 15px; }
+  .golden-moment-snapshot { grid-template-columns: minmax(0, 1fr); }
+  .golden-moment-review header, .general-playbook-heading { flex-direction: column; gap: 8px; }
+}

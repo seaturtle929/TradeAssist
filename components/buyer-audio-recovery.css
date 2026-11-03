@@ -1,0 +1,130 @@
+.buyer-audio-recovery {
+  margin: 0 0 14px;
+  padding: 16px 18px;
+  color: #78350f;
+  background: #fffbeb;
+  border: 2px solid #d97706;
+  border-radius: 10px;
+  box-shadow: 0 2px 8px #78350f0a;
+}
+
+.buyer-audio-recovery-header {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.buyer-audio-recovery-header > svg {
+  flex: 0 0 auto;
+}
+
+.buyer-audio-recovery-header h2 {
+  flex: 1;
+  margin: 0;
+  color: #78350f;
+  font-size: 16px;
+  font-weight: 750;
+  line-height: 1.4;
+}
+
+.buyer-audio-recovery-dismiss {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 32px;
+  min-height: 32px;
+  padding: 0;
+  color: #78350f;
+  background: transparent;
+  border: 1px solid #d97706;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.buyer-audio-recovery-message {
+  margin: 7px 0 12px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.buyer-audio-recovery-script {
+  padding: 11px 13px;
+  color: #0f172a;
+  background: #fff;
+  border: 1px solid #d6b178;
+  border-radius: 7px;
+}
+
+.buyer-audio-recovery-label {
+  display: block;
+  margin-bottom: 5px;
+  color: #78350f;
+  font-size: 11px;
+  font-weight: 750;
+  line-height: 1.4;
+}
+
+.buyer-audio-recovery-script p {
+  margin: 0;
+  color: #0f172a;
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.buyer-audio-recovery-listen {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.buyer-audio-recovery-listen > svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.buyer-audio-recovery-listen p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.buyer-audio-recovery-confirm {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 36px;
+  margin-top: 12px;
+  padding: 7px 11px;
+  color: #fff;
+  background: #92400e;
+  border: 1px solid #92400e;
+  border-radius: 6px;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.buyer-audio-recovery-confirm:hover {
+  background: #78350f;
+  border-color: #78350f;
+}
+
+.buyer-audio-recovery-dismiss:hover {
+  background: #fef3c7;
+}
+
+.buyer-audio-recovery button:focus-visible {
+  outline: 3px solid #1d4ed8;
+  outline-offset: 3px;
+}
+
+@media (max-width: 760px) {
+  .buyer-audio-recovery { padding: 14px; }
+  .buyer-audio-recovery-script p { font-size: 18px; }
+}

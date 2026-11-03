@@ -1,0 +1,5 @@
+#!/bin/sh
+set -eu
+trade_node="$(command -v node || true)"
+if [ -z "$trade_node" ]; then trade_node="$HOME/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node"; fi
+"$trade_node" scripts/repository-privacy-check.mjs --index

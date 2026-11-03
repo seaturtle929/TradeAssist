@@ -1,4 +1,4 @@
-type Reference = {id:string;title:string;text:string};
+type Reference = {id:string;title:string;text:string;complete?:boolean};
 const terms = (text:string) => {
   const normalized=text.toLowerCase().replace(/\bmoq\b/g,"moq minimum order quantity").replace(/\bcertif\w*\b/g,"certification certified certificate").replace(/\bprices?\b/g,"price pricing cost usd");
   return [...new Set(normalized.match(/[a-z0-9]{3,}/g) || [])].filter(t => !["the","and","you","our","your","what","that","with","have","this","for","are","can","does","would"].includes(t));
@@ -28,5 +28,8 @@ export function selectKnowledge(sources:Reference[],query:string,maxCharacters=4
     if(existing)existing.text+=separator+text;
     else selected.set(chunk.source.id,{id:chunk.source.id,title:chunk.source.title,text});
   }
-  return [...selected.values()];
+  return [...selected.values()].map(source=>{
+    const original=sources.find(item=>item.id===source.id);
+    return {...source,complete:original?.complete!==false&&source.text===original?.text};
+  });
 }

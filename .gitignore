@@ -28,7 +28,7 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
+# Credentials and environment files; never commit
 .env*
 
 # vercel
@@ -57,3 +57,40 @@ next-env.d.ts
 
 # TypeScript incremental compilation cache
 *.tsbuildinfo
+.Start Trade Assist.command.swp
+
+# Local records, deployment bindings, editor artifacts and private QA.
+/.openai/
+*.swp
+*.swo
+*.log
+*.sqlite*
+*.db
+*.wav
+*.mp3
+*.m4a
+*.webm
+*.har
+*.private.*
+/app/regression/
+/components/regression-harness.*
+/lib/brain-regressions.ts
+/lib/debug-scenarios.ts
+/lib/private-learning-fixtures.ts
+
+# Keep existing private QA on this Mac. Publish reviewed runtime tools only.
+/scripts/*
+!/scripts/build-verified.sh
+!/scripts/execution-profile.mjs
+!/scripts/install-ci.mjs
+!/scripts/install-ci.sh
+!/scripts/install-pnpm.sh
+!/scripts/npm-install.mjs
+!/scripts/pnpm-install.mjs
+!/scripts/run-framework.mjs
+!/scripts/sites-env.mjs
+!/scripts/sites-env.sh
+!/scripts/start-local.mjs
+!/scripts/stop-local.mjs
+!/scripts/repository-privacy-check.mjs
+!/scripts/connector-preview/

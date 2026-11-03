@@ -1,0 +1,3 @@
+import type {CoachingPhaseTiming} from './coaching-timing';
+/** Client times include submit, transport, parsing and the React DOM commit. */
+export type ManualTiming={replyId:string;submittedAt:number;firstChunkMs?:number;fullSuggestionMs?:number;verificationMs?:number;model:string;serviceTier?:string;requestedServiceTier?:string;source:string;complete?:boolean;verified?:boolean;replaced?:boolean;serverVerificationMs?:number;firstUsableMs?:number;stableSuggestionMs?:number;stableSay?:string;preparationMs?:number;serverPhases?:CoachingPhaseTiming;lastDisplayEventAt?:number;displayDelayMs?:number};

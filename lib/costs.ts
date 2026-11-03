@@ -1,11 +1,13 @@
 /** Published standard USD rates, checked against the pages below. Estimates are
  * based on reported usage, not the provider's final invoice or account credits. */
-export const PRICE_CHECKED_AT = "2026-10-20";
+export const PRICE_CHECKED_AT = "2026-10-27";
 export const PRICE_SOURCES = [
+  {title:"GPT-6 Luna text pricing",url:"https://developers.openai.com/api/docs/models/gpt-6-luna"},
   { title:"GPT Realtime pricing", url:"https://developers.openai.com/api/docs/models/gpt-realtime" },
   { title:"GPT-4.1 mini pricing", url:"https://developers.openai.com/api/docs/models/gpt-4.1-mini" },
   { title:"Buyer research model pricing", url:"https://developers.openai.com/api/docs/models/gpt-4.1" },
   { title:"GPT-4o mini transcription pricing", url:"https://developers.openai.com/api/docs/models/gpt-4o-mini-transcribe" },
+  { title:"GPT-4o transcription pricing", url:"https://developers.openai.com/api/docs/models/gpt-4o-transcribe" },
   { title:"API and web search pricing", url:"https://developers.openai.com/api/docs/pricing" },
 ] as const;
 
@@ -68,7 +70,7 @@ export function priceRealtimeUsage(value: unknown, model = "gpt-realtime"): Usag
   }
   if (count(input.cached_tokens) > inputTotal || count(cached.text_tokens) > text || count(cached.audio_tokens) > audio || count(cached.image_tokens) > image) known=false;
 
-  let outputText=count(output.text_tokens), outputAudio=count(output.audio_tokens);
+  const outputText=count(output.text_tokens);let outputAudio=count(output.audio_tokens);
   if (outputText+outputAudio < outputTotal) { outputAudio+=outputTotal-outputText-outputAudio; known=false; }
   if (outputText+outputAudio > outputTotal) known=false;
   for (const key of ["text_tokens","audio_tokens"]) if (owns(output,key) && !validCount(output[key])) known=false;
@@ -83,15 +85,28 @@ export function priceRealtimeUsage(value: unknown, model = "gpt-realtime"): Usag
   return {usd,known};
 }
 
-/** Mini-transcribe token usage is reported independently of Realtime usage.
- * Duration-only events use its published approximate $0.003/minute estimate. */
-export function priceTranscriptionUsage(value: unknown): UsagePrice {
+/** Transcription is billed separately from Realtime. Published token rates were
+ * checked 2026-10-26; duration-only events retain approximate per-minute pricing.
+ * Both listed models use a single input rate, so modality details are validation
+ * evidence rather than an extra charge. Preserve mini as the legacy default. */
+export function priceTranscriptionUsage(value: unknown, model = "gpt-4o-mini-transcribe"): UsagePrice {
   const usage=fields(value);
+  const mini=model === "gpt-4o-mini-transcribe" || model === "gpt-4o-mini-transcribe-2025-12-15";
+  const recognized=mini || model === "gpt-4o-transcribe";
+  // Unknown models get the higher of these compatible rates, visibly estimated.
+  const rate=mini ? {input:1.25,output:5,minute:.003} : {input:2.5,output:10,minute:.006};
   if (usage.type === "duration" || (!owns(usage,"input_tokens") && validCount(usage.seconds))) {
-    return {usd:count(usage.seconds)*.003/60,known:false};
+    return {usd:count(usage.seconds)*rate.minute/60,known:false};
   }
-  const known=validCount(usage.input_tokens) && validCount(usage.output_tokens);
-  return {usd:(count(usage.input_tokens)*1.25+count(usage.output_tokens)*5)/MILLION,known};
+  const details=fields(usage.input_token_details), input=count(usage.input_tokens);
+  const described=count(details.audio_tokens)+count(details.text_tokens);
+  let known=recognized && validCount(usage.input_tokens) && validCount(usage.output_tokens);
+  if (owns(usage,"input_token_details")) {
+    // Inconsistent breakdowns cannot produce lower estimates than either count.
+    if (described !== input) known=false;
+    for (const key of ["audio_tokens","text_tokens"]) if (owns(details,key) && !validCount(details[key])) known=false;
+  }
+  return {usd:(Math.max(input,described)*rate.input+count(usage.output_tokens)*rate.output)/MILLION,known};
 }
 
 /** Responses API standard text usage. searchCalls means completed non-preview
@@ -104,7 +119,8 @@ export function priceTextUsage(value: unknown, model = "gpt-4.1-mini", searchCal
   const details=fields(usage.input_tokens_details);
   const cached=bounded(details.cached_tokens,input);
   const searches=count(searchCalls);
-  const recognized=textModel(model) || fullTextModel(model), rate=fullTextModel(model) ? {input:2,cached:.5,output:8} : {input:.4,cached:.1,output:1.6};
+  const luna=model==="gpt-6-luna";
+  const recognized=luna || textModel(model) || fullTextModel(model), rate=luna ? {input:.1,cached:.01,output:.5} : fullTextModel(model) ? {input:2,cached:.5,output:8} : {input:.4,cached:.1,output:1.6};
   let known=recognized && validCount(usage.input_tokens) && validCount(usage.output_tokens) && validCount(searchCalls);
   if(searches>0)known=false;
   if (owns(details,"cached_tokens") && (!validCount(details.cached_tokens) || count(details.cached_tokens)>input)) known=false;
