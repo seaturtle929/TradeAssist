@@ -2,13 +2,14 @@ import {clientContextSuggestionProblems,clientContextSafeReply,reviewedClientCon
 /** Turn intent and claim-level safety. Deliberately independent of generation/state modules. */
 import { hasClearConversationRefusal } from './conversation-boundary.ts';
 import {applyCoachingConfiguration,configurationSuggestionProblems,configurationAuthorizesAction,configuredSafeReply} from './coaching-configuration.ts';
+import {literalSpecificationEvidence,specificationNumberEvidence} from './scoped-specification-evidence.ts';
 export type BuyerTurnKind = 'fact_request' | 'sales_move' | 'confirmation';
 export type VerificationPolicyContext = {
   coachingRequest?:{id:string;requestedAt:number};
   companyConfiguration?:import('./company-configuration').CallConfigurationBinding;clientContext?:ClientCoachingContext;clientId?:string;contactId?:string;callId?:string;
   buyerText?: string;
   turns?: { role: string; text: string }[];
-  sources?: { id: string; text: string; title?: string }[];
+  sources?: { id: string; text: string; title?: string; complete?:boolean }[];
   brain?: { facts?: { text: string; sourceId: string; quote: string; confirmed: boolean }[]; rules?: { neverPromise?: string; neverInvent?: string; promiseThreshold?: string; escalateThreshold?: string } };
   manufacturer?: { id?:string;name?: string; products?: string };
   conversationState?: {
@@ -132,12 +133,14 @@ export function classifyBuyerTurn(context: VerificationPolicyContext): BuyerTurn
   return { kind: 'sales_move', buyerText, factTopics: [], reusableProductIdentities, reason: 'This turn calls for a conversational sales move, such as a greeting, interest acknowledgement, or objection response.' };
 }
 
-type Evidence = { id: string; text: string };
+type Evidence = { id: string; text: string; title?:string; complete?:boolean; original?:boolean };
 const AVAILABLE_DOCUMENT_ACTION='Approved Company Knowledge establishes this existing document is available; its contents and performance are not asserted.';
 function evidenceFor(context: VerificationPolicyContext): Evidence[] {
-  const sources = context.sources || [];
-  const confirmed = (context.brain?.facts || []).filter(fact => fact.confirmed && sources.some(source => source.id === fact.sourceId && source.text.includes(fact.quote))).map(fact => ({ id: fact.sourceId, text: `${fact.text}\n${fact.quote}` }));
-  return [...sources.map(source => ({ id: source.id, text: source.text })), ...confirmed];
+  const sources=context.sources||[];
+  const confirmed=(context.brain?.facts||[]).filter(fact=>fact.confirmed&&sources.some(source=>source.id===fact.sourceId&&source.text.includes(fact.quote))).map(fact=>({id:fact.sourceId,text:`${fact.text}\n${fact.quote}`,original:false}));
+  // Keep the existing non-specification paraphrase behavior, but extracted
+  // Brain summaries are never original numeric specification evidence.
+  return [...sources.map(source => ({ id: source.id, text: source.text, title:source.title, complete:source.complete,original:true })),...confirmed];
 }
 
 function identitySupported(identity: string, context: VerificationPolicyContext, evidence: Evidence[]) {
@@ -178,6 +181,8 @@ function replyClauses(text: string): { text: string; start: number; end: number 
 }
 
 function evidenceForNumber(number: string, clause: string, evidence: Evidence[]): Evidence | undefined {
+  const specification=specificationNumberEvidence(number,clause,evidence.filter(item=>item.original!==false));
+  if(specification.handled)return specification.source;
   const topics = FACT_TOPICS.filter(([, pattern]) => pattern.test(clause));
   const key = normalize(number).replace(/\s/g, '');
   return evidence.find(item => sentences(item.text).some(part => {
@@ -258,6 +263,9 @@ function concreteSupplierAssertion(clause: string): boolean {
   // A question can smuggle an assertion through its noun phrase ("email for our free samples").
   if (/\bour\s+(?:(?:ISO\s?\d*|certified|free|guaranteed|superior|consistent|in[-\s]stock)\s+)(?:\w+\s+){0,2}(?:samples?|products?|materials?|grades?|stock|quality|performance|supply)\b/i.test(clause)) return true;
   if (/\b(?:makes?|improves?|reduces?|saves?|simplif(?:y|ies)|speeds? up|helps? (?:reduce|improve|simplify))\b.{0,55}\b(?:maintenance|downtime|costs?|quality|performance|productivity|installation|changeovers?|reliability|service|effort|time|simpler|easier|faster)\b|\b(?:maintenance|installation|changeovers?)\b.{0,25}\b(?:simpler|easier|faster)\b/i.test(clause)&&!/^\s*(?:what|how|would|could)\b/i.test(clause)) return true;
+  // A relative tail remains an asserted guarantee after clause splitting;
+  // grounded numerical wording before it cannot authorize the new outcome.
+  if(/^\s*(?:which|that)\s+(?:guarantees?|ensures?|proves?|certifies?)\b/i.test(clause))return true;
   if (!own || /^\s*(?:and\s+)?(?:is|are|do|does|would|could|can|what|how|when)\b/i.test(clause) || /^\s*which\s+(?!(?:is|are|has|have)\b)/i.test(clause)) return false;
   if (/\b(?:free\s+samples?|guarantee(?:s|d)?|in\s+stock|(?:is|are|have)\s+available|certif(?:ied|ication|icates?)|ISO\s?\d+|best\s+(?:quality|performance|products?|materials?|grades?|prices?|supply|service)|superior|more\s+reliable|faster\s+delivery|better\s+(?:quality|performance)|(?:good|high|consistent|stable|premium)[-\s]+(?:quality|performance)|(?:is|are)\s+(?:consistent|reliable)|performs?\s+well|based\s+in|protected\s+payment|quality\s+(?:products|materials)|(?:meet|exceed)\w*\s+(?:\w+\s+){0,3}standards|competitive\s+pric(?:e|es|ing)|lowest\s+pric(?:e|es)|sample\s+policy)\b/i.test(clause)||/\b(?:our|we|it)\b.{0,50}\b(?:is|are|offer|offers)\s+(?:the\s+)?best\b/i.test(clause)) return true;
   if (CONDITIONAL_PROPOSAL.test(clause) && !/\b(?:guarantee|free|in\s+stock|certified)\b/i.test(clause)) return false;
@@ -272,6 +280,8 @@ function concreteSupplierAssertion(clause: string): boolean {
 }
 
 function safeSupplierEvidence(clause: string, evidence: Evidence[],context?:VerificationPolicyContext): Evidence | undefined {
+  const specification=literalSpecificationEvidence(clause,evidence.filter(item=>item.original!==false));
+  if(specification)return specification;
   const normalized = normalize(clause).replace(/^(?:yes |and |but |we |our |it is |this is )+/, '');
   if (normalized.length < 8) return undefined;
   // Only an actual matching assertion qualifies locally. The model verifier handles paraphrases.
@@ -356,12 +366,25 @@ function technicalSupportAssertion(clause:string,context:VerificationPolicyConte
  // A person's optional review of an existing document is not a predicate
  // about a product ("They can resist..."). Check document existence only,
  // with a closed grammar so content/performance qualifiers still fall through.
- const review=clause.trim().match(/^(?:they|you|he|she|your (?:team|engineer|colleague))\s+(?:can|could|may)\s+(?:review|read|look at)\s+(.+?)(?:\s+if (?:they|you|he|she)(?:['’]d| would) like(?: more details)?|\s+for (?:more details|review|reference))?[.!]?$/i);
+ const review=clause.trim().match(/^(?:they|you|he|she|your (?:team|engineer|colleague))\s+(?:can|could|may)\s+(?:also\s+)?(?:review|read|look at)\s+(.+?)(?:\s+if (?:they|you|he|she)(?:['’]d| would) like(?: more details)?|\s+for (?:more details|review|reference)|\s+to compare (?:quality details|(?:the |your |their )?(?:specifications|specs|requirements)))?[.!]?$/i);
  if(review){
    const nouns=review[1].split(/\s+(?:and|or)\s+|,\s*/i).map(value=>value.trim().replace(/^(?:(?:our|the|company|product)\s+)+/i,''));
-   const kinds=nouns.map(value=>/^profiles?$/i.test(value)?'profile':/^(?:specs?|specifications?)(?: sheets?)?$/i.test(value)?'specification':undefined);
+   const kinds=nouns.map(value=>/^profiles?$/i.test(value)?'profile':/^(?:specs?|specifications?)(?: sheets?)?$/i.test(value)?'specification':/^(?:material )?test reports?$/i.test(value)?/^material/i.test(value)?'material_test_report':'test_report':undefined);
    if(kinds.length&&kinds.every(Boolean)){
-     const source=evidence.find(item=>/\bavailable(?: for review)?\b/i.test(item.text)&&! /\b(?:not available|unavailable|no profile|no specification)\b/i.test(item.text)&&kinds.every(kind=>kind==='profile'?/\bprofiles?\b/i.test(item.text):/\b(?:specs?|specifications?)(?: sheets?)?\b/i.test(item.text)));
+     const reports=kinds.filter(kind=>kind==='test_report'||kind==='material_test_report');
+     const availableReport=(part:string)=>{
+       const statement=part.trim().match(/^(.+?)\s+(?:is|are)\s+available(?:\s+for review)?[.!]?$/i);
+       if(!statement||!reports.every(kind=>kind==='material_test_report'?/\bmaterial test reports?\b/i.test(statement[1]):/\btest reports?\b/i.test(statement[1])))return false;
+       // A plain document list is available. Mentioning a report inside another
+       // document's description is not proof that the report itself is offered.
+       return !statement[1].replace(/\b(?:company\s+)?profiles?\b|\b(?:material\s+)?test reports?\b|\b(?:product\s+)?(?:specs?|specifications?)(?:\s+sheets?)?\b/gi,'').replace(/\b[A-Z]{1,6}\d{1,6}\b/gi,'').replace(/\b(?:a|an|the|our|and|both)\b/gi,'').replace(/[\s,]/g,'');
+     };
+     const reportEntries=evidence.filter(item=>item.original!==false&&/\btest reports?\b/i.test((item.title||'')+' '+item.text));
+     // The whole original availability entry must be a plain present-tense
+     // document list. Do not ignore a later approval condition, a conflicting
+     // entry or stale status just because one sentence says "available".
+     const reportEntriesSafe=!!reportEntries.length&&reportEntries.every(item=>item.complete!==false&&!/\b(?:superseded|archived|obsolete|draft|outdated|historical|expired|not current|unapproved|not approved|for reference only)\b/i.test((item.title||'')+' '+item.text)&&availableReport(item.text));
+     const source=evidence.find(item=>/\bavailable(?: for review)?\b/i.test(item.text)&&! /\b(?:not available|unavailable|no profile|no specification)\b/i.test(item.text)&&kinds.every(kind=>kind==='profile'?/\bprofiles?\b/i.test(item.text):kind==='specification'?/\b(?:specs?|specifications?)(?: sheets?)?\b/i.test(item.text):true)&&(!reports.length||reportEntriesSafe&&reportEntries.includes(item)));
      return source?{supported:true,sourceId:source.id,reason:'Approved knowledge establishes these documents are available; the line offers review without asserting their contents.'}:{supported:false,reason:'The offered documents are not established as available in approved Company Knowledge.'};
    }
  }
