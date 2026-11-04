@@ -1,6 +1,7 @@
 import type {CallRecord,Turn} from './trade';
 import type {CompanyBrainRecord} from './company-brain';
 import {deriveCallReview} from './call-review.ts';
+import {deriveSpokenDocumentEvidence,isRepContactDetailRequest} from './document-call-evidence.ts';
 import {buildClientStanding} from './client-standing.ts';
 import {routingHistoryFor} from './call-participant.ts';
 import {attachCallToClient,updateClientRecord,upsertClientContact,upsertClientCallRecord,type ClientCategory,type ClientRecord,type ClientContact} from './client-records.ts';
@@ -12,7 +13,7 @@ export type CallWrapUp={version:1;callId:string;companyId:string;clientId:string
 export type ClientCallWrapUp=CallWrapUp;
 const clone=<T>(value:T):T=>structuredClone(value);
 // A routing contact repeating/requesting the rep's details is not offering a buyer contact.
-const repContactCheck=(text:string)=>/\b(?:your (?:last name|surname|name|callback(?: number)?|phone(?: number)?|number|email(?: address)?)|(?:reach|call) you (?:at|on))\b/i.test(text);
+const repContactCheck=isRepContactDetailRequest;
 const promise=/\b(?:I|we)(?:'ll|’ll| will)\s+(?:send|email|share|provide|check|confirm|review|call|contact|pass|relay|forward)\b/i;
 const possibleAction=/\b(?:I|we) (?:can|could|may|might) (?:pass|take|relay|forward|send|email|share|review|call)\b/i;
 const uncertainty=/\?|\b(?:not sure|uncertain|don't know|do not know|need to check|needs? approval|not yet|still waiting|pending)\b/i;
@@ -29,6 +30,14 @@ function kindFor(turn:Turn):WrapUpMemoryKind {
 }
 const contactNameKey=(value:string)=>value.trim().toLocaleLowerCase().replace(/\s+/g,' ');
 const inboxLabel=(email:string|undefined,clientName:string)=>email&&/^(?:purchasing|procurement|buying|buyers)(?:[.+_-][^@]*)?@/i.test(email)?`${clientName} purchasing inbox`:undefined;
+function buyerContactStatement(text:string):boolean {
+ if(repContactCheck(text))return false;
+ const own=/\b(?:my|our)\s+(?:email(?: address)?|inbox|phone|number)\b|\b(?:email|send|reach|contact)\s+(?:me|us)\b|\bto (?:me|us) at\b/i.test(text);
+ if(/\byour (?:email(?: address)?|inbox|phone|number)\b/i.test(text)&&!own)return false;
+ // A buyer can name someone else's destination without supplying their own
+ // contact details. Preserve the spoken request, but do not assign that inbox.
+ return !/\b(?:to|for|email|reach|contact)\s+(?:(?:my|our|your|his|her|their)\s+)?(?:manager|supervisor|engineer|colleague|assistant|representative)\b|\b(?:manager|supervisor|engineer|colleague|assistant|representative)(?:'s)?\s+(?:email|inbox|address|number)\b/i.test(text);
+}
 const buyerIntroduction=(text:string)=>{const name=text.match(/\b(?:my name is|this is|I am|I'm)\s+([A-Z][a-z'-]+(?:\s+[A-Z][a-z'-]+)?)(?=[,.!]|\s+(?:from|with|at|and|in|here|speaking)|$)/i)?.[1]||text.match(/(?:^|[,.!]\s+)([A-Z][a-z'-]+)\s+(?:speaking|here)\b/i)?.[1];return name&&!/^(?:not|calling|the|a|an|in|from|just|only|purchasing|reception|receptionist|front desk|unavailable|busy)\b/i.test(name)?name:undefined;};
 const buyerRole=(text:string)=>/\b(?:in|from|with)\s+(?:the\s+)?(?:purchasing|procurement)\b|\b(?:I|we)\s+(?:handle|manage|am responsible for)\s+(?:the\s+)?(?:purchasing|procurement)\b/i.test(text)?'Purchasing':undefined;
 const matchNamedContact=(client:ClientRecord,contact:Pick<WrapUpContact,'id'|'name'>)=>client.contacts.find(row=>row.id===contact.id&&row.kind!=='main_line')||client.contacts.find(row=>row.kind!=='main_line'&&!row.archived&&contact.name.trim()&&contactNameKey(row.name)===contactNameKey(contact.name));
@@ -43,7 +52,7 @@ export function proposeReviewedCallContacts(call:CallRecord,client:ClientRecord)
  const repAddresses=new Set(reliable.filter(turn=>turn.role==='you'&&/\b(?:my|our) (?:email|address)|\b(?:reach|email) me\b/i.test(turn.text)).flatMap(turn=>turn.text.match(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/ig)||[]).map(value=>value.toLowerCase()));
  for(const turn of reliable.filter(row=>row.role==='buyer')){
   const introduced=buyerIntroduction(turn.text);if(introduced){name=introduced;role=buyerRole(turn.text);}else role=buyerRole(turn.text)||role;
-  const statement=turn.text.split(/(?<=[.!?])\s+/).filter(part=>!repContactCheck(part)).join(' ');
+  const statement=turn.text.split(/(?<=[.!?])\s+/).filter(buyerContactStatement).join(' ');
   const email=statement.match(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i)?.[0],phone=statement.match(/(?:\+\d{1,3}[ .-]?)?(?:\(\d{3}\)|\d{3})[ .-]\d{3}[ .-]\d{4}\b/)?.[0];
   if(!email&&!phone||email&&repAddresses.has(email.toLowerCase())&&!/\bmy (?:email|address)\b/i.test(statement))continue;
   const existing=matchNamedContact(client,{id:'',name}),prior=proposals.find(row=>contactNameKey(row.name)===contactNameKey(name)&&!!name);
@@ -113,10 +122,11 @@ export function proposeCallWrapUp(call:CallRecord,client:ClientRecord):CallWrapU
  if(call.wrapUp)return {...clone(call.wrapUp),contacts:proposeReviewedCallContacts(call,client)};
  const review=deriveCallReview(call);
  const reliableTurns=call.turns.filter(turn=>!turn.transcriptionUncertainty);
+ const documentEvidence=deriveSpokenDocumentEvidence(call.turns),documentRequests=new Set(documentEvidence.requests.map(item=>item.turnId)),documentAgreements=new Map(documentEvidence.agreements.map(item=>[item.turnId,item]));
  const repAddresses=new Set(reliableTurns.filter(turn=>turn.role==='you').flatMap(turn=>turn.text.match(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/ig)||[]).map(address=>address.toLowerCase()));
- const echoesRepContact=(turn:Turn)=>turn.role==='buyer'&&(repContactCheck(turn.text)||(turn.text.match(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/ig)||[]).some(address=>repAddresses.has(address.toLowerCase()))&&!/\bmy (?:email|address)\b/i.test(turn.text));
+ const echoesRepContact=(turn:Turn)=>turn.role==='buyer'&&!documentRequests.has(turn.id)&&(repContactCheck(turn.text)||(turn.text.match(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/ig)||[]).some(address=>repAddresses.has(address.toLowerCase()))&&!/\bmy (?:email|address)\b/i.test(turn.text));
  const selected=client.contacts.find(row=>row.id===call.contactId);
- const memory:WrapUpMemory[]=reliableTurns.filter(turn=>turn.role!=='conversation'&&!echoesRepContact(turn)&&(turn.role==='buyer'?relevant.test(turn.text)||uncertainty.test(turn.text)||promise.test(turn.text)||possibleAction.test(turn.text):promise.test(turn.text)||completed.test(turn.text))).map(turn=>({id:`turn:${turn.id}`,text:turn.text,kind:kindFor(turn),source:turn.role==='buyer'?'buyer' as const:'rep_update' as const,sourceTurnId:turn.id,quote:turn.text,at:turn.at,...call.contactId&&selected?.kind!=='main_line'?{contactId:call.contactId}:{},confirmed:false}));
+ const memory:WrapUpMemory[]=reliableTurns.filter(turn=>turn.role!=='conversation'&&!echoesRepContact(turn)&&(turn.role==='buyer'?documentRequests.has(turn.id)||relevant.test(turn.text)||uncertainty.test(turn.text)||promise.test(turn.text)||possibleAction.test(turn.text):documentAgreements.has(turn.id)||promise.test(turn.text)||completed.test(turn.text))).map(turn=>({id:`turn:${turn.id}`,text:documentAgreements.has(turn.id)?`Salesperson agreed to send the ${documentAgreements.get(turn.id)!.documents.join(' and ')}. Spoken: “${turn.text}”`:turn.text,kind:documentAgreements.has(turn.id)?'agreed':kindFor(turn),source:turn.role==='buyer'?'buyer' as const:'rep_update' as const,sourceTurnId:turn.id,quote:turn.text,at:turn.at,...call.contactId&&selected?.kind!=='main_line'?{contactId:call.contactId}:{},confirmed:false}));
  const routing=routingHistoryFor(reliableTurns);
  if(!routing&&review.unknowns.length)memory.push({id:'review-unknowns',text:review.unknowns.join(' '),kind:'uncertain',source:'inference',at:call.turns.at(-1)?.at||call.startedAt,confirmed:false});
  if(routing)memory.push({id:'routing-status',text:routing.summary,kind:'uncertain',source:'inference',at:call.turns.at(-1)?.at||call.startedAt,confirmed:false});

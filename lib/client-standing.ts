@@ -1,6 +1,7 @@
 import type {ClientRecord,ClientContextEntry} from './client-records';
 import type {CallRecord} from './trade';
 import type {PreparationStage} from './client-preparation';
+import {isDocumentRequest} from './document-call-evidence.ts';
 
 export type ClientStanding={version:1;companyId:string;clientId:string;source?:{callId:string;at:number;reviewedAt:number};summary:string;reached:string;buyerRequested:string[];repOwes:string[];buyerOwes:string[];unknowns:string[];sendStatus:'pending'|'sent'|'unknown';receiptStatus:'confirmed'|'unconfirmed';reviewStatus:'confirmed'|'unconfirmed';contact?:{name:string;role?:string;email?:string};documents:string[];outsideUpdate?:string;evidence:{callId:string;at:number;text:string;kind:'reviewed_recap'|'quote'|'rep_update'}[]};
 const clean=(text:string)=>text.replace(/\\r\\n|\\n/g,'\n').replace(/[‘’]/g,"'").replace(/[\t ]+/g,' ').trim();
@@ -73,22 +74,31 @@ export function buildClientStanding(input:{client:ClientRecord;calls:CallRecord[
  if(!call||!recap)return base;
  base.evidence=[{callId:call.id,at:source!.at,text:rawRecap,kind:'reviewed_recap'},...call.turns.filter(turn=>!turn.transcriptionUncertainty).map(turn=>({callId:call.id,at:turn.at,text:`${turn.role==='you'?'Salesperson':turn.role==='buyer'?'Buyer':'Unattributed'}: ${turn.text}`,kind:'quote' as const}))];
  const contact=reviewedContact(recap,client),parts=sentences(recap);
- const requestParts=parts.filter(part=>materialKinds(part).length&&/\b(?:request(?:ed)?|asked(?: for)?|(?:could|can|would) you (?:please )?send|please (?:send|email)|send me|send us|contact:\s*[“"]?)/i.test(part)&&!/^Salesperson|^Reason for calling/i.test(part)&&!/\b(?:not requested|not needed|no longer|did not (?:ask|request)|didn't (?:ask|request))\b/i.test(part));
+ // A substantive product question is not itself a request to send documents.
+ // Read the reviewed account, including quoted include/attach requests, without
+ // reconstructing facts from transcript omitted by the salesperson's review.
+ const requestParts=parts.filter(part=>materialKinds(part).length&&(/\b(?:request(?:ed)?|asked(?: for)?)\b/i.test(part)||isDocumentRequest(part.replace(/^[^“"]*:\s*[“"]?/,'').replace(/[”"]$/,'')))&&!/^Salesperson|^Reason for calling/i.test(part)&&!/\b(?:not requested|not needed|no longer|did not (?:ask|request)|didn't (?:ask|request))\b/i.test(part));
  // A later recap may report receipt/review without repeating the original
  // request. Retain that document bundle without inventing a new request.
  const documentStatusParts=parts.filter(part=>!/^Salesperson|^Reason for calling/i.test(part)&&/\b(?:receiv(?:e|ed)|receipt|review(?:ed|ing)?)\b/i.test(part));
- const documents=unique([...requestParts,...documentStatusParts].flatMap(materialKinds));
+ // The review keeps historical request quotations for evidence. An explicit
+ // later cancellation narrows the current bundle rather than re-opening it
+ // from those earlier quotes. This marker is itself part of the editable recap.
+ const currentBundle=parts.findLast(part=>/^Current requested document bundle:/i.test(part));
+ const cancelledAll=parts.some(part=>/^No requested documents remain[.!]?$/i.test(part));
+ const documents=cancelledAll?[]:currentBundle?materialKinds(currentBundle):unique([...requestParts,...documentStatusParts].flatMap(materialKinds));
  base.documents=documents;
  base.contact=contact;
  base.reached=contact?`${contact.name}${contact.role?' in '+contact.role.toLowerCase():''} was reached.`:/contact who confirmed purchasing responsibility/i.test(recap)?'A contact confirmed purchasing responsibility.':/routing contact|reception|gatekeeper|purchasing contact not reached|message left with routing/i.test(recap+' '+call.wrapUp?.outcome)?'Reception was reached; no purchasing conversation is confirmed.':'See the reviewed recap for who was reached.';
- if(requestParts.length)base.buyerRequested=[`${contact?.name||'The buyer'} requested the ${joined(unique(requestParts.flatMap(materialKinds)))}${contact?.email?' at '+contact.email:''}.`];
+ if(requestParts.length&&documents.length)base.buyerRequested=[`${contact?.name||'The buyer'} requested the ${joined(currentBundle?documents:unique(requestParts.flatMap(materialKinds)))}${contact?.email?' at '+contact.email:''}.`];
  const promised=parts.some(part=>/\b(?:salesperson|representative|rep|promis(?:ed|e))\b/i.test(part)&&/\b(?:send|email|share)\b/i.test(part)&&materialKinds(part).length)||parts.some(part=>/^Salesperson.*next step:/i.test(part)&&/\b(?:I'll|I will|we'll|we will)\b/i.test(part));
  // Named-rep recaps need no special name list; explicit "promised" is enough.
  const repNames=unique(call.turns.filter(turn=>turn.role==='you'&&!turn.transcriptionUncertainty).flatMap(turn=>[...turn.text.matchAll(/\b(?:this is|I'm|I am|my name is)\s+([A-Z][a-z'-]+)(?=[,.;!]|\s+(?:with|from|at|and)|$)/g)].map(match=>match[1])));
  const namedRepSent=parts.some(part=>{const start=part.match(/^(?:The )?(salesperson|representative|rep|[A-Z][a-z'-]+)\s+(?:has |had |already |just )*(?:sent|emailed|forwarded|shared)\b/i);return !!start&&!uncertain.test(part)&&materialKinds(part).length>0&&(/^(?:salesperson|representative|rep)$/i.test(start[1])||repNames.some(name=>name.toLowerCase()===start[1].toLowerCase()));});
  const sendEvidence=namedRepSent||reportedDocumentSend(outsideUpdate)||parts.some(part=>/^(?:I|We)\b/.test(part)&&reportedDocumentSend(part))||parts.some(part=>/^Salesperson(?:'s)? (?:update|completed|stated next step):/i.test(part)&&reportedDocumentSend(part));
- base.sendStatus=sendEvidence?'sent':requestParts.length||promised?'pending':'unknown';
- if(base.sendStatus==='pending')base.repOwes=[`Send the ${joined(documents)}${contact?.email?' to '+contact.email:''}; sending has not been confirmed.`];
+ base.sendStatus=cancelledAll?'unknown':sendEvidence?'sent':requestParts.length||promised?'pending':'unknown';
+ if(cancelledAll)base.repOwes=['The document request was cancelled; no remaining document-send obligation is recorded.'];
+ if(base.sendStatus==='pending')base.repOwes=[`Send the ${joined(documents)}${contact?.email?' to '+contact.email:''}; sending has not been confirmed.${documents.length&&!contact?.email?' The destination address is unconfirmed.':''}`];
  if(base.sendStatus==='sent')base.repOwes=['No remaining document-send obligation is recorded; follow up without assuming receipt or review.'];
  const buyerCompleted=(verb:string)=>parts.some(part=>!uncertain.test(part)&&!/^Salesperson|^Reason for calling/i.test(part)&&new RegExp('\\b(?:buyer|contact|customer|'+(contact?.name||'UNNAMED')+').{0,35}\\b(?:has |have |had |already )?'+verb+'\\b','i').test(part));
  base.receiptStatus=reportedBuyerDocumentCompletion(recap,'receipt',contact,documents)??(buyerCompleted('received')?'confirmed':'unconfirmed');
@@ -107,6 +117,7 @@ export function buildClientStanding(input:{client:ClientRecord;calls:CallRecord[
  if(base.reviewStatus==='confirmed')base.buyerOwes=['Document review is reported complete; any further buyer action or approval remains unconfirmed.'];
  if(base.receiptStatus==='unconfirmed'&&documents.length)base.unknowns.push('Document receipt is unconfirmed.');
  if(base.reviewStatus==='unconfirmed'&&documents.length)base.unknowns.push('Document review is unconfirmed.');
+ if(base.sendStatus==='pending'&&documents.length&&!contact?.email)base.unknowns.push('Document destination address is unconfirmed.');
  if(contact?.role==='Purchasing'&&!parts.some(part=>!uncertain.test(part)&&/\b(?:final (?:decision|approval) (?:authority|maker)|sole decision maker)\b/i.test(part)))base.unknowns.push('Final decision authority is unconfirmed; purchasing responsibility alone does not establish it.');
  const clientNames=unique([client.name,client.name.replace(/\s*[—–-]\s*Test\s*$/i,''),client.name.split(/\s+/)[0]]).map(value=>value.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'));
  const usePattern=new RegExp('\\b(?:buyer|contact|customer|we|I|'+clientNames.join('|')+')\\b.{0,40}\\b(?:uses?|buy|buys|need|needs|require|requires)\\b.{0,100}\\b(?:for|in)\\b','i');
