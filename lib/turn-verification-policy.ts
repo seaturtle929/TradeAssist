@@ -235,13 +235,42 @@ function supplierApplicationClaim(clause:string):boolean {
 function unresolvedFactCheck(clause:string):boolean {
  return isBoundedEpistemicFactAction(clause);
 }
+/** Closed conversational acts can accompany a fact question without asserting
+ * its answer. Inspect every clause; a polite prefix never exempts its tail. */
+function conversationalClause(text:string):boolean {
+ const line=text.trim().replace(/[’‘]/g,"'");
+ const courtesy=line.match(/^(?:(?:thanks|thank you)(?: for (?:asking|your question|the question|raising that|checking|clarifying|pointing that out))?|of course|understood|okay|ok|that makes sense|I understand)(.*)$/i);
+ if(courtesy){
+  const tail=courtesy[1].trim();
+  // A vocative is a name, not a product, predicate or source claim. Name
+  // correctness and conversation relevance remain separate normal checks.
+  if(/^[,.!]*$/.test(tail)||/^,\s*[A-Z][A-Za-z'-]*(?:\s+[A-Z][A-Za-z'-]*){0,2}[.!]?$/.test(tail))return true;
+ }
+ if(/^(?:(?:once|after|when|if)\s+(?:I|we)\s+(?:(?:verify|confirm) (?:that|its availability|it is available)|know for sure)|(?:I|we)(?:'ll| will)\s+(?:follow up(?: and let you know)?|let you know|report back|confirm(?: that for you)?(?: before (?:sending|emailing) (?:it|them|anything|the documents))?))[,.!]?$/i.test(line))return true;
+ // An unqualified investigation promises only the rep's follow-through.
+ // Restricted actions, content assertions and time promises cannot fit it.
+ if(/^(?:(?:I|we)(?:'ll| will| can)|let (?:me|us))\s+(?:check|double[- ]?check|find out|look into (?:it|that)|check (?:it|that|the details))(?:\s+and\s+(?:let you know|report back|confirm before (?:sending|emailing) (?:it|them|anything)))?[.!]?$/i.test(line))return true;
+ // Ask about the buyer's needs/criteria, rather than offering our capability
+ // in interrogative form. Numeric and presupposed factual claims still pass
+ // through assessReplyVerification before this whole-reply exemption.
+ return /^(?:what|which|how|when|where|who|does|do|is|are|would|could|can)\b[^.!?]*\?$/i.test(line)
+  &&/\b(?:you|your)\b/i.test(line)
+  &&!/\b(?:our|we|I|guarantee\w*|certif\w*|approved|free|discount\w*|ship|deliver|promise|superior|cheaper|faster|better quality)\b/i.test(line);
+}
+/** Fast factual-turn handling is a whole-meaning decision over the proposed
+ * spoken reply, not a keyword decision about the buyer's question. Unknown
+ * clauses remain conservative; supported factual claims still get their
+ * normal source check, and hard company/context vetoes always win. */
+export function isNonAssertiveReply(say:string,claims:ReplyFactClaim[]):boolean {
+ if(claims.some(claim=>!claim.supported||claim.kind!=='supplier_claim'||claim.reason!==AVAILABLE_DOCUMENT_ACTION))return false;
+ const parts=replyClauses(say);
+ return !!parts.length&&parts.every(part=>unresolvedFactCheck(part.text)||conversationalClause(part.text)||claims.some(claim=>claim.start===part.start&&claim.text===part.text&&claim.reason===AVAILABLE_DOCUMENT_ACTION));
+}
 /** A whole-reply fast path must account for every clause, including a predicate
  * an older lexical detector may not recognize. Unrecognized tails keep the
  * ordinary verification path rather than inheriting the uncertainty exemption. */
 export function isBoundedFactCheckReply(say:string,claims:ReplyFactClaim[]):boolean {
- const parts=replyClauses(say);
- const neutral=(text:string)=>/^\s*(?:(?:thanks|thank you)(?: for (?:asking|raising that|checking|clarifying|pointing that out))?|of course|understood|sure|okay|ok|(?:once|after|when|if)\s+(?:I|we)\s+(?:(?:verify|confirm) (?:that|its availability|it is available)|know for sure)|(?:I|we)(?:['’]ll| will)\s+(?:follow up(?: and let you know)?|let you know|report back))[,.!]?\s*$/i.test(text);
- return parts.some(part=>unresolvedFactCheck(part.text))&&parts.every(part=>unresolvedFactCheck(part.text)||neutral(part.text)||claims.some(claim=>claim.start===part.start&&claim.text===part.text&&claim.supported&&claim.kind==='supplier_claim'&&claim.reason===AVAILABLE_DOCUMENT_ACTION));
+ return replyClauses(say).some(part=>unresolvedFactCheck(part.text))&&isNonAssertiveReply(say,claims);
 }
 function concreteSupplierAssertion(clause: string): boolean {
   // "That makes sense" is acknowledgment, not a claimed maintenance outcome.
@@ -270,7 +299,7 @@ function concreteSupplierAssertion(clause: string): boolean {
   // grounded numerical wording before it cannot authorize the new outcome.
   if(/^\s*(?:which|that)\s+(?:guarantees?|ensures?|proves?|certifies?)\b/i.test(clause))return true;
   if (!own || /^\s*(?:and\s+)?(?:is|are|do|does|would|could|can|what|how|when)\b/i.test(clause) || /^\s*which\s+(?!(?:is|are|has|have)\b)/i.test(clause)) return false;
-  if (/\b(?:free\s+samples?|guarantee(?:s|d)?|in\s+stock|(?:is|are|have)\s+available|certif(?:ied|ication|icates?)|ISO\s?\d+|best\s+(?:quality|performance|products?|materials?|grades?|prices?|supply|service)|superior|more\s+reliable|faster\s+delivery|better\s+(?:quality|performance)|(?:good|high|consistent|stable|premium)[-\s]+(?:quality|performance)|(?:is|are)\s+(?:consistent|reliable)|performs?\s+well|based\s+in|protected\s+payment|quality\s+(?:products|materials)|(?:meet|exceed)\w*\s+(?:\w+\s+){0,3}standards|competitive\s+pric(?:e|es|ing)|lowest\s+pric(?:e|es)|sample\s+policy)\b/i.test(clause)||/\b(?:our|we|it)\b.{0,50}\b(?:is|are|offer|offers)\s+(?:the\s+)?best\b/i.test(clause)) return true;
+  if (/\b(?:free\s+samples?|guarantee(?:s|d)?|in\s+stock|(?:is|are|have)\s+available|certif(?:y|ies|ying|ied|ication|icates?)|ISO\s?\d+|best\s+(?:quality|performance|products?|materials?|grades?|prices?|supply|service)|superior|more\s+reliable|faster\s+delivery|better\s+(?:quality|performance)|(?:good|high|consistent|stable|premium)[-\s]+(?:quality|performance)|(?:is|are)\s+(?:consistent|reliable)|performs?\s+well|based\s+in|protected\s+payment|quality\s+(?:products|materials)|(?:meet|exceed)\w*\s+(?:\w+\s+){0,3}standards|competitive\s+pric(?:e|es|ing)|lowest\s+pric(?:e|es)|sample\s+policy)\b/i.test(clause)||/\b(?:our|we|it)\b.{0,50}\b(?:is|are|offer|offers)\s+(?:the\s+)?best\b/i.test(clause)) return true;
   if (CONDITIONAL_PROPOSAL.test(clause) && !/\b(?:guarantee|free|in\s+stock|certified)\b/i.test(clause)) return false;
   // Sending existing documents is a rep action, not factory capacity or a sample policy.
   if (DELIVERY.test(clause) && DOCUMENT.test(clause) && !/\b(?:ship|deliver|free|guarantee|stock|certified)\b/i.test(clause)) return false;

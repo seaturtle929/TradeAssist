@@ -1,3 +1,4 @@
+import {buyerVadSilenceMs} from './turn-detection.ts';
 import {CoachingPhaseClock,type CoachingPhaseTiming} from './coaching-timing.ts';
 import {snapshotCoachingContext,coachingRequestFocus,type CoachingSpeechSnapshot} from './coaching-context-snapshot.ts';
 import {deriveCallParticipant} from './call-participant.ts';
@@ -31,7 +32,7 @@ export type LiveSuggestionIssue={suggestionId:string;turnId:string;at:number;sta
 export type LiveTranscriptionTiming={id:string;role:'buyer'|'conversation';speechStartedAt?:number;speechStoppedAt?:number;firstPartialAt?:number;finalAt?:number};
 export type QueuedCoachingRequest={id:string;requestedAt:number;status:'listening'|'transcribing';message:string};
 export type LiveRequestReceipt=LiveReplyTicket|{queued:true;id:string;requestedAt:number};
-type QueuedRequest={id:string;requestedAt:number;started:number;context:LiveContext;status?:QueuedCoachingRequest['status'];stoppedAt?:number;timer?:ReturnType<typeof setTimeout>;speechIds:Set<string>;partials:CoachingSpeechSnapshot['partials'];pending:CoachingSpeechSnapshot['pendingSpeech']};
+type QueuedRequest={id:string;requestedAt:number;started:number;queuedAt:number;queueWaitMs:number;preparationMs:number;continuedDrafts:number;context:LiveContext;status?:QueuedCoachingRequest['status'];stoppedAt?:number;timer?:ReturnType<typeof setTimeout>;speechIds:Set<string>;partials:CoachingSpeechSnapshot['partials'];pending:CoachingSpeechSnapshot['pendingSpeech']};
 type Work={phaseClock:CoachingPhaseClock;ticket:LiveReplyTicket;context:LiveContext;library:KnowledgeReference[];lookupSources?:KnowledgeReference[];id:string;started:number;timer?:ReturnType<typeof setTimeout>;fallback?:AbortController;rescued:boolean;answered:boolean;ready:boolean;toolRounds:number;verifier:LiveVerification<Guidance>;
   purpose:boolean;route:ReturnType<typeof fastRouteFor>;cached?:Guidance;checking:boolean;archived:boolean;superseded:boolean;published?:Guidance;publishedAt?:number;proposedSay?:string;representativeText?:string;analysis?:Partial<Guidance>;analysisTimer?:ReturnType<typeof setTimeout>;analysisShown:boolean;metadataComplete:boolean;
   repairCount:number;repairPending:boolean;repairReason?:string;rejected?:boolean;candidateAttempt?:number;
@@ -108,7 +109,7 @@ export class LiveCoachingSession {
   private historicalTranscriptIds?:Set<string>;
   private listeningStartedAt:number;
   private readonly works=new Map<number,Work>();
-  private readonly requestSnapshots=new Map<string,{context:LiveContext;started:number}>();
+  private readonly requestSnapshots=new Map<string,{context:LiveContext;started:number;dispatchStarted:number;enqueuedAt:number;preparationMs:number;queueWaitMs:number;continuedDrafts:number}>();
   private readonly requestedIds=new Set<string>();
   private readonly speechObservations=new Map<string,LiveTranscriptionTiming&{order:number;observedAt?:number}>();
   private readonly responses=new Map<string,ResponseBuffer>();
@@ -179,7 +180,7 @@ export class LiveCoachingSession {
   requestNextMove(context:LiveContext,preparationMs=context.coachingRequest?.preparationMs??0):LiveRequestReceipt|null {
     if(this.stopped)return null;
     if(this.queued)return {queued:true,id:this.queued.id,requestedAt:this.queued.requestedAt};
-    const started=performance.now()-Math.max(0,preparationMs);
+    const prepareStarted=performance.now(),started=prepareStarted-Math.max(0,preparationMs);
     const supplied=context.coachingRequest;
     const requestedAt=supplied?.requestedAt??Date.now();
     const id=supplied?.id||`request-${crypto.randomUUID()}`;
@@ -198,12 +199,12 @@ export class LiveCoachingSession {
       this.coordinator.retireCurrent();this.options.onThinking(false);this.options.onChecking(false);
       const relevantIds=[...(speech.partials||[]),...(speech.pendingSpeech||[])].filter(item=>item.role!=='you').flatMap(item=>item.id?[item.id]:[]);
       const stops=relevantIds.flatMap(id=>{const at=this.latencyClock.snapshot(id)?.speechStoppedAtMs;return at===undefined?[]:[at];});
-      this.queued={id,requestedAt,started,context:structuredClone(context),stoppedAt:this.coordinator.state.buyerSpeaking?undefined:stops.length?Math.max(...stops):performance.now(),speechIds:new Set(),partials:[],pending:[]};
+      this.queued={id,requestedAt,started,queuedAt:performance.now(),queueWaitMs:0,preparationMs:performance.now()-started,continuedDrafts:0,context:structuredClone(context),stoppedAt:this.coordinator.state.buyerSpeaking?undefined:stops.length?Math.max(...stops):performance.now(),speechIds:new Set(),partials:[],pending:[]};
       this.captureQueuedSpeech(snapshot);
       this.options.onRequestTrace?.({event:'queued',requestId:id,suggestionId:`coaching-${id}`,at:requestedAt,attempt:0,focus:coachingRequestFocus(snapshot),snapshot:{request:structuredClone(snapshot.coachingRequest!),turns:structuredClone(snapshot.turns),participant:deriveCallParticipant(snapshot.turns)}});
       this.scheduleQueuedRequest();return {queued:true,id,requestedAt};
     }
-    return this.dispatchRequest(snapshot,started);
+    return this.dispatchRequest(snapshot,started,prepareStarted,preparationMs);
   }
   private withListeningBoundary(context:LiveContext):LiveContext {
     if(!this.historicalTranscriptIds||!context.coachingRequest)return context;
@@ -221,11 +222,11 @@ export class LiveCoachingSession {
     this.clearIncomplete();this.clearThoughtPause();
     this.listeningStartedAt=Date.now();this.coordinator.buyerSpeech(false);this.options.onBuyerSpeech(false);this.syncBuyerPending();
   }
-  private dispatchRequest(snapshot:LiveContext,started:number):LiveReplyTicket|null {
+  private dispatchRequest(snapshot:LiveContext,started:number,dispatchStarted=performance.now(),preparationMs=0,queueWaitMs=0,continuedDrafts=0):LiveReplyTicket|null {
     const {id,requestedAt}=snapshot.coachingRequest!;
     this.restoreQuestions(snapshot,id);
     snapshot.unansweredBuyerQuestions=this.questionsFor(snapshot).slice(0,8);
-    this.requestSnapshots.clear();this.requestSnapshots.set(id,{context:snapshot,started});
+    this.requestSnapshots.clear();this.requestSnapshots.set(id,{context:snapshot,started,dispatchStarted,enqueuedAt:performance.now(),preparationMs,queueWaitMs,continuedDrafts});
     const focus=coachingRequestFocus(snapshot),text=focus.text;
     if(focus.turnId&&!snapshot.coachingRequest?.speechItemIds?.length)this.latencyClock.linkRequestSpeech(id,focus.turnId);
     this.options.onRequestTrace?.({event:'requested',requestId:id,suggestionId:`coaching-${id}`,at:requestedAt,attempt:0,focus,snapshot:{request:structuredClone(snapshot.coachingRequest!),turns:structuredClone(snapshot.turns),participant:deriveCallParticipant(snapshot.turns)}});
@@ -284,6 +285,7 @@ export class LiveCoachingSession {
   }
   private releaseQueuedRequest(reason:'ready'|'suggest_now'|'transcription_timeout'):LiveReplyTicket|null {
     const queued=this.queued;if(!queued||this.stopped)return null;
+    const dispatchStarted=performance.now(),queueWaitMs=queued.queueWaitMs+dispatchStarted-queued.queuedAt;
     if(queued.timer)clearTimeout(queued.timer);
     const latest=this.options.latestContext?.()||this.options.snapshot({id:queued.id,text:'',at:queued.requestedAt});
     const previous=queued.context;
@@ -300,7 +302,30 @@ export class LiveCoachingSession {
     this.queued=undefined;this.options.onQueuedRequest?.(null);
     this.options.onRequestTrace?.({event:'queue_released',requestId:queued.id,suggestionId:`coaching-${queued.id}`,at:releasedAt,attempt:0,reason,focus:coachingRequestFocus(context),snapshot:{request:structuredClone(context.coachingRequest!),turns:structuredClone(context.turns),participant:deriveCallParticipant(context.turns)}});
     if(reason==='transcription_timeout')this.options.onWarning('The last buyer words did not finish transcribing. The suggestion uses only the words available; check any missing details.');
-    return this.dispatchRequest(context,queued.started);
+    return this.dispatchRequest(context,queued.started,dispatchStarted,queued.preparationMs,queueWaitMs,queued.continuedDrafts);
+  }
+  /** A pause can segment one explanation before its final qualification. An
+   * existing click follows resumed isolated-buyer speech only while no wording
+   * has been published. This is continuation of the same intent, not a repair
+   * or another automatic coaching request. Mixed microphone audio cannot prove
+   * that the buyer (rather than the rep) resumed, so it cannot cancel wording. */
+  private followUnpublishedBuyerContinuation(id:string):void {
+    if(this.queued||!this.options.onAudioIssue||!id||this.historicalTranscriptIds?.has(id))return;
+    const work=[...this.works.values()].find(item=>this.current(item)&&!item.answered&&!item.published&&!item.lastDisplayedSay);
+    if(!work||!work.context.coachingRequest)return;
+    const request=work.context.coachingRequest,phase=work.phaseClock.snapshot();
+    const previousIds=request.speechItemIds||[];
+    const focus=coachingRequestFocus(work.context);
+    if(previousIds.includes(id)||focus.turnId===id)return;
+    const drafts=[...this.responses.values()].filter(item=>item.work===work);
+    const raw=drafts.at(-1)?.text||'',say=work.proposedSay||(raw?parseLiveDraft(raw,work.context)?.say:undefined);
+    work.superseded=true;work.verifier.invalidate();work.fallback?.abort();
+    if(work.timer)clearTimeout(work.timer);if(work.analysisTimer)clearTimeout(work.analysisTimer);
+    this.trace(work,'turn_continued',{rawText:raw||undefined,say,status:'unpublished_cancelled',reason:'The buyer resumed before any wording was published. Retain the original click and rebuild from the complete continued turn; this cancelled draft is not a verification repair.'});
+    this.coordinator.retireCurrent();this.options.onThinking(false);this.options.onChecking(false);
+    const context=structuredClone(work.context);
+    context.coachingRequest={...request,releasedAt:undefined,releaseReason:undefined,queuedForMs:undefined,speechItemIds:undefined,partials:[],pendingSpeech:[]};
+    this.queued={id:request.id,requestedAt:request.requestedAt,started:work.started,queuedAt:performance.now(),queueWaitMs:phase.queueWaitMs||0,preparationMs:phase.dispatchPreparationMs||0,continuedDrafts:(phase.continuedDrafts||0)+1,context,speechIds:new Set([...previousIds,...(focus.turnId?[focus.turnId]:[]),id]),partials:[],pending:[]};
   }
   suggestNow():LiveReplyTicket|null {return this.releaseQueuedRequest('suggest_now');}
   cancelQueuedRequest():boolean {
@@ -472,13 +497,13 @@ export class LiveCoachingSession {
         if(typeof event.audio_start_ms==="number")item.audioStart=event.audio_start_ms;
         if(this.incomplete?.timer)clearTimeout(this.incomplete.timer);
       }
-      this.coordinator.buyerSpeech(true);this.coordinator.buyerPending(this.pending.size>0);
+      this.coordinator.buyerSpeech(true);this.followUnpublishedBuyerContinuation(id);this.coordinator.buyerPending(this.pending.size>0);
       this.options.onBuyerPending([...this.pending]);this.options.onBuyerSpeech(true);this.observeSpeech();return;
     }
     if(event.type==="input_audio_buffer.speech_stopped") {
       if(this.queued)this.queued.stoppedAt=performance.now();
       if(id)this.transcriptTiming(id,{speechStoppedAt:Date.now()});
-      if(id)this.latencyClock.recordSpeechStopped(id,{audioEndMs:typeof event.audio_end_ms==='number'?event.audio_end_ms:undefined,vadSilenceMs:this.options.vadSilenceMs??300});
+      if(id)this.latencyClock.recordSpeechStopped(id,{audioEndMs:typeof event.audio_end_ms==='number'?event.audio_end_ms:undefined,vadSilenceMs:this.options.vadSilenceMs??buyerVadSilenceMs(this.options.onAudioIssue?"computer":"headset")});
       if(this.options.onAudioIssue&&id&&!this.finals.has(id)){
         const item=this.audioItem(id);
         item.speechMs=typeof event.audio_end_ms==="number"&&item.audioStart!==undefined?Math.max(0,event.audio_end_ms-item.audioStart):Date.now()-item.at;
@@ -729,9 +754,10 @@ export class LiveCoachingSession {
     const existing=this.works.get(ticket.revision);if(existing)return existing;
     const pinned=this.requestSnapshots.get(ticket.turn.id);
     if(!pinned)throw new Error('A coaching request requires its explicit context snapshot.');
-    const {context,started}=pinned;this.requestSnapshots.delete(ticket.turn.id);
+    const preparationStarted=performance.now(),{context,started}=pinned;this.requestSnapshots.delete(ticket.turn.id);
     const library=(context.companyConfiguration?configurationReferences(context.companyConfiguration.snapshot):this.options.knowledgeSources?.(context)||context.sources).map(source=>({...source}));
     const work:Work={phaseClock:new CoachingPhaseClock(started),ticket,context,library,id:`coaching-${ticket.turn.id}`,started,rescued:false,answered:false,ready:false,toolRounds:0,repairCount:0,repairPending:false,verifier:null as unknown as LiveVerification<Guidance>,purpose:!!context.coachingRequest||!!context.callContext,route:fastRouteFor({...context,sources:library}),checking:false,archived:false,superseded:false,analysisShown:false,metadataComplete:false};
+    work.phaseClock.prepared(pinned.preparationMs+pinned.enqueuedAt-pinned.dispatchStarted+performance.now()-preparationStarted,pinned.queueWaitMs,pinned.continuedDrafts,preparationStarted-pinned.enqueuedAt);
     work.verifier=new LiveVerification<Guidance>({verify:(say,signal)=>this.options.verify(work.context,this.quoteMetadata({...parseLiveDraft(`SAY: ${say}`,work.context)!,...(work.verificationGuidance?.say===say?work.verificationGuidance:{}),say,backup:"",evidence:[]},work),signal)});
     this.works.set(ticket.revision,work);return work;
   }

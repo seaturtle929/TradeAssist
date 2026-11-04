@@ -61,6 +61,24 @@ export function deduplicateOnDemandReferenceData<F extends object,S extends obje
   const fact=object(value),sourceIndex=sources.findIndex(item=>object(item)?.id===fact?.sourceId&&object(item)?.text===fact?.text);
   if(sourceIndex>=0)replace(fact,'text',object(sources[sourceIndex])?.text,`REQUEST SNAPSHOT.sources[${sourceIndex}].text`,`REQUEST SNAPSHOT.brain.facts[${index}]`);
  });
+ // A current-person action can be repeated in six derived planner fields.
+ // Keep the first complete action and reference it only after exact equality;
+ // never merge a different final-turn objective or any literal evidence.
+ const action=object(root.immediateAction),task=object(request.coachingTask),purpose=object(request.purpose),state=object(purpose?.conversationState);
+ if(action){
+  const target='SALES FOUNDATION.immediateAction';
+  replace(object(root.conversationContext),'currentObjective',action,target,'SALES FOUNDATION.conversationContext');
+  replace(task,'immediateAction',action,target,'REQUEST SNAPSHOT.coachingTask');
+  replace(purpose,'immediateAction',action,target,'REQUEST SNAPSHOT.purpose');
+  replace(state,'nextAction',action,target,'REQUEST SNAPSHOT.purpose.conversationState');
+  replace(state,'immediateObjective',action,target,'REQUEST SNAPSHOT.purpose.conversationState');
+ }
+ const objective=selected?.objective,target='ACTIVE MANAGER CONFIGURATION.configuration.selectedStage.objective';
+ replace(task,'managerObjective',objective,target,'REQUEST SNAPSHOT.coachingTask');
+ replace(object(request.callContext),'goal',objective,target,'REQUEST SNAPSHOT.callContext');
+ replace(state,'stagePurpose',objective,target,'REQUEST SNAPSHOT.purpose.conversationState');
+ replace(object(stage?.legacy),'purpose',objective,target,'SALES FOUNDATION.activeConfiguration.stage.legacy');
+ replace(object(curriculum?.relevantCycle),'objective',objective,target,'SALES FOUNDATION.builtInSalesExpertise.curriculum.relevantCycle');
  return projected;
 }
 

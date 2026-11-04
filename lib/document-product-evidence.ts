@@ -84,12 +84,28 @@ export function isBoundedEpistemicFactAction(text:string):boolean {
  // A closed courtesy prefix changes neither the action nor its uncertainty.
  // Preserve everything after it so attached factual/timing claims still fail.
  const line=text.trim().replace(/[’‘]/g,"'").replace(/^(?:(?:thanks|thank you)(?: for (?:asking|raising that|checking|clarifying|pointing that out))?|of course|understood|sure|okay|ok)\s*[,;:—–-]\s*/i,'');
- const investigation=/^(?:(?:I|we)(?:'ll|\s+(?:can|will|would|must))\s+|(?:I|we)\s+(?:need|have) to\s+|let (?:me|us)\s+)(?:(?:definitely|certainly|personally)\s+)?(?:(?:need|have) to\s+)?(?:(?:definitely|certainly|personally)\s+)?(?:check|double[- ]?check|verify|confirm|find out)\s+(?:whether|if)\b/i.test(line);
- const reservation=/^(?:I|we)\s+(?:(?:cannot|can't|do not|don't)\s+(?:confirm|verify|know|say)|(?:have not|haven't)\s+(?:confirmed|verified|established))\s+(?:whether|if)\b/i.test(line);
- if(!investigation&&!reservation)return false;
- const attachedAssertion=/\b(?:but|however)\b|\b(?:and|plus|also|yet)\s+(?:we|I|our|it|this|that|the (?:report|product|mesh|material))\b|\b(?:and|plus|also)\s+(?:send|ship|deliver|offer|provide|supply|give|arrange|promise|approve|discount|extend|show|prove|demonstrate)\b|\band\s+(?:confirm|verify)\s+that\s+(?:it|we|our|the)\b|\b(?:let (?:you|them|him|her) know|report back|follow up)\s+(?:that|because)\b|\bguarantee(?:s|d)?\b|:\s*[a-z]|[,;]\s*(?:which|that|we|I|our|it|this|the (?:report|product|mesh|material))\b/i;
+ const investigation=/^(?:(?:I|we)(?:'ll|\s+(?:can|will|would|must))\s+|(?:I|we)\s+(?:need|have) to\s+|let (?:me|us)\s+|(?:can|could|may|should|would)\s+(?:I|we)\s+)(?:(?:definitely|certainly|personally)\s+)?(?:(?:need|have) to\s+)?(?:(?:definitely|certainly|personally)\s+)?(?:check|double[- ]?check|verify|confirm|find out|look into)\s+/i.exec(line);
+ const reservation=/^(?:I|we)\s+(?:(?:cannot|can't|do not|don't)\s+(?:confirm|verify|know|say)|(?:have not|haven't)\s+(?:confirmed|verified|established))\s+/i.exec(line);
+ const prefix=investigation||reservation;if(!prefix)return false;
+ let subject=line.slice(prefix[0].length).replace(/[.!?]+$/,'').trim();
+ if(reservation)subject=subject.replace(/\s+yet$/i,'');
  const timing=/\b(?:soon|shortly|ASAP|quickly|in a bit|right away|promptly|immediately|tomorrow|today|within|by (?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday|\d)|in \d+ (?:hours?|days?))\b/i;
- return !attachedAssertion.test(line)&&!timing.test(line);
+ // A scope inquiry can contain arbitrary unknown content, but not an appended
+ // claim hidden behind a causal, relative, parenthetical or coordinate clause.
+ // Ambiguity stays on the normal verification path rather than being guessed.
+ if(timing.test(subject)||/[,;:—–()[\]"“”]|[.!?]\s+\S|\b(?:but|however|because|since|although|though|therefore|thus|nevertheless|despite|yet|guarantee(?:s|d)?)\b|\bso\s+(?:you|we|it|this|that|the)\b/i.test(subject))return false;
+ const next=subject.search(/\s+\b(?:and|plus|also)\b\s+/i);
+ if(next>=0){
+  const tail=subject.slice(next).trim();
+  // Follow-through may report the result; it cannot predetermine the answer,
+  // authorize a concession, promise shipment or attach an unagreed deadline.
+  if(!/^and\s+(?:(?:get back to (?:you|them)|let (?:you|them|him|her) know|report back|follow up)(?:\s+with\s+(?:that|the)\s+(?:confirmation|result|details|answer))?|confirm(?:\s+(?:that|it)(?: for you)?)?)(?:\s+before\s+(?:(?:sending|emailing)\s+(?:it|them|anything|the documents)|(?:I|we)\s+(?:send|email)\s+(?:it|them|anything|the documents)))?$/i.test(tail))return false;
+  subject=subject.slice(0,next).trim();
+ }
+ if(/^(?:whether|if|which|what)\b\s+\S/i.test(subject))return !/\b(?:which|that)\s+(?:proves?|guarantees?|certifies?|ensures?|demonstrates?)\b/i.test(subject);
+ // These nominal objects ask about an unresolved property. A qualified noun
+ // such as “the PX20 report” would instead presuppose a product/report link.
+ return !!investigation&&/^(?:(?:the|that|this|its|our|your)\s+)?(?:(?:(?:material test|inspection|test)\s+)?report(?:'s)?\s+)?(?:scope|coverage|availability)(?:\s+before\s+(?:(?:sending|emailing)\s+(?:it|them|anything|the documents)|(?:I|we)\s+(?:send|email)\s+(?:it|them|anything|the documents)))?$/i.test(subject);
 }
 
 /** Return a hard veto for absent linkage. A present relationship remains a

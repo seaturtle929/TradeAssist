@@ -1,7 +1,11 @@
 /** Durations use one monotonic clock per process. Provider fields include
  * transport/queue time; they are not claims about the provider's internal CPU. */
 export type CoachingPhaseTiming={
- preparationMs?:number; providerFirstDeltaMs?:number; providerWordingMs?:number; providerCompleteMs?:number;
+ /** Legacy click-to-provider time includes queueing. */
+ preparationMs?:number;
+ /** CPU work before dispatch, separately from listening/transcription wait. */
+ dispatchPreparationMs?:number; queueWaitMs?:number; providerSlotWaitMs?:number; continuedDrafts?:number;
+ providerFirstDeltaMs?:number; providerWordingMs?:number; providerCompleteMs?:number;
  validationMs?:number; verificationDurationMs?:number; repairMs?:number; repairCount:number;
  firstUsableMs?:number; stableSuggestionMs?:number; requestCharacters?:number;
 };
@@ -15,10 +19,11 @@ export function isUsableCoachingWording(say:string,complete=false):boolean {
 }
 export class CoachingPhaseClock {
  readonly phases:CoachingPhaseTiming={repairCount:0,validationMs:0};
- private providerAt?:number;private verificationAt?:number;private repairAt?:number;
+ private dispatchAt?:number;private providerAt?:number;private verificationAt?:number;private repairAt?:number;
  readonly startedAt:number;private readonly now:()=>number;
  constructor(startedAt=performance.now(),now=()=>performance.now()){this.startedAt=startedAt;this.now=now;}
- providerStarted(characters:number){this.providerAt??=this.now();this.phases.preparationMs??=this.providerAt-this.startedAt;this.phases.requestCharacters=characters;}
+ prepared(preparationMs:number,queueWaitMs:number,continuedDrafts:number,providerSlotWaitMs=0){this.dispatchAt=this.now();this.phases.dispatchPreparationMs=Math.max(0,preparationMs);this.phases.queueWaitMs=Math.max(0,queueWaitMs);this.phases.providerSlotWaitMs=Math.max(0,providerSlotWaitMs);this.phases.continuedDrafts=continuedDrafts;}
+ providerStarted(characters:number){const now=this.now();if(this.providerAt===undefined&&this.dispatchAt!==undefined)this.phases.dispatchPreparationMs=(this.phases.dispatchPreparationMs||0)+now-this.dispatchAt;this.providerAt??=now;this.phases.preparationMs??=this.providerAt-this.startedAt;this.phases.requestCharacters=characters;}
  firstDelta(){if(this.providerAt!==undefined)this.phases.providerFirstDeltaMs??=this.now()-this.providerAt;}
  wordingComplete(){if(this.providerAt!==undefined)this.phases.providerWordingMs=this.now()-this.providerAt;}
  providerComplete(){if(this.providerAt!==undefined)this.phases.providerCompleteMs=this.now()-this.providerAt;}
