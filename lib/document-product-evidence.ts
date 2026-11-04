@@ -105,7 +105,10 @@ export function assessDocumentProductCoverage(clause:string,context:Context,sour
  if(/^(?:does|do|is|are|can|could|would|will|which|what|how|whether)\b/i.test(line)&&/\?\s*$/.test(line)&&! /\b(?:our|the)\s+[a-z]+\d+[^?]{0,30}\b(?:reports?|sheets?|certificates?)\b/i.test(line))return;
  const ownDocuments=documents(line),buyerDocuments=documents(buyer);
  const assent=asked&&/^\s*(?:yes|correct|exactly|absolutely|certainly|sure|it does|that does|we do)\b/i.test(line);
- const documentPronoun=asked&&!ownDocuments.length&&/^\s*(?:it|this|that)\b/i.test(line)&&relationWords(line);
+ // “I'll confirm it covers ...” asserts a positive answer, unlike the
+ // bounded “confirm whether ...” action handled above. The current question
+ // supplies its document referent, never the missing coverage relationship.
+ const documentPronoun=asked&&!ownDocuments.length&&/^\s*(?:(?:I|we)(?:'ll|\s+(?:will|can|would))\s+(?:confirm|verify)\s+(?:that\s+)?)?(?:it|this|that)\b/i.test(line)&&relationWords(line);
  const explicitRelation=!!ownDocuments.length&&(relationWords(line)||/\b(?:report|sheet|certificate)\b.{0,65}\b(?:for|of)\s+(?:(?:our|your|that|this|the|exact)\s+)*(?:product|grade|mesh|material)\b/i.test(line));
  const qualified=ownDocuments.some(document=>scopes(line).some(scope=>linked(line,document,scope)));
  // Follow a document subject with a product-specific predicate even when its
