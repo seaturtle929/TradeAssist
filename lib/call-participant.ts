@@ -27,6 +27,9 @@ type GateContext={turns?:ParticipantTurn[];callType?:unknown;callContext?:unknow
 const normalize=(value:string)=>value.replace(/[’‘]/g,"'").replace(/\s+/g," ").trim();
 const purchasing=/\b(?:purchasing|procurement|buying|buyer)\b/i;
 const transfer=/\b(?:I(?:'ll| will| can| am going to|'m going to)?|let me|we(?:'ll| will| can)?|one moment[, ]+I(?:'ll| will))\b.{0,35}\b(?:transfer you|put(?:ting)? you (?:straight )?through|connect you|pass you (?:over|through|to)|hand you (?:over|to))\b|\b(?:I'm|I am) (?:transferring|connecting) you\b/i;
+// A brief routing hold is not a completed transfer. ASR may nevertheless put
+// that hold and the next person's explicit identity in a single audio item.
+const transferHold=/^(?:(?:yes|yeah|sure|okay|ok|certainly|of course)[,.! ]+)*(?:(?:just |please )?one (?:moment|second)(?:[, ]+please)?|please hold|(?:please )?hold (?:on|the line))\b/i;
 const deniedTransfer=/\b(?:can't|cannot|won't|will not|don't|do not|unable to|not able to)\b.{0,25}\b(?:transfer|connect|put you|pass you)\b/i;
 const notPurchasing=/\bI (?:don't|do not|no longer) (?:handle|manage|oversee|do|look after|take care of)\b[^,;.!?]{0,25}\b(?:purchasing|procurement|buying)\b|\b(?:I'm|I am) not (?:the |a |our )?(?:buyer|purchasing manager|procurement manager)\b|\b(?:I'm|I am) not (?:responsible for|in charge of|in|from|with|the right person for)\b[^,;.!?]{0,25}\b(?:purchasing|procurement|buying)\b/i;
 const excludingPurchasing=/\bI (?:handle|manage|oversee|do|look after|take care of)\b[^.!?]{0,80}\b(?:not|except|rather than)\s+(?:the )?(?:purchasing|procurement|buying)\b/i;
@@ -47,7 +50,7 @@ const excludedNames=new Set(["a","an","the","not","just","calling","sorry","afra
 function speakerName(line:string):string|undefined {
   const prefix=identityPrefix.exec(line);
   let tail=prefix?line.slice(prefix[0].length):undefined;
-  if(!tail){const speaking=line.match(/(?:^|[,;:])\s*([a-z][a-z'-]*(?:\s+[a-z][a-z'-]*)?)\s+(?:speaking|here)\b/i);tail=speaking?.[1];}
+  if(!tail){const speaking=line.replace(greeting,'').replace(/^[,.!\s]+/,'').match(/(?:^|[,;:])\s*([a-z][a-z'-]*(?:\s+[a-z][a-z'-]*)?)\s+(?:speaking|here)\b/i);tail=speaking?.[1];}
   if(!tail)return;
   // A generic "I'm ready" or "This is urgent" is not a definite new identity.
   // Without a pickup/identity suffix, require the capitalization of an actual name.
@@ -65,12 +68,16 @@ function speakerName(line:string):string|undefined {
  * Preserve its real ID while applying those explicit events chronologically. */
 function participantEvents(turn:ParticipantTurn):ParticipantTurn[]{
   if(turn.role!=='buyer')return [turn];
-  const line=normalize(turn.text),action=transfer.exec(line);
+  const line=normalize(turn.text),action=transfer.exec(line)||transferHold.exec(line);
   if(!action||deniedTransfer.test(action[0]))return [turn];
   const after=action.index+action[0].length;
   const pickup=/(?:^|[.!?;,]\s*|\s+)(?:(?:hello|hi|hey|good morning|good afternoon)[,!. ]+)?(?:(?:this is|it's|it is|my name is|I'm|I am)\s+[A-Z][a-z'-]*(?:\s+[A-Z][a-z'-]*)?|[A-Z][a-z'-]*(?:\s+[A-Z][a-z'-]*)?\s+(?:speaking|here))\b/gi;
   for(const match of line.slice(after).matchAll(pickup)){
     const start=after+(match.index||0),candidate=line.slice(start).replace(/^[.!?;,\s]+/,'');
+    // A quoted/reported/anticipated identity is still reception talking.
+    // Searching an ASR item for a name must not turn "she said ..." into pickup.
+    const intervening=line.slice(after,start);
+    if(/["“”]|\b(?:said|says|told|tell|asks?|asked|hear|heard|will|would|should|might|may)\b/i.test(intervening))continue;
     if(!speakerName(candidate))continue;
     const prefix=line.slice(0,start).trim();
     if(!prefix)continue;
@@ -96,9 +103,15 @@ export function isParticipantIntroduction(value:string):boolean {
   if(!line||(line.match(/\S+/g)?.length||0)>30||continuingTransfer.test(line))return false;
   if(/\b(?:needs?|uses?|using|sends?|sending|email|e-mail|profiles?|brochures?|catalog(?:ue)?s?|specs?|specifications?|purity|prices?|pricing|quotes?|quotations?|MOQ|inventory|stock|certif\w*|quantit(?:y|ies)|volumes?|tons?|tonnes?|kg|busy)\b|\b(?:minimum order|lead time|not interested|call (?:me |us )?back|stop calling|don't call|do not call|cannot share|can't share|not (?:a )?good time|no thanks|no thank you|please hold|one moment|already have|current supplier|have a supplier)\b/i.test(line))return false;
   if(notPurchasing.test(line)||excludingPurchasing.test(line)||genericRouting.test(line)||wrongNumber.test(line))return false;
-  if(isSimpleBuyerGreeting(line))return true;
+  if(isSimpleBuyerGreeting(line)||identityPrefix.test(line)&&!!speakerName(line)&&isSimpleBuyerGreeting(line.replace(/\b(?:I'm|I am)\s+/i,'this is ')))return true;
   if(line.includes("?")||/\b(?:what|which|when|where|why|how|can you|could you|would you|will you|do you|tell me|give me|explain|clarify|request)\b|\b(?:can't|cannot|unable to) (?:talk|help|speak)\b/i.test(line))return false;
   return positivePurchasing.test(line)||namedPurchasing.test(line)||departmentPurchasing.test(line)||reception.test(line);
+}
+
+/** The completed pickup suffix retains its original ASR item ID. Consumers
+ * must inspect that suffix rather than rejecting the item's routing prefix. */
+export function isCurrentParticipantIntroduction(latest:Pick<ParticipantTurn,'id'|'text'>,participant:CallParticipant):boolean {
+  return isParticipantIntroduction(latest.text)||participant.afterTransfer&&participant.segmentStartTurnId===latest.id&&participant.transfer?.status==='completed'&&isParticipantIntroduction(participant.transfer.evidence.quote);
 }
 
 const actualIntro=(line:string)=>{
@@ -123,8 +136,9 @@ export function deriveCallParticipant(turns:ParticipantTurn[]=[],seed?:CallParti
       result.roleRequestPending=roleRequest(line)&&!roleQuestion(line);result.roleQuestionPending=roleQuestion(line)||result.roleRequestPending;continue;
     }
     if(turn.role!=="buyer")continue;
-    const turnId=turn.id||`buyer-${index}`,name=speakerName(line);
-    const hasTransfer=transfer.test(line)&&!deniedTransfer.test(line);
+    const turnId=turn.id||`buyer-${index}`,name=transferHold.test(line)?undefined:speakerName(line);
+    const routingHold=transferHold.test(line)&&(result.transferPending||result.role==='routing'||result.roleRequestPending||result.role==='unknown'&&!knownName);
+    const hasTransfer=(transfer.test(line)||routingHold)&&!deniedTransfer.test(line);
     const sameName=!!name&&!!knownName&&(name===knownName||name.startsWith(knownName+" ")||knownName.startsWith(name+" "));
     const differentSpeaker=!!name&&!!knownName&&!sameName;
     const definiteIdentity=!!name||positivePurchasing.test(line)||namedPurchasing.test(line)||departmentPurchasing.test(line);
