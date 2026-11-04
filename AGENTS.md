@@ -8,6 +8,7 @@
 
 ## Keep agent QA out of the user's workspace
 
+- Start investigations by reading the open coaching diagnostics without reloading, then use a disposable test copy. Reuse available traces/exports; if a trace is inaccessible, label reconstructed inputs explicitly. Do not make a full backup export a routine prerequisite for a fix. Ask for one only before a specific operation that could risk saved calls or an unfinished draft, explaining the operation, missing protection/data, and smallest action needed. Preserve the open draft while investigating.
 - Never run synthetic QA conversations in the user's normal TradeAssist browser origin/profile. This includes manual text tests, feedback-button tests, call-saving tests, and live-call event tests.
 - Use deterministic in-memory fixtures first. Browser QA must use a separate browser profile or a separate local port with its own empty browser storage and fictional company fixtures. A new tab on the same origin is not isolated.
 - Do not import the user's call history, unfinished draft, Company Brain learning, buyer memory, or speaking-style examples into a QA workspace. Use the minimum approved company reference facts needed for a particular test.

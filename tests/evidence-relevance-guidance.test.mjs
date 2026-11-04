@@ -19,7 +19,7 @@ const make=turns=>({manufacturer:company,turns,callContext:{stageId:stage.id,goa
 test('Named pickup generation and its existing validator agree on a broad introduction',()=>{
  const context=make([buyer('Hello, Priya speaking.')]),original=JSON.stringify(context),rules=onDemandDecisionRules(context);
  assert.match(rules,/ACTUAL PICKUP/);
- assert.match(rules,/do not list model codes, grades or numeric specifications unless this pickup itself asks a technical question/i);
+ assert.match(rules,/do not list model codes, grades or numeric specifications in this greeting-only move/i);
  assert.match(rules,/never invent an email inquiry or prior conversation/i);
  assert.match(rules,/one or two short sentences for identity plus the supplied purpose or call agreement, then stop or offer a broad nontechnical invitation/i);
  assert.match(rules,/Do not ask about application, specifications, requirements, evaluation criteria, priorities, important factors or current supplier yet/i);
