@@ -1,6 +1,6 @@
 import {reviewedClientStateFacts,reviewedClientNeedSeed} from './client-coaching-context.ts';
 import {fieldEvidence,emailEvidenceFor,currentContactEmailEvidence,type BuyerFactTurn} from "./buyer-facts.ts";
-import {deriveCallParticipant,isParticipantIntroduction,preparedPurchasingParticipant,type CallParticipant} from "./call-participant.ts";
+import {deriveCallParticipant,isParticipantIntroduction,isCurrentParticipantIntroduction,preparedPurchasingParticipant,type CallParticipant} from "./call-participant.ts";
 import {deriveBuyerNeeds,type BuyerNeeds} from './buyer-needs.ts';
 import {isCompanyChoiceQuestion,substantiveBuyerQuestions} from './buyer-turn-intent.ts';
 import {hasClearConversationRefusal} from './conversation-boundary.ts';
@@ -161,7 +161,13 @@ export function buyerMomentFor(line:string,openingAllowed=true):string {
 export function deriveConversationState(input:StateInput):ConversationState {
   const memory=currentCallMemory(input.callId,input.buyerMemory);
   const turns=(input.turns||[]).filter(turn=>!(turn as {transcriptionUncertainty?:unknown}).transcriptionUncertainty),context=input.callContext||{},map=input.stageMap||[],facts:Record<string,StateFact>={...reviewedClientStateFacts(input),...Object.fromEntries(Object.entries(memory?.facts||{}).filter(([,fact])=>fact.value.trim()).map(([key,fact])=>[key,{...fact,source:"memory" as const}]))};
-  let participant=preparedPurchasingParticipant(deriveCallParticipant(memory?.participant?turns.filter(turn=>!turn.id||!memory.processedTurnIds?.includes(turn.id)):turns,memory?.participant),context.knownFacts,context.doNotGuess);
+  // The cached participant is a summary, never stronger evidence than the
+  // complete spoken history that produced it. Rebuild when that history is
+  // present (including revised ASR items); seed only genuinely truncated windows.
+  const turnIds=new Set(turns.flatMap(turn=>turn.id?[turn.id]:[]));
+  const hasParticipantHistory=!!memory?.participant&&!!memory.processedTurnIds?.length&&memory.processedTurnIds.every(id=>turnIds.has(id));
+  const participantSeed=hasParticipantHistory?undefined:memory?.participant;
+  let participant=preparedPurchasingParticipant(deriveCallParticipant(participantSeed?turns.filter(turn=>!turn.id||!memory?.processedTurnIds?.includes(turn.id)):turns,participantSeed),context.knownFacts,context.doNotGuess);
   if(participant.role==='unknown'&&!participant.afterTransfer&&facts.right_person)participant={...participant,role:'purchasing',evidence:{turnId:facts.right_person.turnId,quote:facts.right_person.quote}};
   if(participant.role==='routing'&&facts.right_person?.turnId.startsWith('client-'))delete facts.right_person;
   if(participant.afterTransfer||participant.role==='routing'){const clientFacts=reviewedClientStateFacts({...input,clientContext:input.clientContext?{...input.clientContext,contactId:undefined,contact:undefined,entries:input.clientContext.entries.filter(entry=>entry.scope==='client'),history:input.clientContext.history.filter(call=>!call.contactId)}:undefined,contactId:undefined});for(const [key,fact] of Object.entries(facts))if(fact.turnId.startsWith('client-')&&!clientFacts[key])delete facts[key];}
@@ -261,7 +267,8 @@ export function deriveConversationState(input:StateInput):ConversationState {
   const reviewStage=map.find(stage=>/spec|review|qualif/i.test(stage.id+" "+stage.name));
   const advanceStage=!input.companyConfiguration&&advanced&&reviewStage&&map.indexOf(configured)<map.indexOf(reviewStage)?reviewStage:configured;
   const latest=[...turns].reverse().find(turn=>turn.role!=="you")?.text||"";
-  const introduceContact=participant.afterTransfer&&participant.introductionNeeded&&!participant.transferPending&&isParticipantIntroduction(latest);
+  const currentBuyer=turns.findLast(turn=>turn.role!=='you');
+  const introduceContact=participant.afterTransfer&&participant.introductionNeeded&&!participant.transferPending&&!!currentBuyer&&isCurrentParticipantIntroduction(currentBuyer,participant);
   const segmentIndex=turns.findIndex((turn,index)=>(turn.id||`buyer-${index}`)===participant.segmentStartTurnId),segment=segmentIndex>=0?turns.slice(segmentIndex):turns;
   if(participant.afterTransfer&&!participant.handoffPlanAccepted){
     participant.handoffPlanAccepted=segment.some((turn,index)=>{

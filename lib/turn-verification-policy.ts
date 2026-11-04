@@ -3,6 +3,7 @@ import {clientContextSuggestionProblems,clientContextSafeReply,reviewedClientCon
 import { hasClearConversationRefusal } from './conversation-boundary.ts';
 import {applyCoachingConfiguration,configurationSuggestionProblems,configurationAuthorizesAction,configuredSafeReply} from './coaching-configuration.ts';
 import {literalSpecificationEvidence,specificationNumberEvidence} from './scoped-specification-evidence.ts';
+import {assessDocumentProductCoverage,isBoundedEpistemicFactAction,requestsDocumentProductCoverage} from './document-product-evidence.ts';
 export type BuyerTurnKind = 'fact_request' | 'sales_move' | 'confirmation';
 export type VerificationPolicyContext = {
   coachingRequest?:{id:string;requestedAt:number};
@@ -34,6 +35,9 @@ export type ReplyFactClaim = {
   /** Lexical mismatch is uncertainty, not evidence of fabrication. */
   pending?: boolean;
   candidateSourceIds?: string[];
+  /** An absent required source relationship cannot be overturned by a remote
+   * verifier that matches a related product or document instead. */
+  verificationBoundary?:'document_product_scope';
   reason: string;
   sourceId?: string;
 };
@@ -122,6 +126,7 @@ export function classifyBuyerTurn(context: VerificationPolicyContext): BuyerTurn
   const reusableProductIdentities = offeredProductIdentities(context);
   const remaining = withoutDocumentRequests(buyerText).replace(EMAIL, '');
   let factTopics = FACT_TOPICS.filter(([, pattern]) => sentences(remaining).some(part => requestsFact(part.text, pattern))).map(([topic]) => topic);
+  if(requestsDocumentProductCoverage(buyerText))factTopics.push('document_coverage');
   const laterPrices = /\b(?:then|after|later|get\s+back|come\s+back)\b.{0,80}\b(?:prices?|pricing|quote)\b/i.test(remaining) && !/\?|\b(?:now|today|give\s+me|what\s+(?:is|are))\b/i.test(remaining);
   if (laterPrices) factTopics = factTopics.filter(topic => topic !== 'price');
   if (factTopics.length) return { kind: 'fact_request', buyerText, factTopics, reusableProductIdentities, reason: 'The buyer requests a concrete supplier/product fact; this takes precedence over any acknowledgement or handoff in the same turn.' };
@@ -228,16 +233,14 @@ function supplierApplicationClaim(clause:string):boolean {
 /** A promise to find out whether a fact is true does not assert that it is.
  * Keep the uncertainty marker mandatory and reject an attached positive claim. */
 function unresolvedFactCheck(clause:string):boolean {
- const line=clause.replace(/[’‘]/g,"'");
- return /^\s*(?:I|we)(?:(?:'ll|\s+(?:can|will|would|must))\s+(?:(?:need|have) to\s+)?|\s+(?:need|have) to\s+)(?:check|confirm|verify|find out)\s+(?:whether|if)\b/i.test(line)
-  && !/\b(?:but|however|yet)\b|\b(?:and|plus|also)\s+(?:we|I|our|it|the (?:product|mesh))\b|\bguarantee(?:s|d)?\b|:\s*[a-z]|,\s*(?:which|that|we|I|our|it|the (?:product|mesh))\b/i.test(line);
+ return isBoundedEpistemicFactAction(clause);
 }
 /** A whole-reply fast path must account for every clause, including a predicate
  * an older lexical detector may not recognize. Unrecognized tails keep the
  * ordinary verification path rather than inheriting the uncertainty exemption. */
 export function isBoundedFactCheckReply(say:string,claims:ReplyFactClaim[]):boolean {
  const parts=replyClauses(say);
- const neutral=(text:string)=>/^\s*(?:(?:once|after|when|if)\s+(?:I|we)\s+(?:(?:verify|confirm) (?:that|its availability|it is available)|know for sure)|(?:I|we)(?:['’]ll| will)\s+(?:follow up(?: and let you know)?|let you know|report back))[,.!]?\s*$/i.test(text);
+ const neutral=(text:string)=>/^\s*(?:(?:thanks|thank you)(?: for (?:asking|raising that|checking|clarifying|pointing that out))?|of course|understood|sure|okay|ok|(?:once|after|when|if)\s+(?:I|we)\s+(?:(?:verify|confirm) (?:that|its availability|it is available)|know for sure)|(?:I|we)(?:['’]ll| will)\s+(?:follow up(?: and let you know)?|let you know|report back))[,.!]?\s*$/i.test(text);
  return parts.some(part=>unresolvedFactCheck(part.text))&&parts.every(part=>unresolvedFactCheck(part.text)||neutral(part.text)||claims.some(claim=>claim.start===part.start&&claim.text===part.text&&claim.supported&&claim.kind==='supplier_claim'&&claim.reason===AVAILABLE_DOCUMENT_ACTION));
 }
 function concreteSupplierAssertion(clause: string): boolean {
@@ -360,9 +363,11 @@ function paraphraseCandidates(clause:string,evidence:Evidence[],context:Verifica
 /** Offering to explain an actual technical method, or provide a specifically
  * qualified artifact, asserts that support exists even without a number.
  * Ordinary profile/spec sends and questions about needs are not such claims. */
-function technicalSupportAssertion(clause:string,context:VerificationPolicyContext,evidence:Evidence[]):Pick<ReplyFactClaim,'supported'|'pending'|'candidateSourceIds'|'reason'|'sourceId'>|undefined {
- if(!context.coachingRequest)return;
+function technicalSupportAssertion(clause:string,context:VerificationPolicyContext,evidence:Evidence[]):Pick<ReplyFactClaim,'supported'|'pending'|'candidateSourceIds'|'reason'|'sourceId'|'verificationBoundary'>|undefined {
  if(unresolvedFactCheck(clause))return;
+ const coverage=assessDocumentProductCoverage(clause,context,evidence);
+ if(coverage)return coverage;
+ if(!context.coachingRequest)return;
  // A person's optional review of an existing document is not a predicate
  // about a product ("They can resist..."). Check document existence only,
  // with a closed grammar so content/performance qualifiers still fall through.
@@ -412,6 +417,12 @@ function technicalSupportAssertion(clause:string,context:VerificationPolicyConte
  * deliberately outside this guard. */
 function affirmativeProductAssertion(clause:string,context:VerificationPolicyContext):boolean {
  const text=clause.trim().replace(/^(?:and|but|since|because)\s+/i,'');
+ // "This is Morgan with [supplied company]" identifies the caller, not a
+ // technical property of a product named "This". The separate rep-identity
+ // guard still requires the actual name; an appended predicate cannot fit
+ // this closed introduction form and retains the normal factual checks.
+ const introduction=text.match(/^[Tt]his is\s+([A-Z][a-zA-Z'-]*(?:\s+[A-Z][a-zA-Z'-]*){0,2})\s+(?:with|from)\s+(.+?)[.!]?$/);
+ if(introduction&&context.manufacturer?.name&&!/\b(?:a|an|the)\b/i.test(introduction[1])&&introduction[2].replace(/[.!]$/,'').trim().toLowerCase()===context.manufacturer.name.replace(/[.!]$/,'').trim().toLowerCase())return false;
  if(!/\b(?:our|we)\b/i.test(text)&&(context.turns||[]).some(turn=>turn.role==='buyer'&&normalize(turn.text).includes(normalize(text))))return false;
  if(/^(?:what|which|how|whether|do|does|is|are|can|could|would|will|have|has)\b/i.test(text))return false;
  if(/^\b(?:you|your (?:engineer|team))\s+can\b/i.test(text)&&/\b(?:open|operate|clean|install|assemble|remove|replace|access|connect)\b/i.test(text))return true;
@@ -446,6 +457,24 @@ function buyerNumberInClarifyingQuestion(number:string,clause:string,context:Ver
  const prepared=reviewedClientContext(context)?.entries.filter(entry=>!entry.needsReview&&['buyer','rep_update'].includes(entry.source)&&['fact','background','update'].includes(entry.kind)&&entry.status==='current').map(entry=>entry.text)||[];
  const key=numeric(number),buyer=numeric([...(context.turns||[]).filter(turn=>turn.role==='buyer'||turn.role==='customer').map(turn=>turn.text),...prepared].join(' '));
  return new RegExp('(?:^|[^0-9.])'+key.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'(?=$|[^0-9.])').test(buyer);
+}
+
+/** Inside a bounded promise to investigate report coverage, repeating the
+ * buyer's value + property names the requirement to check, not a supplier
+ * specification. A new value, changed unit/property or affirmative tail keeps
+ * all normal factual checks. */
+function buyerNumberInDocumentScopeCheck(number:string,clause:string,context:VerificationPolicyContext):boolean {
+ if(!unresolvedFactCheck(clause)||!requestsDocumentProductCoverage(latestBuyerText(context))||! /\b(?:covers?|match(?:es)?|appl(?:y|ies)|pertain(?:s)?|relat(?:es)?)\b/i.test(clause))return false;
+ // Do not let this local exemption hide a second commercial action attached
+ // to the investigation. It only removes reference numbers from the check.
+ if(/\b(?:and|plus|also)\s+(?:send|ship|deliver|offer|provide|supply|give|arrange|promise|approve|discount|extend)\b/i.test(clause))return false;
+ const value=number.match(/^\s*(\d+(?:[.,]\d+)*)/)?.[1];if(!value)return false;
+ const property=(text:string)=>[...text.matchAll(new RegExp('(?:^|[^a-z0-9.])('+value.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+')(?![0-9.])','gi'))].flatMap(match=>{
+  const tail=text.slice((match.index||0)+match[0].length),unit=tail.match(/^\s*(%|mesh\b|stainless\b|mm\b|millimet(?:er|re)s?\b|microns?\b|μm\b|um\b|inches?\b|kg\b|kilograms?\b|psi\b|bar\b)/i)?.[1];
+  return unit?[normalize(value)+' '+normalize(unit)]:[];
+ });
+ const requested=new Set(property(latestBuyerText(context)));
+ return property(clause).some(key=>requested.has(key));
 }
 
 /** A conditional concession is still an offered company action. General sales
@@ -545,7 +574,7 @@ export function assessReplyVerification(say: string, context: VerificationPolicy
   const classification = classifyBuyerTurn(context);
   const evidence = evidenceFor(context);
   const claims: ReplyFactClaim[] = [];
-  const add = (text: string, start: number, kind: ReplyFactClaim['kind'], support: Pick<ReplyFactClaim,'supported'|'pending'|'candidateSourceIds'|'reason'|'sourceId'>) => {
+  const add = (text: string, start: number, kind: ReplyFactClaim['kind'], support: Pick<ReplyFactClaim,'supported'|'pending'|'candidateSourceIds'|'reason'|'sourceId'|'verificationBoundary'>) => {
     const existing=claims.findIndex(claim=>claim.start===start&&claim.kind===kind);
     if(existing<0)claims.push({ text, start, end: start + text.length, kind, ...support });
     // An authorization/context conflict must override a lexical match or a
@@ -576,6 +605,12 @@ export function assessReplyVerification(say: string, context: VerificationPolicy
     const source=safeSupplierEvidence(sentence.text,evidence,context);
     add(sentence.text,sentence.start,'supplier_claim',source?{supported:true,sourceId:source.id,reason:'The complete appended supplier predicate is supported by Company Knowledge.'}:{supported:false,reason:'An appended positive supplier claim is not established by an earlier promise to check a different fact. Keep the uncertainty action and remove or independently support the added claim.'});
   }
+  // Preserve a fronted qualifier ("For PX20, we have a test report") before
+  // splitting its comma into separate clauses and losing the product scope.
+  for(const sentence of sentences(say)){
+    const coverage=assessDocumentProductCoverage(sentence.text,context,evidence);
+    if(coverage?.verificationBoundary)add(sentence.text,sentence.start,'supplier_claim',coverage);
+  }
   for (const part of replyClauses(say)) {
     const text = part.text;
     const technicalSupport=technicalSupportAssertion(text,context,evidence);
@@ -594,6 +629,7 @@ export function assessReplyVerification(say: string, context: VerificationPolicy
       if (number[0].trim() === '100%' && /\b(?:yeah|yes|okay|ok|absolutely)[,.\s]+100%/i.test(text)) continue;
       if(declinesNumericCommitment(text))continue;
       if(buyerNumberInClarifyingQuestion(number[0],text,context))continue;
+      if(buyerNumberInDocumentScopeCheck(number[0],text,context))continue;
       // In “check whether we have the ISO 9001 certificate”, 9001 names the
       // buyer's requested standard; it is not a claimed certification/quantity.
       // Only that literal identifier is exempt, never another number in the line.

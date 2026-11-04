@@ -72,6 +72,8 @@ export async function coachResponse(request: Request):Promise<Response> {
     }
     const rawSay=cleanSpokenReply(data.say || '',input);
     const turnAssessment=assessReplyVerification(rawSay,input);
+    const unsupportedCoverage=turnAssessment.unsupportedClaims.filter(claim=>claim.verificationBoundary==='document_product_scope');
+    if(unsupportedCoverage.length)throw new AppError(unsupportedCoverage.map(claim=>claim.reason).join(' '),502,'suggestion_rejected');
     const unsupportedTechnical=input.coachingRequest?turnAssessment.unsupportedClaims.filter(claim=>claim.reason.startsWith('This technical method')):[];
     if(unsupportedTechnical.length)throw new AppError('The proposed technical explanation or support artifact is not documented. Repair the next move around the actual requirement and evidence needed; do not claim to explain an unknown mechanism.',502,'suggestion_rejected');
     const immediateMove=turnAssessment.classification.kind!=='fact_request';
