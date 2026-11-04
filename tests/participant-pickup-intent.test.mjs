@@ -6,6 +6,11 @@ import {callRouteAtRequest} from '../lib/call-route.ts';
 import {onDemandDecisionRules,onDemandSuggestionProblems,onDemandTaskContext} from '../lib/on-demand-coaching.ts';
 import {assessReplyVerification} from '../lib/turn-verification-policy.ts';
 import {BrainRequestInput} from '../lib/company-brain-input.ts';
+import {getPurposeContext} from '../lib/call-purpose.ts';
+import {projectOnDemandImmediateAction} from '../lib/on-demand-projection.ts';
+import {foundationLayerFor} from '../lib/generation-foundation.ts';
+import {defaultConfigurationStages} from '../lib/sales-curriculum.ts';
+import {applyCoachingConfiguration} from '../lib/coaching-configuration.ts';
 
 // Deliberately fictional identities, approved knowledge and conversation.
 // No saved calls or private company/customer material are used here.
@@ -121,4 +126,48 @@ test('Missing reviewed commitments do not manufacture a document follow-up or pe
  assert.doesNotMatch(rules,/reviewedFollowThrough":\{/);
  assert.deepEqual(onDemandSuggestionProblems("Hi Noor, I'm calling from Example Instruments about the laboratory instruments call you agreed to.",request),[]);
  assert.ok(onDemandSuggestionProblems("Hi Noor, this is Lin from Example Instruments.",request).some(reason=>/No verified salesperson name/.test(reason)));
+});
+
+test('Greeting-only pickup aligns immediate action, flow, and foundation across deal stages',()=>{
+ const stages=defaultConfigurationStages();
+ assert.equal(stages.length,9);
+ for(const stage of stages){
+  const stageId=stage.id;
+  let request={...context([...initial,buyer('Noor here.')]),clientContext:undefined};
+  request.callContext={...request.callContext,stageId,relationship:'existing_customer'};
+  const snapshot={id:'example-version',companyId:'example-instruments',version:1,activatedAt:1,stages,knowledge:[],boundaries:[],preferences:[],legacyNotes:[]};
+  request.companyConfiguration={companyId:'example-instruments',versionId:snapshot.id,version:1,boundAt:1,selectedStageId:stageId,snapshot};
+  request=applyCoachingConfiguration(request);
+  const original=JSON.stringify(request),purpose=getPurposeContext(request),projected=projectOnDemandImmediateAction(request,purpose);
+  assert.equal(purpose.conversationFlow.phase,'opening',stageId);
+  assert.equal(purpose.conversationFlow.openingNeeded,true,stageId);
+  assert.equal(purpose.questionPlan,undefined,stageId);
+  assert.equal(purpose.conversationState.stageId,stageId);
+  assert.equal(projected.conversationState.nextAction.kind,'introduce_contact',stageId);
+  assert.equal(projected.conversationState.stageId,purpose.conversationState.stageId,'The selected deal stage is preserved.');
+  const foundation=projectOnDemandImmediateAction(request,foundationLayerFor(request));
+  assert.equal(foundation.situation.momentType,'introduce_contact',stageId);
+  assert.equal(foundation.move.id,'introduce_contact',stageId);
+  assert.deepEqual(foundation.builtInSalesExpertise.illustrativeResponses,[],stageId);
+  assert.equal(JSON.stringify(request),original);
+ }
+});
+
+test('A first-person pickup cannot append generic priorities discovery to an introduction',()=>{
+ const request=context([...initial,buyer('Noor here.')]);
+ for(const question of ["What's the main factor your team would look at first?",'Which criteria matter most to your team?','What are your current needs?']){
+  const say='Hi Noor, this is Lin from Example Instruments about the instruments discussion. '+question;
+  assert.ok(onDemandSuggestionProblems(say,request).some(reason=>/before asking detailed discovery/.test(reason)),question);
+ }
+ assert.match(onDemandDecisionRules(request),/then stop and give this person the turn/);
+});
+
+test('A current pickup question keeps its own action instead of greeting-only projection',()=>{
+ const request={...context([...initial,buyer('Noor here. Can you confirm whether the report covers PX20?')]),clientContext:undefined};
+ const purpose=getPurposeContext(request),projected=projectOnDemandImmediateAction(request,purpose),foundation=foundationLayerFor(request);
+ assert.equal(purpose.conversationFlow.openingNeeded,false);
+ assert.equal(projected,purpose,'Substantive pickup does not receive the greeting projection.');
+ assert.equal(projected.conversationState.nextAction.kind,'respond_to_question');
+ assert.deepEqual(projectOnDemandImmediateAction(request,foundation),foundation);
+ assert.match(onDemandDecisionRules(request),/DOCUMENT COVERAGE QUESTION — EVIDENCE GAP/);
 });
