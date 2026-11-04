@@ -122,9 +122,14 @@ export function configurationSuggestionProblems(say:string,context:Configuration
  const problems:string[]=[];
  for(const clause of clauseParts(say))problems.push(...discountPermissionScopeProblems(clause,context));
  for(const clause of clauseParts(say)){
-  if(denied(clause)||isBoundedEpistemicFactAction(clause)||!/\b(?:approved|authorized|authorised|permitted)\b/i.test(clause)||/\b(?:no|not)\b.{0,45}\b(?:approved|authorized|authorised|permitted)\b/i.test(clause))continue;
+  // “Approved report ... tested sample” describes document status, not
+  // permission to offer a sample. Remove only the modifier on the document;
+  // a separate approved sample/discount in the same clause still needs current
+  // authority, and factual validation still checks the original full wording.
+  const authorityClause=clause.replace(/\b(?:approved|authorized|authorised|permitted)\s+(?=(?:(?:material|inspection|quality)\s+)?(?:test\s+reports?|inspection\s+reports?|reports?|certificates?|specification\s+sheets?|spec\s+sheets?|data\s+sheets?|drawings?)\b)/gi,'');
+  if(denied(clause)||isBoundedEpistemicFactAction(clause)||!/\b(?:approved|authorized|authorised|permitted)\b/i.test(authorityClause)||/\b(?:no|not)\b.{0,45}\b(?:approved|authorized|authorised|permitted)\b/i.test(authorityClause))continue;
   const authorityText=(text:string):ConfigurationBoundary=>({id:'current-approval-assertion',text,authority:'prohibited',scope:'company',status:'active',origin:'manager',action:'commercial_promise'});
-  let actions=actionsOf(authorityText(clause));
+  let actions=actionsOf(authorityText(authorityClause));
   if(actions.every(action=>action==='commercial_promise'))actions=actionsOf(authorityText((context.turns||[]).findLast(turn=>turn.role==='buyer')?.text||''));
   for(const action of actions)if(action!=='commercial_promise'&&!configurationAuthorizesAction(context,action))problems.push('Current '+action+' approval cannot be asserted from company knowledge; this call has no applicable active permission.');
  }

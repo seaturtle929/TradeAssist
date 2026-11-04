@@ -121,6 +121,7 @@ export class LiveCoachingSession {
   private readonly usage=new Set<string>();
   private stopped=false;
   private queued?:QueuedRequest;
+  private speculationCandidate?:{requestId:string;itemId:string;text:string;readyAfter:number};
   private speculative?:{requestId:string;itemId:string;text:string;fingerprint:string;startedAt:number};
   private readonly speculationAttempted=new Set<string>();
   private readonly speculationStats=new Map<string,{speculativeGenerations:number;discardedSpeculations:number;speculationEligibleAtMs:number;speculationOverlapMs?:number}>();
@@ -285,7 +286,7 @@ export class LiveCoachingSession {
     const speaking=this.coordinator.state.buyerSpeaking;
     const status=speaking?'listening':'transcribing';
     if(queued.status!==status){queued.status=status;this.options.onQueuedRequest?.({id:queued.id,requestedAt:queued.requestedAt,status,message:'Listening… your suggestion will appear when they finish.'});}
-    if(speaking){this.discardSpeculation('The buyer resumed before final transcription.');queued.stoppedAt=undefined;return;}
+    if(speaking){this.speculationCandidate=undefined;this.discardSpeculation('The buyer resumed before final transcription.');queued.stoppedAt=undefined;return;}
     queued.stoppedAt??=performance.now();
     const elapsed=performance.now()-queued.stoppedAt,settle=this.options.continuationSettleMs??120;
     const finalIds=new Set(current.turns.map(turn=>turn.id));
@@ -294,11 +295,13 @@ export class LiveCoachingSession {
     if(elapsed>=settle&&!unfinished){this.releaseQueuedRequest('ready');return;}
     if(elapsed>=deadline){this.releaseQueuedRequest('transcription_timeout');return;}
     if(unfinished)this.trySpeculativeGeneration(current);
-    const wait=unfinished?deadline-elapsed:Math.max(0,settle-elapsed);
+    const candidateWait=this.speculationCandidate?Math.max(1,this.speculationCandidate.readyAfter-performance.now()):Infinity;
+    const wait=unfinished?Math.min(deadline-elapsed,candidateWait):Math.max(0,settle-elapsed);
     queued.timer=setTimeout(()=>this.scheduleQueuedRequest(),Math.max(1,wait));
   }
   private releaseQueuedRequest(reason:'ready'|'suggest_now'|'transcription_timeout'):LiveReplyTicket|null {
     const queued=this.queued;if(!queued||this.stopped)return null;
+    this.speculationCandidate=undefined;
     const dispatchStarted=performance.now(),queueWaitMs=queued.queueWaitMs+dispatchStarted-queued.queuedAt;
     if(queued.timer)clearTimeout(queued.timer);
     const latest=this.options.latestContext?.()||this.options.snapshot({id:queued.id,text:'',at:queued.requestedAt});
@@ -340,11 +343,18 @@ export class LiveCoachingSession {
     return JSON.stringify(stable({instructions,companyConfiguration:normalized.companyConfiguration,sources:normalized.sources,clientContext:normalized.clientContext,callContext:normalized.callContext,manufacturer:normalized.manufacturer,brain:normalized.brain&&{facts:normalized.brain.facts,rules:normalized.brain.rules,learningExamples:normalized.brain.learningExamples,rejectedSignatures:normalized.brain.rejectedSignatures,decisionLog:normalized.brain.decisionLog}}));
   }
   private trySpeculativeGeneration(current:LiveContext):void {
-    const queued=this.queued;if(!queued||this.speculative||this.speculationAttempted.has(queued.id)||!this.options.onAudioIssue||this.coordinator.state.buyerSpeaking||this.coordinator.state.serverBusy)return;
+    const queued=this.queued;if(!queued||this.speculative||this.speculationAttempted.has(queued.id)||!this.options.onAudioIssue||this.coordinator.state.buyerSpeaking||this.coordinator.state.serverBusy){this.speculationCandidate=undefined;return;}
     const partials=current.coachingRequest?.partials||[],pending=current.coachingRequest?.pendingSpeech||[];
-    if(partials.length!==1||partials[0].role!=='buyer'||!partials[0].id||pending.some(item=>item.id!==partials[0].id||item.role!=='buyer'))return;
+    if(partials.length!==1||partials[0].role!=='buyer'||!partials[0].id||pending.some(item=>item.id!==partials[0].id||item.role!=='buyer')){this.speculationCandidate=undefined;return;}
     const part=partials[0],text=this.normalizedSpeech(part.text),item=this.audioItems.get(part.id!);
-    if(!/[.!?]["')\]]*$/.test(text)||/(?:\.\.\.|…)["')\]]*$/.test(text)||this.incomplete||this.timedOutAudio.has(part.id!)||this.reportedAudio.has(part.id!)||this.finals.has(part.id!)||assessBuyerTranscript({text,logprobs:item?.logprobs,speechMs:item?.speechMs}).status!=='accept'||unexpectedEnglishScript(text)||isTranscriptionPromptEcho(text))return;
+    if(!/[.!?]["')\]]*$/.test(text)||/(?:\.\.\.|…)["')\]]*$/.test(text)||this.incomplete||this.timedOutAudio.has(part.id!)||this.reportedAudio.has(part.id!)||this.finals.has(part.id!)||assessBuyerTranscript({text,logprobs:item?.logprobs,speechMs:item?.speechMs}).status!=='accept'||unexpectedEnglishScript(text)||isTranscriptionPromptEcho(text)){this.speculationCandidate=undefined;return;}
+    // ASR can stream a punctuated greeting then its question a few milliseconds
+    // later. Spend the one hidden attempt only after a short token-stability
+    // window. Canonical finals bypass this entirely via normal ready release.
+    const candidate=this.speculationCandidate;
+    if(!candidate||candidate.requestId!==queued.id||candidate.itemId!==part.id||candidate.text!==text){this.speculationCandidate={requestId:queued.id,itemId:part.id!,text,readyAfter:performance.now()+35};return;}
+    if(performance.now()<candidate.readyAfter)return;
+    this.speculationCandidate=undefined;
     const turn={id:part.id!,text,role:'buyer' as const,at:this.starts.get(part.id!)||part.at||queued.requestedAt};
     const turns=[...current.turns.filter(value=>value.id!==turn.id),turn].sort((a,b)=>a.at-b.at);
     const latest=this.options.latestContext?.(turns)||{...current,turns};
@@ -417,7 +427,7 @@ export class LiveCoachingSession {
   suggestNow():LiveReplyTicket|null {return this.releaseQueuedRequest('suggest_now');}
   cancelQueuedRequest():boolean {
     const queued=this.queued;if(!queued)return false;
-    this.discardSpeculation('The representative cancelled the queued request.');
+    this.speculationCandidate=undefined;this.discardSpeculation('The representative cancelled the queued request.');
     if(queued.timer)clearTimeout(queued.timer);this.queued=undefined;this.options.onQueuedRequest?.(null);this.options.onThinking(false);this.options.onChecking(false);
     this.options.onRequestTrace?.({event:'queue_cancelled',requestId:queued.id,suggestionId:`coaching-${queued.id}`,at:Date.now(),attempt:0,reason:'The representative cancelled the queued request.'});
     return true;

@@ -3,7 +3,7 @@ import {clientContextSuggestionProblems,clientContextSafeReply,reviewedClientCon
 import { hasClearConversationRefusal } from './conversation-boundary.ts';
 import {applyCoachingConfiguration,configurationSuggestionProblems,configurationAuthorizesAction,configuredSafeReply} from './coaching-configuration.ts';
 import {literalSpecificationEvidence,specificationNumberEvidence} from './scoped-specification-evidence.ts';
-import {assessDocumentProductCoverage,isBoundedEpistemicFactAction,isConversationalAcknowledgment,requestsDocumentProductCoverage} from './document-product-evidence.ts';
+import {assessDocumentProductCoverage,documentIdentifierReferences,documentIdentifierSource,isBoundedEpistemicFactAction,isConversationalAcknowledgment,requestsDocumentProductCoverage} from './document-product-evidence.ts';
 export type BuyerTurnKind = 'fact_request' | 'sales_move' | 'confirmation';
 export type VerificationPolicyContext = {
   coachingRequest?:{id:string;requestedAt:number};
@@ -625,6 +625,8 @@ export function assessReplyVerification(say: string, context: VerificationPolicy
     if (/^(?:Al2O3|SiC)$/i.test(match[0])) continue;
     add(match[0], match.index || 0, 'product_identity', identitySupported(match[0], context, evidence));
   }
+  const documentIds=documentIdentifierReferences(say).map(reference=>({...reference,source:documentIdentifierSource(reference,evidence)}));
+  for(const reference of documentIds)add(reference.identifier,reference.start,'supplier_claim',reference.source?{supported:true,sourceId:reference.source.id,reason:'This exact identifier names the same document type in original Company Knowledge; its scope and contents still need their own checks.'}:{supported:false,reason:'This document identifier is not established for the same document type in current original Company Knowledge.'});
   // Clause splitting must not let “check whether …, which proves …” hide its
   // appended positive predicate. Assess that original sentence as a claim as
   // well; an uncertainty prefix does not support what follows the boundary.
@@ -651,6 +653,7 @@ export function assessReplyVerification(say: string, context: VerificationPolicy
     for (const number of text.matchAll(/(?:\$\s*)?\b\d+(?:[.,]\d+)*(?:\s*(?:%|USD|dollars?|tons?|tonnes?|kg|kilograms?|days?|hours?|weeks?|months?|microns?|μm|um|mm))?/gi)) {
       const start = part.start + (number.index || 0), end = start + number[0].length;
       if (companySpans.some(span => span.start <= start && span.end >= end)) continue;
+      if(documentIds.some(reference=>reference.source&&reference.start<=start&&reference.end>=end))continue;
       if (identities.some(identity => (identity.index || 0) <= start && (identity.index || 0) + identity[0].length >= end)) continue;
       if ([...say.matchAll(FORMULA), ...say.matchAll(EMAIL)].some(identity => (identity.index || 0) <= start && (identity.index || 0) + identity[0].length >= end)) continue;
       if (number[0].trim() === '100%' && /\b(?:yeah|yes|okay|ok|absolutely)[,.\s]+100%/i.test(text)) continue;

@@ -16,13 +16,23 @@ const negative=/\b(?:not|no|never|doesn't|does not|isn't|is not|aren't|are not|e
 const parts=(text:string)=>text.split(/\n+|(?<=[.!?;])\s+/).filter(Boolean);
 
 function documents(text:string){return [...text.matchAll(documentPattern)].map(match=>({text:match[0],start:match.index||0,end:(match.index||0)+match[0].length,kind:norm(match[0]).replace(/\breports\b/g,'report').replace(/\bsheets\b/g,'sheet').replace(/\bcertificates\b/g,'certificate').replace(/\bcertifications\b/g,'certification').replace(/\bspec sheet\b/g,'specification sheet')}));}
+/** Keep numbered document identifiers distinct from the products and measured
+ * values they may contain. This only locates a reference; it does not verify it. */
+export function documentIdentifierReferences(text:string){return documents(text).flatMap(document=>{
+ const match=/^\s+([A-Z][A-Z0-9]*(?:[-/][A-Z0-9]+)+)\b/.exec(text.slice(document.end));if(!match)return [];
+ const start=document.end+match[0].indexOf(match[1]);return [{identifier:match[1],kind:document.kind,start,end:start+match[1].length}];
+});}
+export function documentIdentifierSource(reference:ReturnType<typeof documentIdentifierReferences>[number],sources:DocumentProductSource[]){
+ return sources.find(source=>source.original!==false&&source.complete!==false&&!stale.test((source.title||'')+' '+source.text)&&documentIdentifierReferences(source.text).some(candidate=>candidate.identifier===reference.identifier&&sameDocument(reference.kind,candidate.kind)));
+}
 const inclusionPredicate=/^\s+(?:(?:definitely|certainly|explicitly|specifically|already|also)\s+)*(?:includes?|contains?)\b/i;
 const relationWords=(text:string)=>relationship.test(text.replace(documentPattern,' '))
  ||documents(text).some(document=>inclusionPredicate.test(text.slice(document.end)))
  ||/^\s*(?:it|this|that)\b/i.test(text)&&inclusionPredicate.test(text.replace(/^\s*(?:it|this|that)\b/i,''));
 function sameDocument(claim:string,source:string){return claim===source||claim==='test report'&&source==='material test report'||claim==='report'&&/report$/.test(source);}
 function scopes(text:string):Scope[]{
- const result:Scope[]=[...new Set((text.match(productPattern)||[]).filter(value=>!notProduct.test(value)).map(norm))].map(key=>({key,labels:[key]}));
+ const identifiers=documentIdentifierReferences(text);
+ const result:Scope[]=[...new Set([...text.matchAll(productPattern)].filter(match=>!notProduct.test(match[0])&&!identifiers.some(id=>id.start<=(match.index||0)&&id.end>=(match.index||0)+match[0].length)).map(match=>norm(match[0])))].map(key=>({key,labels:[key]}));
  // Count/material are a product description, not evidence that a report
  // covers that product. The signature only resolves equivalent descriptions.
  const mesh=text.match(/\b(\d+(?:\.\d+)?)\s*mesh\b/i),steel=text.match(/\b(\d{3})\s*stainless(?:\s+steel)?\b/i);
@@ -68,7 +78,7 @@ function linked(text:string,document:ReturnType<typeof documents>[number],scope:
   // An explicitly named report can state its product scope with an identifier,
   // an emphasis adverb and the product's company label. These remain candidate
   // evidence only; semantic verification still checks the actual limitations.
-  const namedScope=between.match(/^\s*(?:[A-Z][A-Z0-9]*(?:[-/][A-Z0-9]+)+\s+)?(?:(?:is|are)\s+)?(?:(?:explicitly|specifically)\s+)?(?:covers?|addresses?|describes?|documents?|records?|details?|tests?|evaluates?|assesses?)\s+((?:[A-Za-z'-]+\s+)*)$/i);
+  const namedScope=between.match(/^\s*(?:[A-Z][A-Z0-9]*(?:[-/][A-Z0-9]+)+\s+)?(?:(?:is|are|does|do)\s+)?(?:(?:explicitly|specifically)\s+)?(?:covers?|addresses?|describes?|documents?|records?|details?|tests?|evaluates?|assesses?)\s+((?:[A-Za-z'-]+\s+)*)$/i);
   if(namedScope&&namedScope[1].trim().split(/\s+/).filter(Boolean).every(word=>/^(?:our|the|this|that|exact|product|grade)$/.test(word)||/^[A-Z][A-Za-z'-]*$/.test(word)))return true;
   return !/[;.!?]|\b(?:and|or)\b/i.test(between)&&(
    /^\s*(?:(?:we have|that we have|which we have)\s*)?(?:(?:is|are)\s*)?(?:(?:available|provided|issued|prepared)\s*)?(?:for|on|about|of|specific to|applicable to|related to|pertaining to|covering)\s+(?:(?:our|the|this|that|product|grade|exact)\s+)*$/i.test(between)
@@ -96,18 +106,27 @@ export function isConversationalAcknowledgment(text:string):boolean {
  const line=text.trim().replace(/[’‘]/g,"'").replace(/^[A-Z][A-Za-z'-]*(?:\s+[A-Z][A-Za-z'-]*){0,2},\s*(?=(?:thanks|thank you|understood|got it)\b)/,'');
  const courtesy=courtesyStart.exec(line);if(!courtesy)return false;
  const tail=courtesy[1].trim();
+ // A topic label after “asking about” names the subject of the question, not
+ // its answer. Keep complete noun labels only: modifiers, relative clauses and
+ // a qualified “[product] report” still go through ordinary claim checks.
+ if(/^about\s+/i.test(tail)&&/^(?:thanks|thank you) for asking\b/i.test(line)){
+  const topic=tail.replace(/^about\s+/i,'').replace(/[.!]+$/,'').trim();
+  if(/^(?:(?:the|that|this|your)\s+)?(?:[A-Z]{1,6}\d{1,6}[A-Z0-9-]*|product|mesh|grade|requirements?|specifications?|scope|coverage|availability|certification|price|pricing|(?:material test|inspection|test) report|report)$/i.test(topic))return true;
+ }
  return /^[,.!]*$/.test(tail)||/^,\s*[A-Z][A-Za-z'-]*(?:\s+[A-Z][A-Za-z'-]*){0,2}[.!]?$/.test(tail);
 }
 /** Reporting an investigation's eventual result does not supply that result.
  * Keep the communication action, optional neutral object and ordering clause
  * separate so ordinary wording variations cannot become scope assertions. */
 function reportsInvestigationResult(tail:string):boolean {
- const action=/^and\s+(?:(?:get|come) back to (?:you|them)|let (?:you|them|him|her) know|tell (?:you|them|him|her)|report back(?: to (?:you|them))?|follow up(?: with (?:you|them))?|confirm(?: back)?)\b/i.exec(tail);
+ const action=/^and\s+(?:(?:get|come) back to (?:you|them)|let (?:you|them|him|her) know|tell (?:you|them|him|her)|report back(?: to (?:you|them))?|follow up(?: with (?:you|them))?|confirm(?: back)?(?: (?:with|to) (?:you|them))?)\b/i.exec(tail);
  if(!action)return false;
- const remainder=tail.slice(action[0].length).trim().replace(/\s*\bbefore\s+(?:(?:sending|emailing)\s+(?:it|them|anything|the documents)|(?:I|we)\s+(?:send|email)\s+(?:it|them|anything|the documents))$/i,'').trim();
+ const remainder=tail.slice(action[0].length).trim().replace(/(?:\s*,)?\s*\bbefore\s+(?:(?:sending|emailing)\s+(?:it|them|anything|the documents)|(?:I|we)\s+(?:send|email)\s+(?:it|them|anything|the documents))(?: over)?$/i,'')
+  .replace(/(?:\s*,)?\s*\b(?:once|after|when)\s+(?:(?:I|we)\s+have\s+(?:that|the|an?)\s+(?:answer|information|results?|confirmation)|(?:I|we)(?:'ve| have)\s+(?:checked|verified|confirmed)\s+(?:it|that|the (?:scope|coverage)))$/i,'').trim();
  if(!remainder)return true;
  return /^(?:that|it)(?: for you)?$/i.test(remainder)
-  ||/^with\s+(?:(?:that|this|the|an?)\s+)?(?:confirmation|results?|details|answer|information|update|findings|outcome|clarification)(?: for you)?$/i.test(remainder)
+  ||/^with\s+(?:that|it)$/i.test(remainder)
+  ||/^with\s+(?:(?:that|this|the|an?)\s+)?(?:(?:clear|specific|detailed|written)\s+)?(?:confirmation|results?|details|answer|information|update|findings|outcome|clarification)(?: for you)?$/i.test(remainder)
   ||/^on\s+(?:that|this|it|(?:the|its|that)\s+(?:scope|coverage|availability))$/i.test(remainder)
   ||/^what\s+(?:I|we)\s+(?:find(?: out)?|learn|discover)$/i.test(remainder)
   ||/^whether\s+(?:it|that)\s+(?:does|is covered)$/i.test(remainder);
@@ -130,7 +149,7 @@ export function isBoundedEpistemicFactAction(text:string):boolean {
  // A scope inquiry can contain arbitrary unknown content, but not an appended
  // claim hidden behind a causal, relative, parenthetical or coordinate clause.
  // Ambiguity stays on the normal verification path rather than being guessed.
- if(timing.test(subject)||/[,;:—–()[\]"“”]|[.!?]\s+\S|\b(?:but|however|because|since|although|though|therefore|thus|nevertheless|despite|yet|guarantee(?:s|d)?)\b|\bso\s+(?:you|we|it|this|that|the)\b/i.test(subject))return false;
+ if(timing.test(subject)||/[;:—–()[\]"“”]|[.!?]\s+\S|\b(?:but|however|because|since|although|though|therefore|thus|nevertheless|despite|yet|guarantee(?:s|d)?)\b|\bso\s+(?:you|we|it|this|that|the)\b/i.test(subject))return false;
  const next=subject.search(/\s+\b(?:and|plus|also)\b\s+/i);
  if(next>=0){
   const tail=subject.slice(next).trim();
@@ -139,6 +158,9 @@ export function isBoundedEpistemicFactAction(text:string):boolean {
   if(!reportsInvestigationResult(tail))return false;
   subject=subject.slice(0,next).trim();
  }
+ // Only the closed communication/ordering suffix above may consume a comma.
+ // Punctuation anywhere in the unresolved predicate remains conservative.
+ if(/,/.test(subject))return false;
  if(/^(?:whether|if|which|what)\b\s+\S/i.test(subject)){
   // Uncertainty about a predicate does not erase a qualified noun inside it:
   // “what our PX20 report contains” already says that this report exists for

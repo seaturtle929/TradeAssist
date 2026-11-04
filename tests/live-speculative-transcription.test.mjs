@@ -29,13 +29,13 @@ function fixture(options={}) {
  const created=()=>{const event=creates().at(-1),id='response-'+event.response.metadata.epoch;session.handle({type:'response.created',response:{id,metadata:event.response.metadata}});return id;};
  const finish=(id,say)=>{session.handle({type:'response.output_text.delta',response_id:id,delta:'SAY: '+say+'\nMOVE: Respect the chosen next step\n'});session.handle({type:'response.done',response:{id,status:'completed'}});};
  const cancelled=id=>session.handle({type:'response.done',response:{id,status:'cancelled'}});
- const speculate=text=>{start('buyer');request();stop('buyer');partial('buyer',text);assert.equal(creates().length,1,'Exactly one hidden generation starts');};
+ const speculate=async text=>{start('buyer');request();stop('buyer');partial('buyer',text);await sleep(45);assert.equal(creates().length,1,'Exactly one hidden generation starts');};
  return {context,session,log,creates,start,stop,partial,final,request,created,finish,cancelled,speculate};
 }
 
 test('Exact final recognition reuses one hidden generation; no canonical turn, validation or display before final',async()=>{
  const t=fixture();try{
-  t.speculate('Thank you, goodbye.');const id=t.created();t.finish(id,'Thank you, goodbye.');
+  await t.speculate('Thank you, goodbye.');const id=t.created();t.finish(id,'Thank you, goodbye.');
   assert.equal(t.context.turns.length,0);assert.equal(t.log.shown.length,0);assert.equal(t.log.verified.length,0);
   const rawTime=t.session.works.values().next().value.phaseClock.snapshot().providerCompleteMs;
   await sleep(10);t.final('buyer','Thank you, goodbye.');await sleep(5);
@@ -52,7 +52,7 @@ for(const [partial,final] of [
  ['Thank you, goodbye.','Thank you. What is the price?'],
 ])test(`Changed final meaning discards hidden wording: ${final}`,async()=>{
  const t=fixture();try{
-  t.speculate(partial);const old=t.created();t.finish(old,'Thank you, goodbye.');t.final('buyer',final);await sleep(5);
+  await t.speculate(partial);const old=t.created();t.finish(old,'Thank you, goodbye.');t.final('buyer',final);await sleep(5);
   assert.equal(t.log.shown.length,0);assert.equal(t.creates().length,2);assert.match(t.creates().at(-1).response.instructions,new RegExp(final.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')));
   assert.equal(t.log.traces.filter(event=>event.event==='speculation_discarded').length,1);assert.equal(t.log.traces.filter(event=>event.event==='repair_requested').length,0);
   assert.ok(t.creates().every(event=>event.response.metadata.trigger==='one-click'));
@@ -61,7 +61,7 @@ for(const [partial,final] of [
 
 test('A resumed sentence cancels speculation and keeps all final qualification under the original click',async()=>{
  const t=fixture();try{
-  t.speculate('Please send the information.');const old=t.created();t.start('qualifier');t.cancelled(old);t.final('buyer','Please send the information.');t.stop('qualifier');t.final('qualifier','Actually, do not send anything until I approve it.');await sleep(5);
+  await t.speculate('Please send the information.');const old=t.created();t.start('qualifier');t.cancelled(old);t.final('buyer','Please send the information.');t.stop('qualifier');t.final('qualifier','Actually, do not send anything until I approve it.');await sleep(5);
   assert.equal(t.creates().length,2);assert.match(t.creates().at(-1).response.instructions,/do not send anything until I approve/);assert.equal(t.log.shown.length,0);
   t.finish(old,'I will send it.');assert.equal(t.log.shown.length,0,'Late obsolete provider events cannot publish');
   t.finish(t.created(),"I won't send anything until you approve it.");assert.equal(t.log.shown.length,1);assert.equal(t.log.phases.at(-1).discardedSpeculations,1);
@@ -71,21 +71,21 @@ test('A resumed sentence cancels speculation and keeps all final qualification u
 
 test('Final arrives before response.created: one retained request still publishes from the canonical final',async()=>{
  const t=fixture();try{
-  t.speculate('Thank you, goodbye.');t.final('buyer','Thank you, goodbye.');await sleep(5);assert.equal(t.creates().length,1);
+  await t.speculate('Thank you, goodbye.');t.final('buyer','Thank you, goodbye.');await sleep(5);assert.equal(t.creates().length,1);
   t.finish(t.created(),'Thank you, goodbye.');assert.equal(t.log.shown.length,1);assert.equal(t.log.shown[0].snapshot.turns.length,1);
  }finally{t.session.stop();}
 });
 
 test('Rep speech changes relevant context and invalidates a hidden candidate',async()=>{
  const t=fixture();try{
-  t.speculate('Thank you, goodbye.');t.finish(t.created(),'Thank you, goodbye.');t.context.turns.push({id:'rep',role:'you',text:'Before you go, I need to correct my last statement.',at:Date.now()+10});t.final('buyer','Thank you, goodbye.');await sleep(5);
+  await t.speculate('Thank you, goodbye.');t.finish(t.created(),'Thank you, goodbye.');t.context.turns.push({id:'rep',role:'you',text:'Before you go, I need to correct my last statement.',at:Date.now()+10});t.final('buyer','Thank you, goodbye.');await sleep(5);
   assert.equal(t.creates().length,2);assert.equal(t.log.shown.length,0);assert.match(t.creates().at(-1).response.instructions,/correct my last statement/);
  }finally{t.session.stop();}
 });
 
 test('Missing final is bounded and never promotes the provisional complete-looking words',async()=>{
- const t=fixture({queuedTranscriptionTimeoutMs:25});try{
-  t.speculate('Thank you, goodbye.');const old=t.created();t.finish(old,'Thank you, goodbye.');await sleep(40);
+ const t=fixture({queuedTranscriptionTimeoutMs:80});try{
+  await t.speculate('Thank you, goodbye.');const old=t.created();t.finish(old,'Thank you, goodbye.');await sleep(90);
   assert.equal(t.log.shown.length,0);assert.equal(t.creates().length,2);assert.equal(t.log.traces.findLast(event=>event.event==='queue_released').reason,'transcription_timeout');
   assert.equal(t.context.turns.length,0);assert.equal(t.log.traces.filter(event=>event.event==='speculation_discarded').length,1);
  }finally{t.session.stop();}
@@ -116,7 +116,7 @@ function productionFixture(){
 
 test('Production-shaped payload rebuild with fresh Brain clocks reuses exact-final candidate',async()=>{
  const t=productionFixture();try{
-  t.speculate('Thank you, goodbye.');t.finish(t.created(),'Thank you, goodbye.');await sleep(10);t.final('buyer','Thank you, goodbye.');await sleep(5);
+  await t.speculate('Thank you, goodbye.');t.finish(t.created(),'Thank you, goodbye.');await sleep(10);t.final('buyer','Thank you, goodbye.');await sleep(5);
   assert.ok(new Set(t.memories).size>1,'Rebuild actually changed generated Brain timestamps');
   assert.equal(t.creates().length,1);assert.equal(t.log.traces.filter(event=>event.event==='speculation_accepted').length,1);assert.equal(t.log.shown.length,1);
  }finally{t.session.stop();}
@@ -124,7 +124,7 @@ test('Production-shaped payload rebuild with fresh Brain clocks reuses exact-fin
 
 test('A fresh authority/version change cannot be overwritten by queued click configuration',async()=>{
  const t=productionFixture();try{
-  t.speculate('Thank you, goodbye.');t.finish(t.created(),'Thank you, goodbye.');t.changeBoundary();t.final('buyer','Thank you, goodbye.');await sleep(5);
+  await t.speculate('Thank you, goodbye.');t.finish(t.created(),'Thank you, goodbye.');t.changeBoundary();t.final('buyer','Thank you, goodbye.');await sleep(5);
   assert.equal(t.log.shown.length,0);assert.equal(t.creates().length,2);assert.match(t.creates().at(-1).response.instructions,/Do not send reports without manager approval/);assert.match(t.creates().at(-1).response.instructions,/cedar-v2/);
   assert.equal(t.log.traces.filter(event=>event.event==='speculation_discarded').length,1);
  }finally{t.session.stop();}
@@ -132,12 +132,12 @@ test('A fresh authority/version change cannot be overwritten by queued click con
 
 test('An uncertain/failed final and explicit cancel never publish the hidden complete candidate',async()=>{
  for(const action of ['failed','uncertain','cancel']){
-  const t=fixture({queuedTranscriptionTimeoutMs:25});try{
-   t.speculate('Thank you, goodbye.');const id=t.created();t.finish(id,'Thank you, goodbye.');
+  const t=fixture({queuedTranscriptionTimeoutMs:80});try{
+   await t.speculate('Thank you, goodbye.');const id=t.created();t.finish(id,'Thank you, goodbye.');
    if(action==='cancel')t.session.cancelQueuedRequest();
    else if(action==='failed')t.session.handle({type:'conversation.item.input_audio_transcription.failed',item_id:'buyer'});
    else t.final('buyer','Thank you, goodbye.',{logprobs:[{token:'Thank',logprob:-5},{token:' you,',logprob:-5},{token:' goodbye.',logprob:-5}]});
-   await sleep(40);assert.equal(t.log.shown.length,0);assert.equal(t.log.traces.filter(event=>event.event==='speculation_accepted').length,0);assert.equal(t.log.traces.filter(event=>event.event==='speculation_discarded').length,1);
+   await sleep(90);assert.equal(t.log.shown.length,0);assert.equal(t.log.traces.filter(event=>event.event==='speculation_accepted').length,0);assert.equal(t.log.traces.filter(event=>event.event==='speculation_discarded').length,1);
    if(action==='cancel')assert.equal(t.creates().length,1);
   }finally{t.session.stop();}
  }
@@ -146,8 +146,41 @@ test('An uncertain/failed final and explicit cancel never publish the hidden com
 test('A factual candidate cannot start its external verifier until its canonical final is accepted',async()=>{
  const t=fixture();try{
   t.context.sources=[{id:'coverage',title:'Approved inspection report',text:'The inspection report covers PX20.'}];
-  t.speculate('Does the inspection report cover PX20?');t.finish(t.created(),'The inspection report covers PX20.');assert.equal(t.log.verified.length,0);assert.equal(t.log.shown.length,0);
+  await t.speculate('Does the inspection report cover PX20?');t.finish(t.created(),'The inspection report covers PX20.');assert.equal(t.log.verified.length,0);assert.equal(t.log.shown.length,0);
   t.final('buyer','Does the inspection report cover PX20?');await sleep(20);
   assert.equal(t.creates().length,1);assert.equal(t.log.verified.length,1);assert.equal(t.log.verified[0].turns[0].text,'Does the inspection report cover PX20?');assert.equal(t.log.shown.length,1);
  }finally{t.session.stop();}
+});
+
+test('A short ASR stability window lets a multi-sentence burst finish before spending the one hidden attempt',async()=>{
+ const t=fixture();try{
+  t.start('buyer');t.request();t.stop('buyer');t.partial('buyer','Hi, this is Priya.');await sleep(10);
+  assert.equal(t.creates().length,0);
+  t.partial('buyer',' Does the report cover PX20?');await sleep(20);assert.equal(t.creates().length,0,'Each text change resets hidden-candidate stability');
+  await sleep(25);assert.equal(t.creates().length,1);assert.match(t.creates()[0].response.instructions,/Hi, this is Priya\. Does the report cover PX20\?/);
+  assert.equal(t.log.traces.filter(event=>event.event==='speculation_started').length,1);assert.equal(t.log.traces.filter(event=>event.event==='speculation_discarded').length,0);
+  t.final('buyer','Hi, this is Priya. Does the report cover PX20?');await sleep(5);assert.equal(t.creates().length,1,'Matching final reuses the full-question draft');
+ }finally{t.session.stop();}
+});
+
+test('A canonical final arriving during hidden-candidate debounce dispatches immediately and leaves no late timer',async()=>{
+ const t=fixture();try{
+  t.start('buyer');t.request();t.stop('buyer');t.partial('buyer','Thank you, goodbye.');await sleep(5);assert.equal(t.creates().length,0);
+  t.final('buyer','Thank you, goodbye.');assert.equal(t.creates().length,1,'The canonical final bypasses the 35 ms hidden-only wait');
+  assert.equal(t.log.traces.filter(event=>event.event==='speculation_started').length,0);
+  t.finish(t.created(),'Thank you, goodbye.');await sleep(50);assert.equal(t.creates().length,1);assert.equal(t.log.shown.length,1);
+ }finally{t.session.stop();}
+});
+
+test('Cancellation and renewed speech retire the debounce; changed partials cannot start a second hidden request',async()=>{
+ for(const action of ['cancel','resume','already_spent']){
+  const t=fixture();try{
+   t.start('buyer');t.request();t.stop('buyer');t.partial('buyer','Thank you, goodbye.');
+   if(action==='cancel')t.session.cancelQueuedRequest();
+   else if(action==='resume')t.start('new-segment');
+   else{await sleep(45);assert.equal(t.creates().length,1);t.created();t.partial('buyer',' One more thing, what is the price?');}
+   await sleep(50);assert.equal(t.creates().length,action==='already_spent'?1:0);assert.equal(t.log.shown.length,0);
+   if(action==='already_spent')assert.equal(t.log.traces.filter(event=>event.event==='speculation_discarded').length,1);
+  }finally{t.session.stop();}
+ }
 });

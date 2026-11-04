@@ -3,6 +3,7 @@ import test from 'node:test';
 import {assessReplyVerification,isNonAssertiveReply} from '../lib/turn-verification-policy.ts';
 import {needsFactCheck} from '../lib/call-coaching.ts';
 import {defaultConfigurationStages} from '../lib/sales-curriculum.ts';
+import {configurationSuggestionProblems} from '../lib/coaching-configuration.ts';
 
 // Shareable authored fixtures. No production company, call or diagnostic data.
 const companies=[
@@ -55,6 +56,17 @@ for(const company of companies){
   'and confirm back before sending it',
   'and follow up with you',
   'and get back to you with an answer',
+  'and get back to you with a clear answer',
+  'and report back with specific findings',
+  'and follow up with a written clarification',
+  'and let you know, before sending it over',
+  'and confirm back with you before sending it',
+  'and confirm to you before I email it over',
+  'and follow up with you once I have that answer',
+  "and get back to you once I've confirmed it",
+  'and let you know after we have the results',
+  "and report back when we've verified the coverage",
+  'and get back to you with that before sending it',
   'and get back to you with the clarification before sending the documents',
  ])test(`${company.name}: neutral reporting of the eventual result stays unresolved: ${tail}`,()=>{
   const request=context(company),say=`Thanks for your question, Priya. I'll check whether our ${report} covers ${product} ${tail}.`,assessment=assessReplyVerification(say,request);
@@ -69,6 +81,12 @@ for(const company of companies){
   assert.equal(isNonAssertiveReply(say,assessment.claims),true,say);
   assert.equal(needsFactCheck(say,request),false,say);
  });
+ for(const topic of [product,'the report','coverage','your requirements'])test(`${company.name}: naming a question's topic asserts no answer: ${topic}`,()=>{
+  const request=context(company),say=`Thank you for asking about ${topic}. I'll check whether the ${report} covers that product and get back to you with a clear answer.`,assessment=assessReplyVerification(say,request);
+  assert.deepEqual(assessment.unsupportedClaims,[],say);
+  assert.equal(isNonAssertiveReply(say,assessment.claims),true,say);
+  assert.equal(needsFactCheck(say,request),false,say);
+ });
  for(const say of [
   `The ${report} covers ${product}.`,
   `We have a ${report} for ${product}, and I'll check the details.`,
@@ -79,6 +97,7 @@ for(const company of companies){
   `I'll check whether the report covers ${product}, a certified match for your product.`,
   `I'll confirm that it covers ${product}.`,
   `Thanks for confirming our ${report} covers ${product}. I'll check the details.`,
+  `Thanks for asking about our ${product} ${report}. I'll check the details.`,
   `I'll look into what our ${product} ${report} contains.`,
   `I'll check whether the ${report} we have for ${product} includes your test.`,
   `I'll check whether the ${report} that we have for ${product} includes your test.`,
@@ -107,6 +126,11 @@ for(const company of companies){
   'and get back to you with that information tomorrow',
   'and get back to you on Friday',
   'and report back with confirmation of coverage',
+  'and confirm back with you that it covers your product',
+  'and let you know, before sending it over tomorrow',
+  'and let you know, our report covers your product',
+  "and get back to you once I've confirmed it covers your product",
+  'and follow up with you once we approve your discount',
  ])test(`${company.name}: an attached assertion is not an ordinary offer to check: ${tail}`,()=>{
   const request=context(company),say=`I'll check whether the report covers ${product} ${tail}.`,assessment=assessReplyVerification(say,request);
   assert.equal(isNonAssertiveReply(say,assessment.claims),false,say);
@@ -127,6 +151,13 @@ for(const company of companies){
   assert.equal(assessment.unsupportedClaims.length,0);
   assert.ok(assessment.pendingClaims.some(claim=>claim.candidateSourceIds?.includes(source.id)));
   assert.equal(needsFactCheck(say,request),true);
+  const namedSay=`Our ${report} IR-${product}-2026 does cover ${product}.`;
+  const namedAssessment=assessReplyVerification(namedSay,request);
+  assert.deepEqual(namedAssessment.unsupportedClaims,[],namedSay);
+  assert.ok(namedAssessment.pendingClaims.some(claim=>claim.candidateSourceIds?.includes(source.id)));
+  assert.ok(namedAssessment.supportedClaims.some(claim=>claim.text===`IR-${product}-2026`&&claim.sourceId===source.id));
+  assert.equal(needsFactCheck(namedSay,request),true,'Recognizing an identifier never verifies the scope/content assertion.');
+  for(const unknown of [namedSay.replace('-2026','-2027'),namedSay.replace(`IR-${product}-2026`,`IR-ZZ99-2026`)])assert.ok(assessReplyVerification(unknown,request).unsupportedClaims.some(claim=>/document identifier/.test(claim.reason)),unknown);
   const promised=`The ${report} covers ${product} and guarantees your product performance.`;
   assert.equal(needsFactCheck(promised,request),true);
   assert.equal(isNonAssertiveReply(promised,assessReplyVerification(promised,request).claims),false);
@@ -198,4 +229,14 @@ test('Buyer questions and acknowledgments preserve current company authority bou
  const unsafe="I'll check whether the inspection report covers QV80. We can offer you a discount.";
  assert.ok(assessReplyVerification(unsafe,request).unsupportedClaims.some(claim=>/boundary|authoriz|approval/i.test(claim.reason)));
  assert.equal(needsFactCheck(unsafe,request),true);
+});
+
+test('Document approval and a tested sample do not assert commercial sample authority',()=>{
+ const request=context(companies[1]),stages=defaultConfigurationStages();
+ const snapshot={id:'synthetic-doc-approval',companyId:companies[1].id,version:1,activatedAt:1,stages,knowledge:[],boundaries:[],preferences:[],legacyNotes:[]};
+ request.companyConfiguration={companyId:companies[1].id,versionId:snapshot.id,version:1,boundAt:1,selectedStageId:stages[2].id,snapshot};
+ const supported='Our approved inspection report explicitly covers QV80 and records the tested sample’s material chemistry.';
+ assert.deepEqual(configurationSuggestionProblems(supported,request),[]);
+ for(const added of ['An additional sample is approved.','The discount is authorized.','We are permitted to ship a sample.'])assert.ok(configurationSuggestionProblems(supported+' '+added,request).length,added);
+ assert.ok(configurationSuggestionProblems(supported+' and a new sample is approved.',request).length);
 });
