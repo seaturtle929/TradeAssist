@@ -97,7 +97,7 @@ function bareDocumentAction(line:string){
 export function requestsDocumentProductCoverage(text:string):boolean {
  return !!documents(text).length&&/\?|\b(?:confirm|whether|if|need to know|tell me)\b/i.test(text)&&(relationWords(text)||/\b(?:report|sheet|certificate)\b.{0,55}\bfor\b/i.test(text));
 }
-const courtesyAction='(?:asking|your question|the question|your time|your patience|the update|that update|raising that|checking|pointing that out|bringing that up|letting (?:me|us) know|keeping (?:me|us) informed|(?:sharing|explaining|clarifying|confirming|flagging|mentioning)(?: (?:that|this))?)';
+const courtesyAction='(?:asking|(?:this|that|the|your) (?:question|update|clarification|information)|your time|your patience|raising that|checking|pointing that out|bringing that up|letting (?:me|us) know|keeping (?:me|us) informed|(?:sharing|explaining|clarifying|confirming|flagging|mentioning)(?: (?:that|this))?)';
 const courtesyStart=new RegExp('^(?:(?:thanks|thank you)(?: for '+courtesyAction+')?|of course|understood|sure|okay|ok|got it|that makes sense|that helps|that[\'’]s helpful|I understand)(.*)$','i');
 /** Courtesy words describe the interaction, never an answer about the product.
  * Require the complete acknowledgment, including an optional name, so “thanks
@@ -119,14 +119,14 @@ export function isConversationalAcknowledgment(text:string):boolean {
  * Keep the communication action, optional neutral object and ordering clause
  * separate so ordinary wording variations cannot become scope assertions. */
 function reportsInvestigationResult(tail:string):boolean {
- const action=/^and\s+(?:(?:get|come) back to (?:you|them)|let (?:you|them|him|her) know|tell (?:you|them|him|her)|report back(?: to (?:you|them))?|follow up(?: with (?:you|them))?|confirm(?: back)?(?: (?:with|to) (?:you|them))?)\b/i.exec(tail);
+ const action=/^and\s+(?:(?:(?:I|we)(?:'ll|\s+(?:will|can))|will|can)\s+)?(?:(?:get|come) back to (?:you|them)|let (?:you|them|him|her) know|tell (?:you|them|him|her)|report back(?: to (?:you|them))?|follow up(?: with (?:you|them))?|confirm(?: back)?(?: (?:with|to) (?:you|them))?)\b/i.exec(tail);
  if(!action)return false;
  const remainder=tail.slice(action[0].length).trim().replace(/(?:\s*,)?\s*\bbefore\s+(?:(?:sending|emailing)\s+(?:it|them|anything|the documents)|(?:I|we)\s+(?:send|email)\s+(?:it|them|anything|the documents))(?: over)?$/i,'')
   .replace(/(?:\s*,)?\s*\b(?:once|after|when)\s+(?:(?:I|we)\s+have\s+(?:that|the|an?)\s+(?:answer|information|results?|confirmation)|(?:I|we)(?:'ve| have)\s+(?:checked|verified|confirmed)\s+(?:it|that|the (?:scope|coverage)))$/i,'').trim();
  if(!remainder)return true;
  return /^(?:that|it)(?: for you)?$/i.test(remainder)
   ||/^with\s+(?:that|it)$/i.test(remainder)
-  ||/^with\s+(?:(?:that|this|the|an?)\s+)?(?:(?:clear|specific|detailed|written)\s+)?(?:confirmation|results?|details|answer|information|update|findings|outcome|clarification)(?: for you)?$/i.test(remainder)
+  ||/^(?:with\s+)?(?:(?:that|this|the|an?)\s+)?(?:(?:clear|specific|detailed|written)\s+)?(?:confirmation|results?|details|answer|information|update|findings|outcome|clarification)(?: for you)?$/i.test(remainder)
   ||/^on\s+(?:that|this|it|(?:the|its|that)\s+(?:scope|coverage|availability))$/i.test(remainder)
   ||/^what\s+(?:I|we)\s+(?:find(?: out)?|learn|discover)$/i.test(remainder)
   ||/^whether\s+(?:it|that)\s+(?:does|is covered)$/i.test(remainder);
@@ -182,6 +182,21 @@ export function isBoundedEpistemicFactAction(text:string):boolean {
  return !!investigation&&/^(?:(?:the|that|this|its|our|your)\s+)?(?:(?:(?:material test|inspection|test)\s+)?report(?:'s)?\s+)?(?:scope|coverage|availability)(?:\s+before\s+(?:(?:sending|emailing)\s+(?:it|them|anything|the documents)|(?:I|we)\s+(?:send|email)\s+(?:it|them|anything|the documents)))?$/i.test(subject);
 }
 
+/** A check, communication of its result, and later document delivery are three
+ * different actions. The first two assert no coverage. The last still needs
+ * availability and company permission; return its explicit referent so the
+ * ordinary document-action checks can enforce those independently. */
+export function investigationThenDocumentDelivery(text:string):{investigation:string;document:string}|undefined {
+ const line=text.trim().replace(/[’‘]/g,"'");
+ const continuation=/\s*,?\s+(?:and\s+)?then\s+(?:I|we)(?:'ll|\s+(?:will|can|could))\s+(?:send|email|share|include|attach)\s+(?:it|that report|the report)(?:\s+(?:over|to you|for review))?[.!]?$/i.exec(line);
+ if(!continuation)return;
+ const investigation=line.slice(0,continuation.index).trim();
+ if(!isBoundedEpistemicFactAction(investigation))return;
+ const referents=documents(investigation);
+ if(referents.length!==1||! /report$/.test(referents[0].kind))return;
+ return {investigation,document:referents[0].kind};
+}
+
 /** Return a hard veto for absent linkage. A present relationship remains a
  * candidate for normal semantic checking: scope alone never proves results,
  * suitability, certification, or any other contents of the report. */
@@ -191,7 +206,7 @@ export function assessDocumentProductCoverage(clause:string,context:Context,sour
  // Explicit uncertainty is a commitment to investigate, never a positive or
  // negative assertion about report scope. Appended assertions are assessed in
  // their own clause by the normal verification policy.
- if(isBoundedEpistemicFactAction(line))return;
+ if(isBoundedEpistemicFactAction(line)||investigationThenDocumentDelivery(line))return;
  if(/^(?:does|do|is|are|can|could|would|will|which|what|how|whether)\b/i.test(line)&&/\?\s*$/.test(line)&&! /\b(?:our|the)\s+[a-z]+\d+[^?]{0,30}\b(?:reports?|sheets?|certificates?)\b/i.test(line))return;
  const ownDocuments=documents(line),buyerDocuments=documents(buyer);
  const assent=asked&&/^\s*(?:yes|correct|exactly|absolutely|certainly|sure|it does|that does|we do)\b/i.test(line);

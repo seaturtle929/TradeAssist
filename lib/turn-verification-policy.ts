@@ -3,7 +3,7 @@ import {clientContextSuggestionProblems,clientContextSafeReply,reviewedClientCon
 import { hasClearConversationRefusal } from './conversation-boundary.ts';
 import {applyCoachingConfiguration,configurationSuggestionProblems,configurationAuthorizesAction,configuredSafeReply} from './coaching-configuration.ts';
 import {literalSpecificationEvidence,specificationNumberEvidence} from './scoped-specification-evidence.ts';
-import {assessDocumentProductCoverage,documentIdentifierReferences,documentIdentifierSource,isBoundedEpistemicFactAction,isConversationalAcknowledgment,requestsDocumentProductCoverage} from './document-product-evidence.ts';
+import {assessDocumentProductCoverage,documentIdentifierReferences,documentIdentifierSource,investigationThenDocumentDelivery,isBoundedEpistemicFactAction,isConversationalAcknowledgment,requestsDocumentProductCoverage} from './document-product-evidence.ts';
 export type BuyerTurnKind = 'fact_request' | 'sales_move' | 'confirmation';
 export type VerificationPolicyContext = {
   coachingRequest?:{id:string;requestedAt:number};
@@ -257,14 +257,17 @@ function conversationalClause(text:string):boolean {
  * normal source check, and hard company/context vetoes always win. */
 export function isNonAssertiveReply(say:string,claims:ReplyFactClaim[]):boolean {
  if(claims.some(claim=>!claim.supported||claim.kind!=='supplier_claim'||claim.reason!==AVAILABLE_DOCUMENT_ACTION))return false;
- const parts=replyClauses(say);
- return !!parts.length&&parts.every(part=>unresolvedFactCheck(part.text)||conversationalClause(part.text)||claims.some(claim=>claim.start===part.start&&claim.text===part.text&&claim.reason===AVAILABLE_DOCUMENT_ACTION));
+ const parts=sentences(say);
+ return !!parts.length&&parts.every(sentence=>unresolvedFactCheck(sentence.text)||replyClauses(sentence.text).every(local=>{
+  const part={...local,start:sentence.start+local.start};
+  return unresolvedFactCheck(part.text)||conversationalClause(part.text)||claims.some(claim=>claim.start===part.start&&claim.text===part.text&&claim.reason===AVAILABLE_DOCUMENT_ACTION);
+ }));
 }
 /** A whole-reply fast path must account for every clause, including a predicate
  * an older lexical detector may not recognize. Unrecognized tails keep the
  * ordinary verification path rather than inheriting the uncertainty exemption. */
 export function isBoundedFactCheckReply(say:string,claims:ReplyFactClaim[]):boolean {
- return replyClauses(say).some(part=>unresolvedFactCheck(part.text))&&isNonAssertiveReply(say,claims);
+ return replyClauses(say).some(part=>unresolvedFactCheck(part.text)||!!investigationThenDocumentDelivery(part.text))&&isNonAssertiveReply(say,claims);
 }
 function concreteSupplierAssertion(clause: string): boolean {
   // "That makes sense" is acknowledgment, not a claimed maintenance outcome.
@@ -392,6 +395,11 @@ function paraphraseCandidates(clause:string,evidence:Evidence[],context:Verifica
  * Ordinary profile/spec sends and questions about needs are not such claims. */
 function technicalSupportAssertion(clause:string,context:VerificationPolicyContext,evidence:Evidence[]):Pick<ReplyFactClaim,'supported'|'pending'|'candidateSourceIds'|'reason'|'sourceId'|'verificationBoundary'>|undefined {
  if(unresolvedFactCheck(clause))return;
+ const delivery=investigationThenDocumentDelivery(clause);
+ if(delivery){
+  const availability=technicalSupportAssertion(`I can send the ${delivery.document}.`,context,evidence);
+  return availability||{supported:false,reason:'The document proposed after checking coverage is not established as available by Company Knowledge.'};
+ }
  const coverage=assessDocumentProductCoverage(clause,context,evidence);
  if(coverage)return coverage;
  if(!context.coachingRequest)return;
@@ -704,7 +712,7 @@ export function assessReplyVerification(say: string, context: VerificationPolicy
   }
   const assertedRemainder=replyClauses(say).filter(part=>!unresolvedFactCheck(part.text)).map(part=>part.text).join(' ');
   const checkAndExistingDocuments=isBoundedFactCheckReply(say,claims)&&claims.every(claim=>claim.supported&&claim.kind==='supplier_claim'&&claim.reason===AVAILABLE_DOCUMENT_ACTION);
-  return { classification, claims, unsupportedClaims, supportedClaims, pendingClaims, requiresVerification: pendingClaims.length>0 || (classification.kind === 'fact_request' ? claims.length > 0&&!checkAndExistingDocuments || /\b(?:yes|correct|we\s+do|we\s+can|it\s+is|we\s+offer|we\s+supply)\b/i.test(assertedRemainder) : unsupportedClaims.length > 0), sanitizedReply, changed: sanitizedReply !== say };
+  return { classification, claims, unsupportedClaims, supportedClaims, pendingClaims, requiresVerification: pendingClaims.length>0 || (classification.kind === 'fact_request' ? !checkAndExistingDocuments&&(claims.length > 0 || /\b(?:yes|correct|we\s+do|we\s+can|it\s+is|we\s+offer|we\s+supply)\b/i.test(assertedRemainder)) : unsupportedClaims.length > 0), sanitizedReply, changed: sanitizedReply !== say };
 }
 
 export function sanitizeSalesReply(say: string, context: VerificationPolicyContext): ReplyVerificationAssessment {

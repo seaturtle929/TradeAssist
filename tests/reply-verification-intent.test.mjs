@@ -67,6 +67,9 @@ for(const company of companies){
   'and let you know after we have the results',
   "and report back when we've verified the coverage",
   'and get back to you with that before sending it',
+  'and will get back to you',
+  "and I'll report back with the findings",
+  'and we can let you know the answer',
   'and get back to you with the clarification before sending the documents',
  ])test(`${company.name}: neutral reporting of the eventual result stays unresolved: ${tail}`,()=>{
   const request=context(company),say=`Thanks for your question, Priya. I'll check whether our ${report} covers ${product} ${tail}.`,assessment=assessReplyVerification(say,request);
@@ -75,11 +78,24 @@ for(const company of companies){
   assert.equal(isNonAssertiveReply(say,assessment.claims),true,say);
   assert.equal(needsFactCheck(say,request),false,say);
  });
- for(const courtesy of ['Thanks for letting me know.','Priya, thanks for your question.','Thanks for confirming, Priya.','Thank you for sharing that.','Thanks for clarifying—','Got it.','Thanks for keeping us informed.'])test(`${company.name}: neutral conversational acknowledgment does not reclassify the next investigation: ${courtesy}`,()=>{
+ for(const courtesy of ['Thanks for letting me know.','Priya, thanks for your question.','Thanks for confirming, Priya.','Thank you for sharing that.','Thanks for clarifying—','Got it.','Thanks for keeping us informed.',...['this','that','the','your'].flatMap(determiner=>['question','update','clarification','information'].map(noun=>`Thanks for ${determiner} ${noun}, Priya.`))])test(`${company.name}: neutral conversational acknowledgment does not reclassify the next investigation: ${courtesy}`,()=>{
   const request=context(company),say=`${courtesy} I'll check whether the ${report} covers ${product} and get back to you before sending it.`,assessment=assessReplyVerification(say,request);
   assert.deepEqual(assessment.unsupportedClaims,[],say);
   assert.equal(isNonAssertiveReply(say,assessment.claims),true,say);
   assert.equal(needsFactCheck(say,request),false,say);
+ });
+ for(const continuation of [', then we can send it over',' and then I will email it to you',", then I'll share that report"])
+ test(`${company.name}: check and follow-through can precede an available document send: ${continuation}`,()=>{
+  const request=context(company),say=`I'll check whether our ${report} covers ${product} and let you know${continuation}.`;
+  const assessment=assessReplyVerification(say,request);
+  assert.deepEqual(assessment.unsupportedClaims,[],say);
+  assert.equal(needsFactCheck(say,request),false,say);
+  assert.ok(assessment.supportedClaims.some(claim=>claim.sourceId==='availability'));
+  for(const unavailable of [[],[{id:'missing',text:`The ${report} is not available.`}],[{id:'specs-only',text:`${product} specifications are available.`}]]){
+   const absent={...request,sources:unavailable};
+   assert.ok(assessReplyVerification(say,absent).unsupportedClaims.length,'A proposed send still needs the requested document.');
+   assert.equal(needsFactCheck(say,absent),true);
+  }
  });
  for(const topic of [product,'the report','coverage','your requirements'])test(`${company.name}: naming a question's topic asserts no answer: ${topic}`,()=>{
   const request=context(company),say=`Thank you for asking about ${topic}. I'll check whether the ${report} covers that product and get back to you with a clear answer.`,assessment=assessReplyVerification(say,request);
@@ -98,6 +114,7 @@ for(const company of companies){
   `I'll confirm that it covers ${product}.`,
   `Thanks for confirming our ${report} covers ${product}. I'll check the details.`,
   `Thanks for asking about our ${product} ${report}. I'll check the details.`,
+  `Thanks for that update confirming our ${report} covers ${product}. I'll check the details.`,
   `I'll look into what our ${product} ${report} contains.`,
   `I'll check whether the ${report} we have for ${product} includes your test.`,
   `I'll check whether the ${report} that we have for ${product} includes your test.`,
@@ -131,6 +148,10 @@ for(const company of companies){
   'and let you know, our report covers your product',
   "and get back to you once I've confirmed it covers your product",
   'and follow up with you once we approve your discount',
+  ', then we can send it tomorrow',
+  ', then we can ship it over',
+  ', then we can send it and approve your discount',
+  ', then we can send it because it proves your product is certified',
  ])test(`${company.name}: an attached assertion is not an ordinary offer to check: ${tail}`,()=>{
   const request=context(company),say=`I'll check whether the report covers ${product} ${tail}.`,assessment=assessReplyVerification(say,request);
   assert.equal(isNonAssertiveReply(say,assessment.claims),false,say);

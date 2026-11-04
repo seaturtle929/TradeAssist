@@ -1,7 +1,7 @@
 import type {CoachingContext} from './call-coaching';
 
 export type RepresentativeIdentity={name:string;source:'representative_speech'|'rep_profile'|'call_context'|'manager_preference';quote:string;turnId?:string};
-const excluded=new Set(['a','an','the','with','from','calling','here','glad','happy','sorry','ready','interested','following','checking','reaching','representing','speaking','regarding','about','going','looking']);
+const excluded=new Set(["i'm",'i','a','an','the','with','from','calling','here','glad','happy','sorry','ready','interested','following','checking','reaching','representing','speaking','regarding','about','going','looking']);
 const normalize=(value:string)=>value.replace(/[’‘]/g,"'").replace(/\s+/g,' ').trim();
 const validName=(value:string)=>!!value&&value.split(/\s+/).length<=3&&value.split(/\s+/).every(word=>/^[A-Z][a-zA-Z'-]*$/.test(word)&&!excluded.has(word.toLowerCase()));
 const nameFrom=(value:string,declared=false)=>{
