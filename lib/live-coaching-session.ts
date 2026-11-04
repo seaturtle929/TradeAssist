@@ -312,20 +312,30 @@ export class LiveCoachingSession {
   private followUnpublishedBuyerContinuation(id:string):void {
     if(this.queued||!this.options.onAudioIssue||!id||this.historicalTranscriptIds?.has(id))return;
     const work=[...this.works.values()].find(item=>this.current(item)&&!item.answered&&!item.published&&!item.lastDisplayedSay);
-    if(!work||!work.context.coachingRequest)return;
-    const request=work.context.coachingRequest,phase=work.phaseClock.snapshot();
-    const previousIds=request.speechItemIds||[];
-    const focus=coachingRequestFocus(work.context);
+    // After release, the coordinator can still be awaiting cancellation of an
+    // older provider response. Its current ticket then has a pinned snapshot
+    // but no Work yet. A third sentence must also follow the original click.
+    const pendingId=this.coordinator.state.pendingBuyer;
+    const pinned=!work&&pendingId?this.requestSnapshots.get(pendingId):undefined;
+    const source=work?.context||pinned?.context;
+    if(!source?.coachingRequest)return;
+    const request=source.coachingRequest,phase=work?.phaseClock.snapshot()||{queueWaitMs:pinned!.queueWaitMs,dispatchPreparationMs:pinned!.preparationMs+pinned!.enqueuedAt-pinned!.dispatchStarted,continuedDrafts:pinned!.continuedDrafts};
+    const previousIds=request.speechItemIds||[],focus=coachingRequestFocus(source);
     if(previousIds.includes(id)||focus.turnId===id)return;
-    const drafts=[...this.responses.values()].filter(item=>item.work===work);
-    const raw=drafts.at(-1)?.text||'',say=work.proposedSay||(raw?parseLiveDraft(raw,work.context)?.say:undefined);
-    work.superseded=true;work.verifier.invalidate();work.fallback?.abort();
-    if(work.timer)clearTimeout(work.timer);if(work.analysisTimer)clearTimeout(work.analysisTimer);
-    this.trace(work,'turn_continued',{rawText:raw||undefined,say,status:'unpublished_cancelled',reason:'The buyer resumed before any wording was published. Retain the original click and rebuild from the complete continued turn; this cancelled draft is not a verification repair.'});
+    if(work){
+      const drafts=[...this.responses.values()].filter(item=>item.work===work);
+      const raw=drafts.at(-1)?.text||'',say=work.proposedSay||(raw?parseLiveDraft(raw,work.context)?.say:undefined);
+      work.superseded=true;work.verifier.invalidate();work.fallback?.abort();
+      if(work.timer)clearTimeout(work.timer);if(work.analysisTimer)clearTimeout(work.analysisTimer);
+      this.trace(work,'turn_continued',{rawText:raw||undefined,say,status:'unpublished_cancelled',reason:'The buyer resumed before any wording was published. Retain the original click and rebuild from the complete continued turn; this cancelled draft is not a verification repair.'});
+    }else{
+      this.requestSnapshots.delete(request.id);
+      this.options.onRequestTrace?.({event:'turn_continued',requestId:request.id,suggestionId:`coaching-${request.id}`,at:Date.now(),attempt:0,status:'pending_dispatch_requeued',focus,reason:'The buyer continued while the provider cancellation acknowledgment was pending. Retire that undispatched snapshot and keep the original click queued for the complete turn; no additional draft was generated.'});
+    }
     this.coordinator.retireCurrent();this.options.onThinking(false);this.options.onChecking(false);
-    const context=structuredClone(work.context);
+    const context=structuredClone(source);
     context.coachingRequest={...request,releasedAt:undefined,releaseReason:undefined,queuedForMs:undefined,speechItemIds:undefined,partials:[],pendingSpeech:[]};
-    this.queued={id:request.id,requestedAt:request.requestedAt,started:work.started,queuedAt:performance.now(),queueWaitMs:phase.queueWaitMs||0,preparationMs:phase.dispatchPreparationMs||0,continuedDrafts:(phase.continuedDrafts||0)+1,context,speechIds:new Set([...previousIds,...(focus.turnId?[focus.turnId]:[]),id]),partials:[],pending:[]};
+    this.queued={id:request.id,requestedAt:request.requestedAt,started:work?.started??pinned!.started,queuedAt:performance.now(),queueWaitMs:phase.queueWaitMs||0,preparationMs:phase.dispatchPreparationMs||0,continuedDrafts:(phase.continuedDrafts||0)+(work?1:0),context,speechIds:new Set([...previousIds,...(focus.turnId?[focus.turnId]:[]),id]),partials:[],pending:[]};
   }
   suggestNow():LiveReplyTicket|null {return this.releaseQueuedRequest('suggest_now');}
   cancelQueuedRequest():boolean {

@@ -92,3 +92,24 @@ test('Preparation telemetry separates queued listening from synchronous dispatch
  let now=100;const clock=new CoachingPhaseClock(0,()=>now);clock.prepared(7,93,2);now=112;clock.providerStarted(500);const phases=clock.snapshot();
  assert.equal(phases.preparationMs,112);assert.equal(phases.dispatchPreparationMs,19);assert.equal(phases.queueWaitMs,93);assert.equal(phases.continuedDrafts,2);assert.equal(phases.repairCount,0);
 });
+
+
+test('A third sentence during the provider cancellation-ack gap replaces the undispatched snapshot',async()=>{
+ const t=fixture();try{
+  t.buyer('one','Please send the information.');t.request();const first=t.created();
+  t.start('two');t.end('two','Include the drawing.');await sleep(5);
+  assert.equal(t.creates().length,1,'The old provider cancellation is still unacknowledged');
+  t.start('three');t.end('three','Actually, do not send anything until I approve it.');await sleep(5);
+  assert.equal(t.creates().length,1);t.cancelled(first);
+  assert.equal(t.creates().length,2,'Only the latest continued snapshot can dispatch after cancellation');
+  assert.match(t.creates().at(-1).response.instructions,/Actually, do not send anything until I approve it/);
+  const requested=t.log.traces.filter(event=>event.event==='requested').at(-1);
+  assert.deepEqual(requested.snapshot.turns.map(turn=>turn.text),['Please send the information.','Include the drawing.','Actually, do not send anything until I approve it.']);
+  assert.equal(requested.focus.text,'Actually, do not send anything until I approve it.');
+  t.finish(t.created(),"Understood, I won't send anything until you approve it.");
+  assert.equal(t.log.shown.length,1);assert.match(t.log.shown[0].value.say,/won't send/);
+  assert.equal(t.log.traces.filter(event=>event.status==='pending_dispatch_requeued').length,1);
+  assert.equal(t.log.phases.at(-1).continuedDrafts,1,'An undispatched snapshot is not another cancelled model draft');
+  assert.equal(t.log.phases.at(-1).repairCount,0);assert.equal(new Set(t.log.traces.map(event=>event.requestId)).size,1);
+ }finally{t.session.stop();}
+});
