@@ -3,7 +3,7 @@ import {clientContextSuggestionProblems,clientContextSafeReply,reviewedClientCon
 import { hasClearConversationRefusal } from './conversation-boundary.ts';
 import {applyCoachingConfiguration,configurationSuggestionProblems,configurationAuthorizesAction,configuredSafeReply} from './coaching-configuration.ts';
 import {literalSpecificationEvidence,specificationNumberEvidence} from './scoped-specification-evidence.ts';
-import {assessDocumentProductCoverage,isBoundedEpistemicFactAction,requestsDocumentProductCoverage} from './document-product-evidence.ts';
+import {assessDocumentProductCoverage,isBoundedEpistemicFactAction,isConversationalAcknowledgment,requestsDocumentProductCoverage} from './document-product-evidence.ts';
 export type BuyerTurnKind = 'fact_request' | 'sales_move' | 'confirmation';
 export type VerificationPolicyContext = {
   coachingRequest?:{id:string;requestedAt:number};
@@ -239,13 +239,7 @@ function unresolvedFactCheck(clause:string):boolean {
  * its answer. Inspect every clause; a polite prefix never exempts its tail. */
 function conversationalClause(text:string):boolean {
  const line=text.trim().replace(/[’‘]/g,"'");
- const courtesy=line.match(/^(?:(?:thanks|thank you)(?: for (?:asking|your question|the question|raising that|checking|clarifying|pointing that out))?|of course|understood|okay|ok|that makes sense|I understand)(.*)$/i);
- if(courtesy){
-  const tail=courtesy[1].trim();
-  // A vocative is a name, not a product, predicate or source claim. Name
-  // correctness and conversation relevance remain separate normal checks.
-  if(/^[,.!]*$/.test(tail)||/^,\s*[A-Z][A-Za-z'-]*(?:\s+[A-Z][A-Za-z'-]*){0,2}[.!]?$/.test(tail))return true;
- }
+ if(isConversationalAcknowledgment(line))return true;
  if(/^(?:(?:once|after|when|if)\s+(?:I|we)\s+(?:(?:verify|confirm) (?:that|its availability|it is available)|know for sure)|(?:I|we)(?:'ll| will)\s+(?:follow up(?: and let you know)?|let you know|report back|confirm(?: that for you)?(?: before (?:sending|emailing) (?:it|them|anything|the documents))?))[,.!]?$/i.test(line))return true;
  // An unqualified investigation promises only the rep's follow-through.
  // Restricted actions, content assertions and time promises cannot fit it.
@@ -280,6 +274,10 @@ function concreteSupplierAssertion(clause: string): boolean {
   // or personnel availability; the condition explicitly remains unresolved.
   if(/^\s*(?:I|we)(?:['’]ll|\s+(?:will|can|would))\s+(?:hold|wait|stay on the line)\b/i.test(clause)&&/\b(?:while|as|to)\b.{0,40}\b(?:check|see|find out)\b.{0,25}\b(?:if|whether)\b/i.test(clause)&&! /\b(?:but|however|guarantee|stock|inventory|products?|materials?|samples?|we (?:have|offer|supply))\b/i.test(clause))return false;
   if(declinesResponseDeadline(clause)&&/\b(?:hours?|days?|deadline|turnaround|quote|response)\b/i.test(clause))return false;
+  // A commercial commitment need not use “we will”: “Delivery is Friday”
+  // supplies the same supplier schedule. Questions and explicit investigation
+  // remain nonassertive; a declarative commercial subject needs evidence.
+  if(!/\?\s*$/.test(clause)&&/^\s*(?:(?:and|but|also)\s+)?(?:(?:the|our|your|this|that)\s+)?(?:delivery|shipment|shipping|dispatch|arrival|discount|concession|certification|payment terms)\b.{0,45}\b(?:is|are|will be|has been|have been|takes?|comes?|happens?|starts?|arrives?|leaves?|departs?|includes?)\b/i.test(clause))return true;
   // Restating the buyer's desired outcome is not asserting supplier performance.
   if(/^\s*(?:you(?:['’]re| are)?\s+(?:looking|hoping|aiming)|you\s+(?:want|need)|your\s+(?:goal|priority|requirement|aim)\s+is)\b/i.test(clause)&&!/\b(?:our|we can|we will|guarantee)\b/i.test(clause))return false;
   // Speech and streamed wording may put the predicate in its own sentence:

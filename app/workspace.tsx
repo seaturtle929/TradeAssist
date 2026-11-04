@@ -1076,9 +1076,9 @@ export default function Workspace() {
         initialQuestions:buyerQuestionLogRef.current.at(-1)?.questions||[],
         vadSilenceMs:buyerVadSilenceMs(audioMode),
         snapshot:()=>observationPayload(context.current.turns) as LiveContext,
-        latestContext:()=>{
+        latestContext:(turns)=>{
           const repSpeech=repAudio.current?.observedSpeechSnapshot()||{partials:[],pendingSpeech:[]};
-          return {...payload("coach",context.current.turns),coachingRequest:{id:'',requestedAt:0,...repSpeech}} as LiveContext;
+          return {...payload("coach",(turns as Turn[]|undefined)??context.current.turns),coachingRequest:{id:'',requestedAt:0,...repSpeech}} as LiveContext;
         },
         onQueuedRequest:state=>{if(peer.current===pc){setQueuedRequest(state);if(state)setThinking(false);}},
         knowledgeSources:snapshot=>{

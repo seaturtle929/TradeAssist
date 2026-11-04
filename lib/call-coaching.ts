@@ -252,10 +252,11 @@ export function needsFactCheck(say:string,backupOrContext:string|CoachingContext
     if(primary.classification.kind!=='fact_request')return primary.requiresVerification||!!secondary?.requiresVerification;
     // An acknowledgment, clarification or bounded promise to investigate does
     // not answer the factual question. Use the complete proposed wording and
-    // claim/boundary assessment before the conservative legacy keyword scan.
+    // claim/boundary assessment instead of the legacy keyword scan for an
+    // intentional request. Unknown predicates retain normal verification.
     // In particular, a courtesy/name must not make “check whether [report]
     // covers [product]” pay for an unrelated document-content model request.
-    if(context.coachingRequest&&isNonAssertiveReply(say,primary.claims)&&!primary.requiresVerification&&(!backup.trim()||secondary&&!secondary.requiresVerification&&isNonAssertiveReply(backup,secondary.claims)))return false;
+    if(context.coachingRequest)return !(isNonAssertiveReply(say,primary.claims)&&!primary.requiresVerification&&(!backup.trim()||secondary&&!secondary.requiresVerification&&isNonAssertiveReply(backup,secondary.claims)));
   }
   if(!backup.trim()&&isWrittenQuoteConfirmation(say,context))return false;
   if(!backup.trim() && isDocumentDelivery(say))return false;

@@ -35,9 +35,9 @@ export type LiveRequestReceipt=LiveReplyTicket|{queued:true;id:string;requestedA
 type QueuedRequest={id:string;requestedAt:number;started:number;queuedAt:number;queueWaitMs:number;preparationMs:number;continuedDrafts:number;context:LiveContext;status?:QueuedCoachingRequest['status'];stoppedAt?:number;timer?:ReturnType<typeof setTimeout>;speechIds:Set<string>;partials:CoachingSpeechSnapshot['partials'];pending:CoachingSpeechSnapshot['pendingSpeech']};
 type Work={phaseClock:CoachingPhaseClock;ticket:LiveReplyTicket;context:LiveContext;library:KnowledgeReference[];lookupSources?:KnowledgeReference[];id:string;started:number;timer?:ReturnType<typeof setTimeout>;fallback?:AbortController;rescued:boolean;answered:boolean;ready:boolean;toolRounds:number;verifier:LiveVerification<Guidance>;
   purpose:boolean;route:ReturnType<typeof fastRouteFor>;cached?:Guidance;checking:boolean;archived:boolean;superseded:boolean;published?:Guidance;publishedAt?:number;proposedSay?:string;representativeText?:string;analysis?:Partial<Guidance>;analysisTimer?:ReturnType<typeof setTimeout>;analysisShown:boolean;metadataComplete:boolean;
-  repairCount:number;repairPending:boolean;repairReason?:string;rejected?:boolean;candidateAttempt?:number;
+  awaitingTranscript?:boolean;deferredResponse?:Record<string,unknown>;repairCount:number;repairPending:boolean;repairReason?:string;rejected?:boolean;candidateAttempt?:number;
   firstDisplayAt?:number;verificationAt?:number;verificationCandidate?:string;verificationGuidance?:Guidance;unverifiedDisplayed?:string;lastDisplayedSay?:string;verificationFailure?:string;replacementLogged?:boolean;contextReplacement?:{originalSay:string;reason:string;originalWasDisplayed:boolean}};
-type ResponseBuffer={work:Work;text:string;checked:Guidance|null;checkedSay:string;primed:string;firstShown:boolean;previewSay?:string;attempt?:number;formatRecovered?:boolean};
+type ResponseBuffer={work:Work;text:string;checked:Guidance|null;checkedSay:string;primed:string;firstShown:boolean;previewSay?:string;attempt?:number;formatRecovered?:boolean;providerDoneRecorded?:boolean;rawWordingRecorded?:boolean};
 type RealtimeOutputItem={type?:string;name?:string;arguments?:string;call_id?:unknown;content?:{text?:string}[]};
 type RealtimeResponse={id?:unknown;metadata?:Record<string,unknown>;usage?:unknown;status?:string;output?:RealtimeOutputItem[]};
 const nonlexical=(text:string)=>/^(?:uh+|um+|hmm+|mm[- ]?hmm)[.!?\s]*$/i.test(text.trim());
@@ -56,7 +56,7 @@ export type LiveCoachingSessionOptions={
   listeningStartedAt?:number;
   /** Read current UI state only until queued speech is ready. Generation and
    * verification then share one immutable snapshot. */
-  latestContext?:()=>LiveContext;
+  latestContext?:(turns?:LiveContext['turns'])=>LiveContext;
   onQueuedRequest?:(state:QueuedCoachingRequest|null)=>void;
   knowledgeSources?:(context:LiveContext)=>KnowledgeReference[];
   send:(event:Record<string,unknown>)=>void;
@@ -121,6 +121,9 @@ export class LiveCoachingSession {
   private readonly usage=new Set<string>();
   private stopped=false;
   private queued?:QueuedRequest;
+  private speculative?:{requestId:string;itemId:string;text:string;fingerprint:string;startedAt:number};
+  private readonly speculationAttempted=new Set<string>();
+  private readonly speculationStats=new Map<string,{speculativeGenerations:number;discardedSpeculations:number;speculationEligibleAtMs:number;speculationOverlapMs?:number}>();
   private readonly observedFinals=new Map<string,AcceptedBuyerTurn>();
   private readonly resolvedSpeechIds=new Set<string>();
   private readonly unansweredBuyerQuestions=new Map<string,PendingBuyerQuestion>();
@@ -222,14 +225,20 @@ export class LiveCoachingSession {
     this.clearIncomplete();this.clearThoughtPause();
     this.listeningStartedAt=Date.now();this.coordinator.buyerSpeech(false);this.options.onBuyerSpeech(false);this.syncBuyerPending();
   }
-  private dispatchRequest(snapshot:LiveContext,started:number,dispatchStarted=performance.now(),preparationMs=0,queueWaitMs=0,continuedDrafts=0):LiveReplyTicket|null {
+  private dispatchRequest(snapshot:LiveContext,started:number,dispatchStarted=performance.now(),preparationMs=0,queueWaitMs=0,continuedDrafts=0,speculating=false):LiveReplyTicket|null {
     const {id,requestedAt}=snapshot.coachingRequest!;
-    this.restoreQuestions(snapshot,id);
-    snapshot.unansweredBuyerQuestions=this.questionsFor(snapshot).slice(0,8);
+    if(!speculating)this.restoreQuestions(snapshot,id);
+    const focus=coachingRequestFocus(snapshot);
+    snapshot.unansweredBuyerQuestions=(speculating&&this.questionWithdrawn(focus.text)?[]:this.questionsFor(snapshot)).slice(0,8);
+    if(speculating&&focus.turnId){
+      const turn=snapshot.turns.find(item=>item.id===focus.turnId)!;
+      snapshot.unansweredBuyerQuestions=[...snapshot.unansweredBuyerQuestions,...analyzeBuyerText(turn.text).questions.map(text=>({turnId:turn.id,text,at:turn.at}))].slice(0,8);
+      this.speculative!.fingerprint=this.speculationFingerprint(snapshot);
+    }
     this.requestSnapshots.clear();this.requestSnapshots.set(id,{context:snapshot,started,dispatchStarted,enqueuedAt:performance.now(),preparationMs,queueWaitMs,continuedDrafts});
-    const focus=coachingRequestFocus(snapshot),text=focus.text;
+    const text=focus.text;
     if(focus.turnId&&!snapshot.coachingRequest?.speechItemIds?.length)this.latencyClock.linkRequestSpeech(id,focus.turnId);
-    this.options.onRequestTrace?.({event:'requested',requestId:id,suggestionId:`coaching-${id}`,at:requestedAt,attempt:0,focus,snapshot:{request:structuredClone(snapshot.coachingRequest!),turns:structuredClone(snapshot.turns),participant:deriveCallParticipant(snapshot.turns)}});
+    this.options.onRequestTrace?.({event:speculating?'speculation_started':'requested',requestId:id,suggestionId:`coaching-${id}`,at:speculating?Date.now():requestedAt,attempt:0,...speculating?{reason:'Hidden generation from complete-looking provisional recognition. This shadow transcript is not confirmed speech; no validation or display is allowed until the final transcript and request meaning match.'}:{},focus,snapshot:{request:structuredClone(snapshot.coachingRequest!),turns:structuredClone(snapshot.turns),participant:deriveCallParticipant(snapshot.turns)}});
     this.options.onPendingTurn(focus.displayText);this.options.onThinking(true);
     const ticket=this.coordinator.requestNextMove({id,text,at:requestedAt});
     // Never retain caller-owned mutable data after the snapshot was pinned.
@@ -254,8 +263,10 @@ export class LiveCoachingSession {
     // Readiness observes speech only. Rebuilding retrieval/foundation on every
     // ASR token adds work precisely when the current turn needs low latency.
     const latest=refreshed||queued.context;
-    const original=queued.context;
-    const context=structuredClone({...latest,callId:original.callId,manufacturer:original.manufacturer,companyConfiguration:original.companyConfiguration,callContext:original.callContext,callType:original.callType,currentStage:original.currentStage,clientContext:original.clientContext}),known=new Set(context.turns.map(turn=>turn.id));
+    // Keep fresh authority, client updates and stage intent at release. Identity
+    // switches are rejected by releaseQueuedRequest; overwriting fresh fields
+    // here would hide a changed boundary from the speculative fingerprint.
+    const context=structuredClone(latest),known=new Set(context.turns.map(turn=>turn.id));
     // React can publish its next render after an ASR callback. Include observed
     // literal finals without guessing the speaker on a mixed-audio channel.
     for(const turn of this.observedFinals.values())if(queued.speechIds.has(turn.id)&&!known.has(turn.id))context.turns.push({...turn,role:this.options.onAudioIssue?'buyer':'conversation'});
@@ -269,10 +280,12 @@ export class LiveCoachingSession {
     const queued=this.queued;if(!queued||this.stopped)return;
     if(queued.timer)clearTimeout(queued.timer);queued.timer=undefined;
     const current=this.queuedContext();this.captureQueuedSpeech(current);
+    const provisional=this.speculative&&current.coachingRequest?.partials?.find(part=>part.id===this.speculative!.itemId);
+    if(provisional&&this.normalizedSpeech(provisional.text)!==this.speculative!.text)this.discardSpeculation('The provisional words changed before final transcription.');
     const speaking=this.coordinator.state.buyerSpeaking;
     const status=speaking?'listening':'transcribing';
     if(queued.status!==status){queued.status=status;this.options.onQueuedRequest?.({id:queued.id,requestedAt:queued.requestedAt,status,message:'Listening… your suggestion will appear when they finish.'});}
-    if(speaking){queued.stoppedAt=undefined;return;}
+    if(speaking){this.discardSpeculation('The buyer resumed before final transcription.');queued.stoppedAt=undefined;return;}
     queued.stoppedAt??=performance.now();
     const elapsed=performance.now()-queued.stoppedAt,settle=this.options.continuationSettleMs??120;
     const finalIds=new Set(current.turns.map(turn=>turn.id));
@@ -280,6 +293,7 @@ export class LiveCoachingSession {
     const deadline=this.options.queuedTranscriptionTimeoutMs??900;
     if(elapsed>=settle&&!unfinished){this.releaseQueuedRequest('ready');return;}
     if(elapsed>=deadline){this.releaseQueuedRequest('transcription_timeout');return;}
+    if(unfinished)this.trySpeculativeGeneration(current);
     const wait=unfinished?deadline-elapsed:Math.max(0,settle-elapsed);
     queued.timer=setTimeout(()=>this.scheduleQueuedRequest(),Math.max(1,wait));
   }
@@ -289,7 +303,7 @@ export class LiveCoachingSession {
     if(queued.timer)clearTimeout(queued.timer);
     const latest=this.options.latestContext?.()||this.options.snapshot({id:queued.id,text:'',at:queued.requestedAt});
     const previous=queued.context;
-    if(previous.callId&&latest.callId&&previous.callId!==latest.callId||previous.clientId&&latest.clientId&&previous.clientId!==latest.clientId||previous.manufacturer?.name&&latest.manufacturer?.name&&previous.manufacturer.name!==latest.manufacturer.name){
+    if(previous.callId&&latest.callId&&previous.callId!==latest.callId||previous.clientId&&latest.clientId&&previous.clientId!==latest.clientId||previous.manufacturer?.name&&latest.manufacturer?.name&&previous.manufacturer.name!==latest.manufacturer.name||previous.manufacturer?.id!==latest.manufacturer?.id){
       this.cancelQueuedRequest();this.options.onWarning('The call or company changed while listening. Request a new suggestion for the current call.');return null;
     }
     let context=this.queuedContext(latest);this.captureQueuedSpeech(context);
@@ -299,10 +313,73 @@ export class LiveCoachingSession {
     const releasedAt=Date.now(),speechIds=[...queued.speechIds].sort((a,b)=>(this.speechObservations.get(a)?.order??0)-(this.speechObservations.get(b)?.order??0));
     context=applyCoachingConfiguration({...context,coachingRequest:{...context.coachingRequest!,releasedAt,queuedForMs:Math.max(0,performance.now()-queued.started),releaseReason:reason,speechItemIds:speechIds}});
     const lastSpeechId=speechIds.at(-1);if(lastSpeechId)this.latencyClock.linkRequestSpeech(queued.id,lastSpeechId,speechIds);
+    const speculativeWork=this.speculative?this.acceptSpeculation(context,reason):undefined;
     this.queued=undefined;this.options.onQueuedRequest?.(null);
     this.options.onRequestTrace?.({event:'queue_released',requestId:queued.id,suggestionId:`coaching-${queued.id}`,at:releasedAt,attempt:0,reason,focus:coachingRequestFocus(context),snapshot:{request:structuredClone(context.coachingRequest!),turns:structuredClone(context.turns),participant:deriveCallParticipant(context.turns)}});
     if(reason==='transcription_timeout')this.options.onWarning('The last buyer words did not finish transcribing. The suggestion uses only the words available; check any missing details.');
+    if(speculativeWork){
+      speculativeWork.phaseClock.phases.queueWaitMs=queueWaitMs;
+      const deferred=speculativeWork.deferredResponse;speculativeWork.deferredResponse=undefined;
+      if(deferred)this.handle(deferred);else {const buffer=[...this.responses.values()].find(item=>item.work===speculativeWork);if(buffer)this.update(buffer);}
+      return speculativeWork.ticket;
+    }
     return this.dispatchRequest(context,queued.started,dispatchStarted,queued.preparationMs,queueWaitMs,queued.continuedDrafts);
+  }
+  private normalizedSpeech(text:string){return text.trim().replace(/\s+/g,' ');}
+  private speculationFingerprint(context:LiveContext):string {
+    const stable=(value:unknown):unknown=>Array.isArray(value)?value.map(stable):value&&typeof value==='object'?Object.fromEntries(Object.entries(value).filter(([,item])=>item!==undefined).sort(([a],[b])=>a.localeCompare(b)).map(([key,item])=>[key,stable(item)])):value;
+    const normalized=structuredClone(context);
+    const request=normalized.coachingRequest!;
+    normalized.coachingRequest={...request,preparationMs:undefined,releasedAt:undefined,queuedForMs:undefined,releaseReason:undefined};
+    normalized.turns=normalized.turns.map(turn=>({...turn,text:this.normalizedSpeech(turn.text)}));
+    const focus=coachingRequestFocus(normalized),instructions=liveRequestInstructionsFor(normalized,{id:request.id,text:focus.text,at:request.requestedAt});
+    // Compare complete model meaning plus all original evidence/authority, not
+    // just the last utterance or selected excerpts. Request clocks are not
+    // semantic input. The generated buyerMemory clock is already omitted by
+    // the normal generation projection; original client history is retained.
+    return JSON.stringify(stable({instructions,companyConfiguration:normalized.companyConfiguration,sources:normalized.sources,clientContext:normalized.clientContext,callContext:normalized.callContext,manufacturer:normalized.manufacturer,brain:normalized.brain&&{facts:normalized.brain.facts,rules:normalized.brain.rules,learningExamples:normalized.brain.learningExamples,rejectedSignatures:normalized.brain.rejectedSignatures,decisionLog:normalized.brain.decisionLog}}));
+  }
+  private trySpeculativeGeneration(current:LiveContext):void {
+    const queued=this.queued;if(!queued||this.speculative||this.speculationAttempted.has(queued.id)||!this.options.onAudioIssue||this.coordinator.state.buyerSpeaking||this.coordinator.state.serverBusy)return;
+    const partials=current.coachingRequest?.partials||[],pending=current.coachingRequest?.pendingSpeech||[];
+    if(partials.length!==1||partials[0].role!=='buyer'||!partials[0].id||pending.some(item=>item.id!==partials[0].id||item.role!=='buyer'))return;
+    const part=partials[0],text=this.normalizedSpeech(part.text),item=this.audioItems.get(part.id!);
+    if(!/[.!?]["')\]]*$/.test(text)||/(?:\.\.\.|…)["')\]]*$/.test(text)||this.incomplete||this.timedOutAudio.has(part.id!)||this.reportedAudio.has(part.id!)||this.finals.has(part.id!)||assessBuyerTranscript({text,logprobs:item?.logprobs,speechMs:item?.speechMs}).status!=='accept'||unexpectedEnglishScript(text)||isTranscriptionPromptEcho(text))return;
+    const turn={id:part.id!,text,role:'buyer' as const,at:this.starts.get(part.id!)||part.at||queued.requestedAt};
+    const turns=[...current.turns.filter(value=>value.id!==turn.id),turn].sort((a,b)=>a.at-b.at);
+    const latest=this.options.latestContext?.(turns)||{...current,turns};
+    if(latest.callId!==current.callId||latest.manufacturer?.id!==current.manufacturer?.id||latest.coachingRequest?.partials?.some(part=>part.role==='you')||latest.coachingRequest?.pendingSpeech?.some(part=>part.role==='you'))return;
+    // Pure shadow only: never call onBuyerTurn/acceptBuyer or persist provisional
+    // words. The full payload is rebuilt for these candidate words so later
+    // exact comparison includes the derived foundation and authority.
+    const shadow=applyCoachingConfiguration(snapshotCoachingContext(this.withListeningBoundary({...latest,turns,coachingRequest:{...current.coachingRequest!,partials:[],pendingSpeech:[],speechItemIds:[...queued.speechIds],transcriptState:'confirmed'}})));
+    const at=performance.now();this.speculationAttempted.add(queued.id);
+    this.speculationStats.set(queued.id,{speculativeGenerations:1,discardedSpeculations:0,speculationEligibleAtMs:at});
+    this.speculative={requestId:queued.id,itemId:turn.id,text,fingerprint:'',startedAt:at};
+    this.dispatchRequest(shadow,queued.started,at,queued.preparationMs,queued.queueWaitMs+at-queued.queuedAt,queued.continuedDrafts,true);
+    this.options.onThinking(false);
+  }
+  private discardSpeculation(reason:string):void {
+    const speculation=this.speculative;if(!speculation)return;
+    const work=[...this.works.values()].find(item=>this.current(item)&&item.ticket.turn.id===speculation.requestId);
+    if(work){
+      work.superseded=true;work.awaitingTranscript=false;work.verifier.invalidate();work.fallback?.abort();if(work.timer)clearTimeout(work.timer);if(work.analysisTimer)clearTimeout(work.analysisTimer);
+      const raw=[...this.responses.values()].find(item=>item.work===work)?.text;
+      this.trace(work,'speculation_discarded',{rawText:raw,status:'hidden_discarded',reason});
+    }
+    const stats=this.speculationStats.get(speculation.requestId);if(stats)stats.discardedSpeculations++;
+    this.requestSnapshots.delete(speculation.requestId);this.speculative=undefined;this.coordinator.retireCurrent();this.options.onThinking(false);this.options.onChecking(false);
+  }
+  private acceptSpeculation(context:LiveContext,reason:string):Work|undefined {
+    const speculation=this.speculative;if(!speculation)return;
+    const work=[...this.works.values()].find(item=>this.current(item)&&item.ticket.turn.id===speculation.requestId);
+    const final=this.observedFinals.get(speculation.itemId);
+    context.unansweredBuyerQuestions=this.questionsFor(context).slice(0,8);
+    if(reason!=='ready'||!work||!final||this.normalizedSpeech(final.text)!==speculation.text||context.coachingRequest?.partials?.length||context.coachingRequest?.pendingSpeech?.length||this.speculationFingerprint(context)!==speculation.fingerprint){this.discardSpeculation('Final recognition, current conversation or authority differs from the provisional candidate, or final transcription was unavailable.');return;}
+    const stats=this.speculationStats.get(speculation.requestId)!;stats.speculationOverlapMs=performance.now()-speculation.startedAt;
+    Object.assign(work.phaseClock.phases,stats);work.awaitingTranscript=false;work.context=context;this.speculative=undefined;
+    this.trace(work,'speculation_accepted',{status:'final_confirmed',reason:'Exact normalized final text and complete generation meaning/evidence/authority match. Ordinary factual and conversation checks now run on the real final snapshot.'});
+    return work;
   }
   /** A pause can segment one explanation before its final qualification. An
    * existing click follows resumed isolated-buyer speech only while no wording
@@ -340,6 +417,7 @@ export class LiveCoachingSession {
   suggestNow():LiveReplyTicket|null {return this.releaseQueuedRequest('suggest_now');}
   cancelQueuedRequest():boolean {
     const queued=this.queued;if(!queued)return false;
+    this.discardSpeculation('The representative cancelled the queued request.');
     if(queued.timer)clearTimeout(queued.timer);this.queued=undefined;this.options.onQueuedRequest?.(null);this.options.onThinking(false);this.options.onChecking(false);
     this.options.onRequestTrace?.({event:'queue_cancelled',requestId:queued.id,suggestionId:`coaching-${queued.id}`,at:Date.now(),attempt:0,reason:'The representative cancelled the queued request.'});
     return true;
@@ -374,7 +452,7 @@ export class LiveCoachingSession {
       if(candidate)this.issue(work,'unavailable',candidate,'Listening stopped before validation finished. This candidate is retained for review and was never ready to say.');
       this.trace(work,'cancelled',{status:'cancelled',reason:'Listening stopped before this requested suggestion finished.',focus:coachingRequestFocus(work.context)});
     }
-    this.stopped=true;this.clearThoughtPause();this.clearIncomplete();for(const item of this.audioItems.values())if(item.timer)clearTimeout(item.timer);this.audioItems.clear();this.coordinator.reset();this.responses.clear();this.requestEvents.clear();this.works.clear();this.requestSnapshots.clear();this.requestedIds.clear();this.pending.clear();this.partials.clear();this.speechObservations.clear();this.observedFinals.clear();this.resolvedSpeechIds.clear();this.unansweredBuyerQuestions.clear();this.observeSpeech();this.options.onAudioIssue?.(null);
+    this.stopped=true;this.clearThoughtPause();this.clearIncomplete();for(const item of this.audioItems.values())if(item.timer)clearTimeout(item.timer);this.audioItems.clear();this.coordinator.reset();this.responses.clear();this.requestEvents.clear();this.works.clear();this.requestSnapshots.clear();this.requestedIds.clear();this.speculationAttempted.clear();this.speculationStats.clear();this.pending.clear();this.partials.clear();this.speechObservations.clear();this.observedFinals.clear();this.resolvedSpeechIds.clear();this.unansweredBuyerQuestions.clear();this.observeSpeech();this.options.onAudioIssue?.(null);
   }
 
   confirmBuyerAudio():void {
@@ -575,11 +653,13 @@ export class LiveCoachingSession {
       if(!this.coordinator.responseCreated(responseId,revision))return;
       const work=this.works.get(revision);if(!work)return;
       this.responses.set(responseId,{work,text:"",checked:null,checkedSay:"",primed:"",firstShown:false,attempt:work.repairCount});
-      this.options.onThinking(true);return;
+      if(!work.awaitingTranscript)this.options.onThinking(true);return;
     }
     if(event.type==="response.output_text.delta" || event.type==="response.text.delta") {
       const buffer=this.responses.get(String(event.response_id));if(!buffer || !this.current(buffer.work)||(buffer.attempt??0)!==buffer.work.repairCount)return;
-      buffer.work.phaseClock.firstDelta();buffer.text+=String(event.delta||"");this.update(buffer);return;
+      buffer.work.phaseClock.firstDelta();buffer.text+=String(event.delta||"");
+      if(!buffer.rawWordingRecorded&&/^SAY:[^\n]*\S[^\n]*\n/m.test(buffer.text)){buffer.rawWordingRecorded=true;buffer.work.phaseClock.rawWordingComplete();}
+      this.update(buffer);return;
     }
     if(event.type==="response.done") {
       const response=event.response as RealtimeResponse,responseId=String(response?.id||"");
@@ -587,7 +667,8 @@ export class LiveCoachingSession {
       const buffer=this.responses.get(responseId);
       this.coordinator.responseDone(responseId);
       if(!buffer || !this.current(buffer.work))return;
-      const work=buffer.work;work.phaseClock.providerComplete();
+      const work=buffer.work;if(!buffer.providerDoneRecorded){buffer.providerDoneRecorded=true;work.phaseClock.providerComplete();}
+      if(work.awaitingTranscript){work.deferredResponse=event;return;}
       this.trace(work,'candidate',{rawText:buffer.text||JSON.stringify(response.output||[]),status:response.status,attempt:buffer.attempt??0});
       if((buffer.attempt??0)!==work.repairCount){if(work.repairPending)this.coordinator.continueResponse(work.ticket);return;}
       work.metadataComplete=true;
@@ -767,6 +848,8 @@ export class LiveCoachingSession {
     const preparationStarted=performance.now(),{context,started}=pinned;this.requestSnapshots.delete(ticket.turn.id);
     const library=(context.companyConfiguration?configurationReferences(context.companyConfiguration.snapshot):this.options.knowledgeSources?.(context)||context.sources).map(source=>({...source}));
     const work:Work={phaseClock:new CoachingPhaseClock(started),ticket,context,library,id:`coaching-${ticket.turn.id}`,started,rescued:false,answered:false,ready:false,toolRounds:0,repairCount:0,repairPending:false,verifier:null as unknown as LiveVerification<Guidance>,purpose:!!context.coachingRequest||!!context.callContext,route:fastRouteFor({...context,sources:library}),checking:false,archived:false,superseded:false,analysisShown:false,metadataComplete:false};
+    work.awaitingTranscript=this.speculative?.requestId===ticket.turn.id;
+    Object.assign(work.phaseClock.phases,this.speculationStats.get(ticket.turn.id)||{});
     work.phaseClock.prepared(pinned.preparationMs+pinned.enqueuedAt-pinned.dispatchStarted+performance.now()-preparationStarted,pinned.queueWaitMs,pinned.continuedDrafts,preparationStarted-pinned.enqueuedAt);
     work.verifier=new LiveVerification<Guidance>({verify:(say,signal)=>this.options.verify(work.context,this.quoteMetadata({...parseLiveDraft(`SAY: ${say}`,work.context)!,...(work.verificationGuidance?.say===say?work.verificationGuidance:{}),say,backup:"",evidence:[]},work),signal)});
     this.works.set(ticket.revision,work);return work;
@@ -802,7 +885,7 @@ export class LiveCoachingSession {
     work.phaseClock.providerStarted(instructions.length);
     const eventId=`coaching-${ticket.revision}-${work.repairCount}-${crypto.randomUUID()}`;
     this.requestEvents.set(eventId,{work,attempt:work.repairCount});
-    this.trace(work,'provider_request',{reason:work.repairReason||'Generate from the intentional request snapshot.'});
+    this.trace(work,'provider_request',{reason:work.awaitingTranscript?'Hidden speculative generation; final transcript acceptance is required before checks or display.':work.repairReason||'Generate from the intentional request snapshot.'});
     this.options.send({type:"response.create",event_id:eventId,response:{metadata:{epoch:String(ticket.revision),trigger:ticket.turn.id},...continuation||!factual?{tool_choice:"none"}:{},input:[{type:"message",role:"user",content:[{type:"input_text",text:"Write the representative’s next spoken line for this pinned moment. Start with SAY: followed immediately by literal words the rep can say aloud; then newline MOVE: with a concise action. Use the supplied objective and context; no new buyer speech is implied. A supported confirmation or goodbye is complete when that is the useful move."}]}],instructions}});
   }
   private merge(buffer:ResponseBuffer,verified:Guidance):Guidance {
@@ -857,7 +940,7 @@ export class LiveCoachingSession {
     const work=buffer.work;
     // A draft/checking row is not ready-to-say wording. Keep it out of the
     // spoken card until the complete candidate has passed its applicable checks.
-    if(!complete||unverifiedCandidate)return;
+    if(!complete||unverifiedCandidate||work.awaitingTranscript)return;
     if(value.verified!==true){this.issue(work,'unavailable',value.say,value.caution||'This candidate has not passed its source checks.');return;}
     if(complete){work.ready=true;if(work.timer)clearTimeout(work.timer);work.fallback?.abort();}
     this.coordinator.deferPublish(work.ticket,()=>{
@@ -886,7 +969,7 @@ export class LiveCoachingSession {
   private update(buffer:ResponseBuffer) {
     // The spoken line has already landed. Parse the remaining metadata once in
     // response.done, rather than deriving call state again on every token.
-    if(buffer.work.ready)return;
+    if(buffer.work.ready||buffer.work.awaitingTranscript)return;
     if(buffer.work.purpose) {
       const main=this.completedSay(buffer);
       if(main){this.prime(buffer,main);return;}
@@ -899,6 +982,7 @@ export class LiveCoachingSession {
     const main=this.completedSay(buffer);if(main)this.prime(buffer,main);
   }
   private prime(buffer:ResponseBuffer,main:Guidance) {
+    if(buffer.work.awaitingTranscript)return;
     if(buffer.primed===main.say || !this.current(buffer.work)||buffer.work.ready||buffer.work.candidateAttempt===buffer.work.repairCount)return;
     buffer.work.candidateAttempt=buffer.work.repairCount;
     main=this.guardSalesMove(this.quoteMetadata(main,buffer.work),buffer.work);
@@ -1016,6 +1100,7 @@ export class LiveCoachingSession {
     this.options.onSuggestionIssue?.({suggestionId:work.id,turnId:work.ticket.turn.id,at:Date.now(),status,originalSay,reason,...correction?{correction}:{},context:work.context});
   }
   private async rescue(work:Work,reason?:string) {
+    if(work.awaitingTranscript){this.discardSpeculation('The hidden provider generation failed before final transcription.');return;}
     if(!this.current(work)||work.answered||work.ready||work.rescued)return;
     if(work.context.coachingRequest&&work.repairCount){this.rejectDemand(work,reason||'The source-safe rewrite did not finish.');return;}
     work.rescued=true;const attempt=new AbortController();work.fallback=attempt;this.options.onThinking(true);

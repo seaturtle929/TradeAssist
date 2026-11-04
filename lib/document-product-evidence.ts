@@ -16,7 +16,10 @@ const negative=/\b(?:not|no|never|doesn't|does not|isn't|is not|aren't|are not|e
 const parts=(text:string)=>text.split(/\n+|(?<=[.!?;])\s+/).filter(Boolean);
 
 function documents(text:string){return [...text.matchAll(documentPattern)].map(match=>({text:match[0],start:match.index||0,end:(match.index||0)+match[0].length,kind:norm(match[0]).replace(/\breports\b/g,'report').replace(/\bsheets\b/g,'sheet').replace(/\bcertificates\b/g,'certificate').replace(/\bcertifications\b/g,'certification').replace(/\bspec sheet\b/g,'specification sheet')}));}
-const relationWords=(text:string)=>relationship.test(text.replace(documentPattern,' '));
+const inclusionPredicate=/^\s+(?:(?:definitely|certainly|explicitly|specifically|already|also)\s+)*(?:includes?|contains?)\b/i;
+const relationWords=(text:string)=>relationship.test(text.replace(documentPattern,' '))
+ ||documents(text).some(document=>inclusionPredicate.test(text.slice(document.end)))
+ ||/^\s*(?:it|this|that)\b/i.test(text)&&inclusionPredicate.test(text.replace(/^\s*(?:it|this|that)\b/i,''));
 function sameDocument(claim:string,source:string){return claim===source||claim==='test report'&&source==='material test report'||claim==='report'&&/report$/.test(source);}
 function scopes(text:string):Scope[]{
  const result:Scope[]=[...new Set((text.match(productPattern)||[]).filter(value=>!notProduct.test(value)).map(norm))].map(key=>({key,labels:[key]}));
@@ -47,7 +50,9 @@ function productPosition(text:string,scope:Scope){
   const mesh=new RegExp('\\b'+escaped(count||'')+'\\s*mesh\\b','i').exec(text),steel=new RegExp('\\b'+escaped(grade||'')+'\\s*stainless\\b','i').exec(text);
   return mesh&&steel?{start:Math.min(mesh.index,steel.index),end:Math.max(mesh.index+mesh[0].length,steel.index+steel[0].length)}:undefined;
  }
- const match=new RegExp('\\b'+escaped(scope.key)+'\\b','i').exec(text);return match?{start:match.index,end:match.index+match[0].length}:undefined;
+ // A model substring inside a report identifier (IR-PX20-2026) is not the
+ // product occurrence in “report IR-PX20-2026 covers Example PX20”.
+ const match=new RegExp('(?<![a-z0-9/-])'+escaped(scope.key)+'(?![a-z0-9/-])','i').exec(text);return match?{start:match.index,end:match.index+match[0].length}:undefined;
 }
 function linked(text:string,document:ReturnType<typeof documents>[number],scope:Scope){
  const product=productPosition(text,scope);if(!product)return false;
@@ -60,6 +65,11 @@ function linked(text:string,document:ReturnType<typeof documents>[number],scope:
  }
  if(document.end<=product.start){
   const between=text.slice(document.end,product.start);
+  // An explicitly named report can state its product scope with an identifier,
+  // an emphasis adverb and the product's company label. These remain candidate
+  // evidence only; semantic verification still checks the actual limitations.
+  const namedScope=between.match(/^\s*(?:[A-Z][A-Z0-9]*(?:[-/][A-Z0-9]+)+\s+)?(?:(?:is|are)\s+)?(?:(?:explicitly|specifically)\s+)?(?:covers?|addresses?|describes?|documents?|records?|details?|tests?|evaluates?|assesses?)\s+((?:[A-Za-z'-]+\s+)*)$/i);
+  if(namedScope&&namedScope[1].trim().split(/\s+/).filter(Boolean).every(word=>/^(?:our|the|this|that|exact|product|grade)$/.test(word)||/^[A-Z][A-Za-z'-]*$/.test(word)))return true;
   return !/[;.!?]|\b(?:and|or)\b/i.test(between)&&(
    /^\s*(?:(?:we have|that we have|which we have)\s*)?(?:(?:is|are)\s*)?(?:(?:available|provided|issued|prepared)\s*)?(?:for|on|about|of|specific to|applicable to|related to|pertaining to|covering)\s+(?:(?:our|the|this|that|product|grade|exact)\s+)*$/i.test(between)
    ||/^\s*(?:(?:is|are)\s*)?(?:covers?|addresses?|describes?|documents?|records?|details?|tests?|evaluates?|assesses?)\s+(?:(?:the|our|this|that|exact|product|grade)\s+)*$/i.test(between)
@@ -77,13 +87,40 @@ function bareDocumentAction(line:string){
 export function requestsDocumentProductCoverage(text:string):boolean {
  return !!documents(text).length&&/\?|\b(?:confirm|whether|if|need to know|tell me)\b/i.test(text)&&(relationWords(text)||/\b(?:report|sheet|certificate)\b.{0,55}\bfor\b/i.test(text));
 }
+const courtesyAction='(?:asking|your question|the question|your time|your patience|the update|that update|raising that|checking|pointing that out|bringing that up|letting (?:me|us) know|keeping (?:me|us) informed|(?:sharing|explaining|clarifying|confirming|flagging|mentioning)(?: (?:that|this))?)';
+const courtesyStart=new RegExp('^(?:(?:thanks|thank you)(?: for '+courtesyAction+')?|of course|understood|sure|okay|ok|got it|that makes sense|that helps|that[\'’]s helpful|I understand)(.*)$','i');
+/** Courtesy words describe the interaction, never an answer about the product.
+ * Require the complete acknowledgment, including an optional name, so “thanks
+ * for confirming the report covers…” cannot hide its factual proposition. */
+export function isConversationalAcknowledgment(text:string):boolean {
+ const line=text.trim().replace(/[’‘]/g,"'").replace(/^[A-Z][A-Za-z'-]*(?:\s+[A-Z][A-Za-z'-]*){0,2},\s*(?=(?:thanks|thank you|understood|got it)\b)/,'');
+ const courtesy=courtesyStart.exec(line);if(!courtesy)return false;
+ const tail=courtesy[1].trim();
+ return /^[,.!]*$/.test(tail)||/^,\s*[A-Z][A-Za-z'-]*(?:\s+[A-Z][A-Za-z'-]*){0,2}[.!]?$/.test(tail);
+}
+/** Reporting an investigation's eventual result does not supply that result.
+ * Keep the communication action, optional neutral object and ordering clause
+ * separate so ordinary wording variations cannot become scope assertions. */
+function reportsInvestigationResult(tail:string):boolean {
+ const action=/^and\s+(?:(?:get|come) back to (?:you|them)|let (?:you|them|him|her) know|tell (?:you|them|him|her)|report back(?: to (?:you|them))?|follow up(?: with (?:you|them))?|confirm(?: back)?)\b/i.exec(tail);
+ if(!action)return false;
+ const remainder=tail.slice(action[0].length).trim().replace(/\s*\bbefore\s+(?:(?:sending|emailing)\s+(?:it|them|anything|the documents)|(?:I|we)\s+(?:send|email)\s+(?:it|them|anything|the documents))$/i,'').trim();
+ if(!remainder)return true;
+ return /^(?:that|it)(?: for you)?$/i.test(remainder)
+  ||/^with\s+(?:(?:that|this|the|an?)\s+)?(?:confirmation|results?|details|answer|information|update|findings|outcome|clarification)(?: for you)?$/i.test(remainder)
+  ||/^on\s+(?:that|this|it|(?:the|its|that)\s+(?:scope|coverage|availability))$/i.test(remainder)
+  ||/^what\s+(?:I|we)\s+(?:find(?: out)?|learn|discover)$/i.test(remainder)
+  ||/^whether\s+(?:it|that)\s+(?:does|is covered)$/i.test(remainder);
+}
 /** One shared speech-act boundary for local fact classification and document
  * scope checks. Natural first-person investigation wording asserts no answer;
  * positive tails, commercial actions and timing do not inherit that status. */
 export function isBoundedEpistemicFactAction(text:string):boolean {
  // A closed courtesy prefix changes neither the action nor its uncertainty.
  // Preserve everything after it so attached factual/timing claims still fail.
- const line=text.trim().replace(/[’‘]/g,"'").replace(/^(?:(?:thanks|thank you)(?: for (?:asking|raising that|checking|clarifying|pointing that out))?|of course|understood|sure|okay|ok)\s*[,;:—–-]\s*/i,'');
+ let line=text.trim().replace(/[’‘]/g,"'");
+ const courtesyEnd=[...line.matchAll(/[,;:—–-]/g)].filter(match=>isConversationalAcknowledgment(line.slice(0,match.index))).at(-1)?.index;
+ if(courtesyEnd!==undefined)line=line.slice(courtesyEnd+1).trim();
  const investigation=/^(?:(?:I|we)(?:'ll|\s+(?:can|will|would|must))\s+|(?:I|we)\s+(?:need|have) to\s+|let (?:me|us)\s+|(?:can|could|may|should|would)\s+(?:I|we)\s+)(?:(?:definitely|certainly|personally)\s+)?(?:(?:need|have) to\s+)?(?:(?:definitely|certainly|personally)\s+)?(?:check|double[- ]?check|verify|confirm|find out|look into)\s+/i.exec(line);
  const reservation=/^(?:I|we)\s+(?:(?:cannot|can't|do not|don't)\s+(?:confirm|verify|know|say)|(?:have not|haven't)\s+(?:confirmed|verified|established))\s+/i.exec(line);
  const prefix=investigation||reservation;if(!prefix)return false;
@@ -99,10 +136,25 @@ export function isBoundedEpistemicFactAction(text:string):boolean {
   const tail=subject.slice(next).trim();
   // Follow-through may report the result; it cannot predetermine the answer,
   // authorize a concession, promise shipment or attach an unagreed deadline.
-  if(!/^and\s+(?:(?:get back to (?:you|them)|let (?:you|them|him|her) know|report back|follow up)(?:\s+with\s+(?:that|the)\s+(?:confirmation|result|details|answer))?|confirm(?:\s+(?:that|it)(?: for you)?)?)(?:\s+before\s+(?:(?:sending|emailing)\s+(?:it|them|anything|the documents)|(?:I|we)\s+(?:send|email)\s+(?:it|them|anything|the documents)))?$/i.test(tail))return false;
+  if(!reportsInvestigationResult(tail))return false;
   subject=subject.slice(0,next).trim();
  }
- if(/^(?:whether|if|which|what)\b\s+\S/i.test(subject))return !/\b(?:which|that)\s+(?:proves?|guarantees?|certifies?|ensures?|demonstrates?)\b/i.test(subject);
+ if(/^(?:whether|if|which|what)\b\s+\S/i.test(subject)){
+  // Uncertainty about a predicate does not erase a qualified noun inside it:
+  // “what our PX20 report contains” already says that this report exists for
+  // PX20, as does “the report we have for PX20”. Keep that premise checked.
+  const presupposedScope=documents(subject).some(document=>scopes(subject).some(scope=>{
+   const product=productPosition(subject,scope);if(!product)return false;
+   if(product.end<=document.start)return linked(subject,document,scope);
+   const before=subject.slice(0,document.start),between=subject.slice(document.end,product.start);
+   // “Whether we have a report for PX20” asks about existence. In contrast,
+   // “what our report for PX20 contains” takes that scoped report for granted.
+   const asksExistence=/^(?:whether|if)\s+(?:(?:we|I)\s+(?:have|hold|possess)|there\s+(?:is|are))\s+(?:(?:an?|the|our)\s+)?$/i.test(before);
+   const finitePredicate=/^\s+(?:is|are|covers?|applies?|relates?|pertains?|includes?|contains?)\b/i.test(between);
+   return !asksExistence&&!finitePredicate&&/\b(?:for|on|about|of)\s+(?:(?:our|the|this|that|product|grade|exact)\s+)*$/i.test(between);
+  }));
+  return !presupposedScope&&!/\b(?:which|that)\s+(?:proves?|guarantees?|certifies?|ensures?|demonstrates?)\b/i.test(subject);
+ }
  // These nominal objects ask about an unresolved property. A qualified noun
  // such as “the PX20 report” would instead presuppose a product/report link.
  return !!investigation&&/^(?:(?:the|that|this|its|our|your)\s+)?(?:(?:(?:material test|inspection|test)\s+)?report(?:'s)?\s+)?(?:scope|coverage|availability)(?:\s+before\s+(?:(?:sending|emailing)\s+(?:it|them|anything|the documents)|(?:I|we)\s+(?:send|email)\s+(?:it|them|anything|the documents)))?$/i.test(subject);

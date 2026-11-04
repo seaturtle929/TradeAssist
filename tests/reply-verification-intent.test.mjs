@@ -26,6 +26,7 @@ for(const company of companies){
   `I'll look into whether the ${report} covers ${product}. I'll report back.`,
   `Let me check the report's scope and confirm before I send it.`,
   `I'll look into which models that ${report} covers.`,
+  `I'll check whether we have a ${report} for ${product}.`,
   'I can verify the coverage and let you know.',
   `Could I check whether the ${report} covers ${product}?`,
   `I can't confirm whether the ${report} covers ${product} yet. I'll check and let you know.`,
@@ -41,6 +42,33 @@ for(const company of companies){
   assert.equal(isNonAssertiveReply(say,assessment.claims),true);
   assert.equal(needsFactCheck(say,request),false);
  });
+ for(const tail of [
+  'and get back to you with that information',
+  'and get back to you on that',
+  'and come back to you with the findings',
+  'and follow up with you with an update',
+  'and report back to you with the outcome',
+  'and let you know what I find',
+  'and tell you what we learn',
+  'and let you know whether it does',
+  'and confirm that for you before I email it',
+  'and confirm back before sending it',
+  'and follow up with you',
+  'and get back to you with an answer',
+  'and get back to you with the clarification before sending the documents',
+ ])test(`${company.name}: neutral reporting of the eventual result stays unresolved: ${tail}`,()=>{
+  const request=context(company),say=`Thanks for your question, Priya. I'll check whether our ${report} covers ${product} ${tail}.`,assessment=assessReplyVerification(say,request);
+  assert.deepEqual(assessment.unsupportedClaims,[],say);
+  assert.deepEqual(assessment.pendingClaims,[],say);
+  assert.equal(isNonAssertiveReply(say,assessment.claims),true,say);
+  assert.equal(needsFactCheck(say,request),false,say);
+ });
+ for(const courtesy of ['Thanks for letting me know.','Priya, thanks for your question.','Thanks for confirming, Priya.','Thank you for sharing that.','Thanks for clarifying—','Got it.','Thanks for keeping us informed.'])test(`${company.name}: neutral conversational acknowledgment does not reclassify the next investigation: ${courtesy}`,()=>{
+  const request=context(company),say=`${courtesy} I'll check whether the ${report} covers ${product} and get back to you before sending it.`,assessment=assessReplyVerification(say,request);
+  assert.deepEqual(assessment.unsupportedClaims,[],say);
+  assert.equal(isNonAssertiveReply(say,assessment.claims),true,say);
+  assert.equal(needsFactCheck(say,request),false,say);
+ });
  for(const say of [
   `The ${report} covers ${product}.`,
   `We have a ${report} for ${product}, and I'll check the details.`,
@@ -50,6 +78,14 @@ for(const company of companies){
   `I'll check whether the report covers ${product}—it is certified.`,
   `I'll check whether the report covers ${product}, a certified match for your product.`,
   `I'll confirm that it covers ${product}.`,
+  `Thanks for confirming our ${report} covers ${product}. I'll check the details.`,
+  `I'll look into what our ${product} ${report} contains.`,
+  `I'll check whether the ${report} we have for ${product} includes your test.`,
+  `I'll check whether the ${report} that we have for ${product} includes your test.`,
+  `I'll check what our ${report} for ${product} contains.`,
+  `I'll check whether our ${report} for ${product} contains that result.`,
+  `I'll check the coverage. It definitely includes your exact product.`,
+  `Thanks for asking. That ${report} includes your exact product.`,
  ])test(`${company.name}: uncertainty elsewhere cannot hide coverage or contents: ${say}`,()=>{
   const request=context(company),assessment=assessReplyVerification(say,request);
   assert.ok(assessment.unsupportedClaims.length,say);
@@ -64,6 +100,13 @@ for(const company of companies){
   ', certified to the needed standard',
   'and guarantees your performance',
   'and confirm that it covers your product',
+  'and get back to you with confirmation that it covers your product',
+  'and let you know it is certified',
+  'and get back to you with a guaranteed result',
+  'and follow up with you with an approved discount',
+  'and get back to you with that information tomorrow',
+  'and get back to you on Friday',
+  'and report back with confirmation of coverage',
  ])test(`${company.name}: an attached assertion is not an ordinary offer to check: ${tail}`,()=>{
   const request=context(company),say=`I'll check whether the report covers ${product} ${tail}.`,assessment=assessReplyVerification(say,request);
   assert.equal(isNonAssertiveReply(say,assessment.claims),false,say);
@@ -76,6 +119,28 @@ for(const company of companies){
   assert.equal(needsFactCheck(say,request),true);
   assert.equal(isNonAssertiveReply(say,assessment.claims),false);
  });
+ test(`${company.name}: a named report identifier and company label preserve the original scope link and limitations`,()=>{
+  const request=context(company),say=`The ${report} covers ${product}.`;
+  const source={id:'named-report',text:`Approved ${report} IR-${product}-2026 explicitly covers Example ${product} products. It records the inspection of the tested sample; it does not certify application suitability, guaranteed service life, or future batches.`};
+  request.sources.push(source);
+  const assessment=assessReplyVerification(say,request);
+  assert.equal(assessment.unsupportedClaims.length,0);
+  assert.ok(assessment.pendingClaims.some(claim=>claim.candidateSourceIds?.includes(source.id)));
+  assert.equal(needsFactCheck(say,request),true);
+  const promised=`The ${report} covers ${product} and guarantees your product performance.`;
+  assert.equal(needsFactCheck(promised,request),true);
+  assert.equal(isNonAssertiveReply(promised,assessReplyVerification(promised,request).claims),false);
+  for(const replacement of [
+   {...source,text:source.text.replace(`covers Example ${product}`, 'covers Example XX90')},
+   {...source,text:source.text.replace('explicitly covers','does not cover')},
+   {...source,text:source.text.replace('explicitly covers','may cover')},
+   {...source,complete:false},
+   {...source,text:`Approved ${report} IR-${product}-2026 is available. ${product} product specifications are available.`},
+  ]){
+   const other={...request,sources:[...request.sources.filter(item=>item.id!==source.id),replacement]};
+   assert.ok(assessReplyVerification(say,other).unsupportedClaims.some(claim=>claim.verificationBoundary==='document_product_scope'),replacement.text);
+  }
+ });
 }
 
 for(const added of [
@@ -86,12 +151,33 @@ for(const added of [
  'I can certify the product.',
  "I'll confirm before sending it tomorrow.",
  "We'll provide it for $7.",
+ 'Delivery is Friday.',
+ 'The shipment will be Friday.',
+ 'Certification is guaranteed.',
+ 'The discount is approved.',
 ])test('A follow-through sentence cannot exempt a separate restricted promise: '+added,()=>{
  const request=context(companies[0]),say="Thanks for asking, Priya. I'll check whether the report covers PX20. "+added;
  const assessment=assessReplyVerification(say,request);
  assert.ok(assessment.unsupportedClaims.length,added);
  assert.equal(isNonAssertiveReply(say,assessment.claims),false);
  assert.equal(needsFactCheck(say,request),true);
+});
+
+test('A declarative commercial subject remains checked after a nonfactual buyer acknowledgment',()=>{
+ const request=context(companies[0]);request.turns=[{role:'buyer',text:'Thank you, that helps.'}];
+ for(const say of ['Delivery is Friday.','Shipment will be tomorrow.','The discount is approved.','Certification is guaranteed.']){
+  assert.ok(assessReplyVerification(say,request).unsupportedClaims.length,say);
+  assert.equal(needsFactCheck(say,request),true,say);
+ }
+});
+
+test('Unknown predicates on a factual turn cannot fall through a keyword-only exemption',()=>{
+ const request=context(companies[0]);
+ for(const say of ["I'll check the details. The answer is affirmative.","I'll check the scope. That settles the technical question."]){
+  const assessment=assessReplyVerification(say,request);
+  assert.equal(isNonAssertiveReply(say,assessment.claims),false,say);
+  assert.equal(needsFactCheck(say,request),true,say);
+ }
 });
 
 test('Safe primary wording cannot hide a claim in the backup line',()=>{
