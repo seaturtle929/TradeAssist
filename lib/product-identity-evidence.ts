@@ -14,6 +14,9 @@ const nonProductCode=/^(?:ISO|EN|ASTM|DIN|IEC|UL|USD|EUR|GBP|RMB|CNY|KG|MG|LB|LB
 const joinPattern=new RegExp(`[${dash}]`,'g');
 const excluded=/^(?:ISO|EN|ASTM|DIN|IEC|UL)\d|^(?:Al2O3|SiO2|Fe2O3|TiO2|Na2O|CaO|MgO)$/i;
 const key=(text:string)=>text.replace(joinPattern,'').toUpperCase();
+const escaped=(text:string)=>text.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+const phoneticLetters:Record<string,string>={A:'(?:alpha|alfa)',B:'bravo',C:'charlie',D:'delta',E:'echo',F:'foxtrot',G:'golf',H:'hotel',I:'india',J:'(?:juliett|juliet)',K:'kilo',L:'lima',M:'mike',N:'november',O:'oscar',P:'papa',Q:'quebec',R:'romeo',S:'sierra',T:'tango',U:'uniform',V:'victor',W:'whiskey',X:'x[- ]?ray',Y:'yankee',Z:'zulu'};
+const spokenDigits:Record<string,string>={'0':'zero','1':'one','2':'two','3':'three','4':'four','5':'five','6':'six','7':'seven','8':'eight','9':'nine'};
 const explicitlyDocumentNumber=(text:string,start:number)=>/\b(?:report|certificate|certification|document|record)\s+(?:(?:number|no\.?|id)\s*[:#]?\s*)?$/i.test(text.slice(Math.max(0,start-65),start));
 function presupposesCompanyProductOwnership(text:string,start:number):boolean{
  const prefix=text.slice(0,start),owner=[...prefix.matchAll(/\bour\b/gi)].at(-1);
@@ -91,12 +94,28 @@ export function buyerSpelledIdentifierClarificationReferences(text:string,buyerT
   if(!/\b(?:confirm|repeat|spell)\b[^?]{0,110}\b(?:code|model|part|reference|number)\b|\b(?:was it|is it|did you say)\b/i.test(question))continue;
   references.push({text:match[0],start,end,buyerText:buyer[0]});
  }
- return references;
+ // A phonetic expansion is a clarification only when attached to the exact
+ // current buyer reference. Match every letter/digit, not a fuzzy catalog
+ // replacement or an unrelated quantity elsewhere in the question.
+ for(const buyer of requested){
+  const compact=key(buyer[0]).replace(/\s/g,''),tokens=compact.match(/[A-Z]|\d+/g)||[];
+  const phonetic=tokens.map(token=>/^\d+$/.test(token)?'(?:'+token+'|'+[...token].map(digit=>'(?:'+digit+'|'+spokenDigits[digit]+')').join('[\\s-]+')+')':phoneticLetters[token]).join('\\s+');
+  if(!phonetic)continue;
+  const expansion=new RegExp('\\b'+escaped(buyer[0])+'\\s+as in\\s+('+phonetic+')(?![a-z0-9-])','gi');
+  for(const match of text.matchAll(expansion)){
+   const start=(match.index||0)+match[0].lastIndexOf(match[1]),end=start+match[1].length,to=text.indexOf('?',end);
+   if(to<0||/[.!;]/.test(text.slice(end,to))||presupposesCompanyProductOwnership(text,start))continue;
+   const from=Math.max(text.lastIndexOf('.',match.index||0),text.lastIndexOf('!',match.index||0),text.lastIndexOf('?',match.index||0),text.lastIndexOf(';',match.index||0))+1;
+   if(!/\b(?:confirm|repeat|spell|referring to|did you say|was it|is it)\b/i.test(text.slice(from,to+1)))continue;
+   references.push({text:match[1],start,end,buyerText:buyer[0]});
+  }
+ }
+ return references.filter((reference,index,all)=>all.findIndex(other=>other.start===reference.start&&other.end===reference.end&&other.buyerText===reference.buyerText)===index).sort((one,two)=>one.start-two.start);
 }
 /** Closed neutral wording for the whole clarification, including an optional
  * “just to be sure”. Extra factual or commercial tails keep normal checks. */
 export function isBuyerIdentifierClarification(text:string,buyerText:string):boolean {
- if(!/^\s*(?:just to be sure[, ]+)?(?:can|could|would|was|is|did)\b/i.test(text)||! /\?\s*$/.test(text))return false;
+ if(!/^\s*(?:(?:sure|okay|ok)[, ]+)?(?:(?:just to be sure|just to confirm)[, ]+)?(?:can|could|would|was|is|did|are)\b/i.test(text)||! /\?\s*$/.test(text))return false;
  const references=[...buyerProductIdentifierReferences(text,buyerText),...buyerSpelledIdentifierClarificationReferences(text,buyerText)].sort((one,two)=>one.start-two.start);
  if(!references.length&&!buyerProductIdentifierReferences(buyerText,buyerText).length)return false;
  // This tail only promises to check the reference accurately. It asserts no
@@ -107,8 +126,8 @@ export function isBuyerIdentifierClarification(text:string,buyerText:string):boo
   .replace(/,?\s+so\s+(?:I|we)\s+(?:can\s+)?(?:be sure|make sure)\s+(?:we(?:'re| are)|I(?:'m| am))\s+checking\s+(?:coverage\s+for\s+)?the right\s+(?:material|product|item|model|code|reference)\?\s*$/i,'?');
  for(const reference of [...references].reverse())remainder=remainder.slice(0,reference.start)+' '+remainder.slice(reference.end);
  if(!/^[A-Za-z\s,?—–-]+$/.test(remainder))return false;
- const allowed=new Set('just to be sure can could would was is did you please confirm clarify repeat spell spelling say the exact model product part code reference number your engineer team mentioned for of material me it that this again or any other details'.split(' '));
- return /\b(?:confirm|repeat|spell|spelling|was it|is it|did you say)\b/i.test(remainder)&&(remainder.toLowerCase().match(/[a-z]+/g)||[]).every(word=>allowed.has(word));
+ const allowed=new Set('sure okay ok just to be can could would was is did are you please confirm clarify repeat spell spelling say referring as in the exact model product part code reference number your engineer team mentioned for of material me it that this again or any other details'.split(' '));
+ return /\b(?:confirm|repeat|spell|spelling|was it|is it|did you say|are you referring to)\b/i.test(remainder)&&(remainder.toLowerCase().match(/[a-z]+/g)||[]).every(word=>allowed.has(word));
 }
 export function isBuyerIdentifierSpellingClarification(text:string,buyerText:string):boolean {
  return buyerSpelledIdentifierClarificationReferences(text,buyerText).length>0&&isBuyerIdentifierClarification(text,buyerText);

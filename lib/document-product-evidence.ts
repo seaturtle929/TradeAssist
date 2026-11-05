@@ -1,4 +1,4 @@
-import {canonicalizeKnownProductIdentifiers} from './product-identity-evidence.ts';
+import {canonicalizeKnownProductIdentifiers,isBuyerIdentifierClarification} from './product-identity-evidence.ts';
 import {availableDocumentActionEvidence} from './document-availability-evidence.ts';
 import {deriveCallParticipant} from './call-participant.ts';
 
@@ -383,7 +383,7 @@ export function assessDocumentProductCoverage(clause:string,context:Context,sour
  // Explicit uncertainty is a commitment to investigate, never a positive or
  // negative assertion about report scope. Appended assertions are assessed in
  // their own clause by the normal verification policy.
- if(isBoundedEpistemicFactAction(line,context)||investigationThenDocumentDelivery(line,context))return;
+ if(isBoundedEpistemicFactAction(line,context)||investigationThenDocumentDelivery(line,context)||isBuyerIdentifierClarification(line,buyer))return;
  if(/^(?:does|do|is|are|can|could|would|will|which|what|how|whether)\b/i.test(line)&&/\?\s*$/.test(line)&&! /\b(?:our|the)\s+[a-z]+\d+[^?]{0,30}\b(?:reports?|sheets?|certificates?)\b/i.test(line))return;
  const ownDocuments=documents(line),buyerDocuments=documents(buyer);
  const assent=asked&&/^\s*(?:yes|correct|exactly|absolutely|certainly|sure|it does|that does|we do)\b/i.test(line);
