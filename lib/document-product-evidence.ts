@@ -7,7 +7,7 @@ import {deriveCallParticipant} from './call-participant.ts';
  * co-occurrence in a catalog, buyer request or extracted summary is not one. */
 export type DocumentProductSource={id:string;text:string;title?:string;complete?:boolean;original?:boolean};
 type Scope={key:string;labels:string[]};
-type Context={manufacturer?:{products?:string};turns?:{role:string;text:string}[];buyerText?:string};
+type Context={manufacturer?:{products?:string};turns?:{role:string;text:string}[];buyerText?:string;sources?:DocumentProductSource[]};
 const norm=(text:string)=>text.toLowerCase().replace(/[’‘]/g,"'").replace(/\bstainless steel\b/g,'stainless').replace(/\bper inch\b/g,'').replace(/[^a-z0-9]+/g,' ').replace(/\s+/g,' ').trim();
 const escaped=(text:string)=>text.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
 const documentPattern=/\b(?:(?:material|inspection|quality|compliance|certification)\s+)?(?:test\s+reports?|inspection\s+reports?|reports?|certificates?|certifications?|specification\s+sheets?|spec\s+sheets?|data\s+sheets?)\b/gi;
@@ -195,6 +195,26 @@ export function isBoundedEpistemicFactAction(text:string,context?:Context):boole
  // A closed courtesy prefix changes neither the action nor its uncertainty.
  // Preserve everything after it so attached factual/timing claims still fail.
  let line=text.trim().replace(/[’‘]/g,"'");
+ const followThrough=/^(?:once|after|when)\s+(.+?),\s*(?:I|we)(?:'ll|\s+(?:will|can))\s+(?:follow up|report back|let you know|get back to you)[.!]?$/i.exec(line);
+ if(followThrough){
+  const condition=followThrough[1].replace(/^(?:I|we)(?:'ve| have)?\s+(?:reviewed|seen|checked)\s+(?:that|the|your)\s+drawing\s+and\s+/i,'');
+  const checked=/^(?:(?:I|we)(?:'ve| have)?\s+)?(?:check(?:ed)?|verif(?:y|ied)|confirm(?:ed)?)\s+(?:(?:whether|if|that)\s+)?(.+)$/i.exec(condition);
+  if(checked&&documents(checked[1]).length===1&&/\b(?:covers?|matches?|includes?|coverage)\b/i.test(checked[1]))return isBoundedEpistemicFactAction('I will check whether '+checked[1],context);
+ }
+ // Accepting the buyer's drawing and promising to investigate are actions,
+ // not evidence of report coverage. Strip only these closed handoff/review
+ // forms, then apply the ordinary whole-predicate uncertainty check below.
+ const original=line;
+ line=line.replace(/^\s*(?:and\s+)?(?:if you\s+(?:can\s+)?(?:send|email)\s+(?:over\s+)?(?:that|the|your)\s+drawing(?:\s+over)?\s*,\s*|please\s+(?:go ahead and\s+)?(?:send|email)\s+(?:over\s+)?(?:that|the|your)\s+drawing(?:\s+over)?\s*,\s*(?:and\s+)?)/i,'').replace(/^and\s+(?=(?:I|we)\b)/i,'');
+ line=line.replace(/\s+once\s+(?:I|we)\s+(?:review|check|see)\s+(?:it|that|the drawing|your drawing)[.!]?$/i,'');
+ const comparison=/^((?:I|we)(?:'ll| will| can))\s+(?:line it up with|check it against)\s+our\s+(?:available\s+)?(?:specs|specifications)\s+and\s+(.+)$/i.exec(line);
+ if(comparison){
+  if(!availableDocumentActionEvidence('specification',context?.sources||[]))return false;
+  line=comparison[1]+' '+comparison[2];
+ }
+ line=line.replace(/^((?:I|we)(?:'ll| will| can))\s+(?:review|check)\s+(?:your|the|that)\s+drawing\s+and\s+(?:check\s+)?(?:the\s+)?(?:report\s+)?coverage\b/i,'$1 check coverage');
+ line=line.replace(/\s*,?\s+and\s+wait\s+for\s+your\s+approval\s+before\s+(?:sending|emailing|sharing)\s+(?:anything|it|the report)[.!]?$/i,'');
+ if(line!==original)return isBoundedEpistemicFactAction(line,context);
  // “Sure. I'll check whether…” accepts an investigation, not the unknown
  // coverage. Only a complete following bounded inquiry can supply that sense;
  // standalone assent and any attached factual predicate remain checked.
@@ -231,6 +251,9 @@ export function isBoundedEpistemicFactAction(text:string,context?:Context):boole
  // Punctuation anywhere in the unresolved predicate remains conservative.
  if(/,/.test(subject))return false;
  if(presupposesOwnedProduct(subject))return false;
+ // A relative modifier can assert a certification/result even while the
+ // main report-coverage question remains uncertain. It needs its own proof.
+ if(/\b(?:which|that)\s+(?:is|are|was|were|has|have|can|will|meets?|complies|passes?|guarantees?|certifies?|proves?)\b/i.test(subject))return false;
  if(/^(?:whether|if|which|what)\b\s+\S/i.test(subject)){
   // Uncertainty about a predicate does not erase a qualified noun inside it:
   // “what our PX20 report contains” already says that this report exists for
@@ -259,9 +282,22 @@ export function isBoundedEpistemicFactAction(text:string,context?:Context):boole
  * ordinary document-action checks can enforce those independently. */
 export function investigationThenDocumentDelivery(text:string,context?:Context):{investigation:string;document:string;deliveryCondition:'sequence_only'|'stated_condition'|'check_completion';conditionText?:string}|undefined {
  const line=text.trim().replace(/[’‘]/g,"'");
+ const fronted=/^(?:once|after|when|if)\s+(.+?),\s*(?:I|we)(?:'ll|\s+(?:will|can|could))\s+((?:reply|respond)\s+with\s+|(?:send|email|share|include|attach)\s+)(?:it|that report|the report|the documents|the details)(?:\s+(?:over|along|to you|for review|your way|back to you|right back to you))?[.!]?$/i.exec(line);
+ if(fronted){
+  let condition=fronted[1].trim();
+  condition=condition.replace(/^(?:I|we)(?:'ve| have)?\s+(?:reviewed|seen|checked)\s+(?:that|the|your)\s+drawing\s+and\s+/i,'');
+  const inquiry=/^(?:(?:I|we)(?:'ve| have)?\s+)?(?:check(?:ed)?|verif(?:y|ied)|confirm(?:ed)?)\s+(?:(whether|if|that)\s+)?(.+)$/i.exec(condition);
+  const predicate=inquiry?inquiry[2]:condition;
+  const referents=documents(predicate);
+  const positive=/^(?:(?:the|that|this|our|your)\s+)?(?:(?:material test|inspection|test)\s+)?report\s+(?:covers?|matches?|includes?)\s+[^,;.!?]+$/i.test(predicate)
+   ||/^(?:(?:the|that|this)\s+)?(?:(?:material test|inspection|test)\s+)?report\s+coverage\s+(?:for|of)\s+[^,;.!?]+$/i.test(predicate);
+  const inquiryPredicate=predicate.replace(/^((?:(?:the|that|this)\s+)?(?:(?:material test|inspection|test)\s+)?report)\s+coverage\s+(?:for|of)\s+/i,'$1 covers ');
+  if(positive&&referents.length===1&&!/\b(?:and|but|however|not|never|no|certif\w*|guarantee\w*|discount|approval|price|ship\w*|deliver\w*)\b/i.test(predicate)&&isBoundedEpistemicFactAction('I will check whether '+inquiryPredicate,context))return {investigation:'I will check whether '+inquiryPredicate,document:referents[0].kind,deliveryCondition:inquiry&&/^(?:if|whether)$/i.test(inquiry[1]||'')?'check_completion':'stated_condition',conditionText:fronted[1]};
+ }
  // A repeated subject is optional in a coordinated action (“I'll check ...
  // and then send it”). Sequence does NOT mean “only if it covers the product”.
  const continuation=/\s*,?\s+(?:and\s+)?then\s+(?:(?:I|we)(?:'ll|\s+(?:will|can|could))\s+)?(?:send|email|share|include|attach)\s+(?:it|that report|the report)(?:\s+(?:over|along|to you|for review))?[.!]?$/i.exec(line)
+  ||/\s*,?\s+and\s+((?:once|after|when)\s+(?:I|we)(?:'ve| have)\s+got\s+(?:that|it))\s*,\s*(?:I|we)(?:'ll|\s+(?:will|can))\s+(?:reply|respond)\s+with\s+(?:it|the report|the documents|the details)[.!]?$/i.exec(line)
   ||/[.!]\s+(?:then\s+)?(?:I|we)(?:'ll|\s+(?:will|can|could))\s+(?:send|email|share|include|attach)\s+(?:it|that report|the report)(?:\s+(?:over|along|to you|for review))?\s+((?:only\s+)?if\s+(?:it|that report|the report)\s+(?:does|matches?(?:\s+(?:the|your)\s+requirements)?|covers?\s+(?:it|that product|your product|your mesh|the requirements)))[.!]?$/i.exec(line)
   ||/(?:\s*,?\s+and\s+|[.!]\s+)((?:only\s+)?if\s+(?:it|that report|the report)\s+(?:does|covers?\s+(?:it|that product|your product|your mesh|the requirements)|matches?\s+(?:the|your)\s+requirements))\s*,?\s+(?:I|we)(?:'ll|\s+(?:will|can|could))\s+(?:send|email|share|include|attach)\s+(?:it|that report|the report)(?:\s+(?:over|along|to you|for review))?[.!]?$/i.exec(line)
   ||/[.!]\s+((?:once|after|when)\s+(?:that|it|the (?:scope|coverage|answer))(?:(?:'s|\s+is|\s+has been)\s+(?:checked|verified|confirmed)))\s*,\s*(?:I|we)(?:'ll|\s+(?:will|can|could))\s+(?:send|email|share|include|attach)\s+(?:it|that report|the report)(?:\s+(?:over|along|to you|for review))?[.!]?$/i.exec(line);

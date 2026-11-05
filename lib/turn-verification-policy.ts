@@ -182,7 +182,7 @@ function replyClauses(text: string,context?:VerificationPolicyContext): { text: 
     // Cutting “if it does, I will send it” at the second comma would invent an
     // unfinished coverage assertion; the combined action still gets source
     // availability and company-authority checks below.
-    if(investigationThenDocumentDelivery(sentence.text,context))return [sentence];
+    if(investigationThenDocumentDelivery(sentence.text,context)||isBoundedEpistemicFactAction(sentence.text,context))return [sentence];
     const separator = /,\s*(?=but\b)|,\s*(?=(?:and\s+)?(?:can|could|would|may|what|which|how|I|we|our|it|you)\b)|\s+(?=and\s+(?:can|could|would|what|which|how|I|we|our|it|you)\b)/gi;
     const parts: { text: string; start: number; end: number }[] = [];
     let offset = 0;
@@ -265,6 +265,8 @@ function unresolvedFactCheck(clause:string,context?:VerificationPolicyContext):b
 function conversationalClause(text:string,context?:VerificationPolicyContext):boolean {
  const line=text.trim().replace(/[’‘]/g,"'");
  if(isConversationalAcknowledgment(line,context))return true;
+ if(/^(?:please\s+)?(?:go ahead and\s+)?(?:email|send)\s+(?:over\s+)?(?:the|that|your)\s+drawing(?:\s+over)?[.!]?$/i.test(line))return true;
+ if(/^(?:(?:and\s+)?(?:I|we)(?:'ll| will| can)\s+)?wait\s+for\s+your\s+approval\s+before\s+(?:sending|emailing|sharing)\s+(?:anything|it|the report)[.!]?$/i.test(line))return true;
  if(/^(?:(?:once|after|when|if)\s+(?:I|we)\s+(?:(?:verify|confirm) (?:that|its availability|it is available)|know for sure)|(?:I|we)(?:'ll| will)\s+(?:follow up(?: and let you know)?|let you know|report back|confirm(?: that for you)?(?: before (?:sending|emailing) (?:it|them|anything|the documents))?))[,.!]?$/i.test(line))return true;
  // An unqualified investigation promises only the rep's follow-through.
  // Restricted actions, content assertions and time promises cannot fit it.
@@ -421,12 +423,12 @@ function paraphraseCandidates(clause:string,evidence:Evidence[],context:Verifica
  * condition remains pending rather than becoming permission to send. */
 export function reportDeliveryCondition(buyerText:string):'scope_required'|'unresolved'|undefined {
  const text=buyerText.replace(/[’‘]/g,"'");
- const delivery='(?:send|email|share|forward|sending|emailing|sharing|forwarding)';
+ const delivery='(?:send|email|share|forward|reply|respond|sending|emailing|sharing|forwarding)';
  const patterns=[
   new RegExp('\\bonly\\s+'+delivery+'\\b[^.!?]*?\\bif\\s+([^.!?]+)','gi'),
   new RegExp('\\b'+delivery+'\\b[^.!?]*?\\b(?:only\\s+)?(?:if|when)\\s+([^.!?]+)','gi'),
   new RegExp("\\b(?:do not|don't|never)\\s+"+delivery+'\\b[^.!?]*?\\bunless\\s+([^.!?]+)','gi'),
-  new RegExp('(?:^|[.!?]\\s*)\\s*if\\s+([^,;.!?]+)[,;]\\s*[^.!?]*?\\b'+delivery+'\\b','gi'),
+  new RegExp('(?:^|[.!?]\\s*)\\s*(?:if|once|after|when)\\s+([^,;.!?]+)[,;]\\s*[^.!?]*?\\b'+delivery+'\\b','gi'),
   new RegExp('(?:^|[.!?]\\s*)\\s*unless\\s+([^,;.!?]+)[,;]\\s*[^.!?]*?\\b(?:do not|don\'t)\\s+'+delivery+'\\b','gi'),
   new RegExp('([^.!?]*\\b(?:needs?|must|has to|have to|requires?|required)\\b[^.!?]*?)\\bbefore\\b[^.!?]*?\\b'+delivery+'\\b','gi'),
  ];
@@ -439,6 +441,8 @@ export function reportDeliveryCondition(buyerText:string):'scope_required'|'unre
   const scoped=new RegExp('^'+referent+'\\s+(?:(?:needs? to|must|has to)\\s+)?(?:covers?|matches?|applies?\\s+to)\\s+(.+)$','i');
   const nominal=/^(?:we|I)\s+need\s+coverage\s+(?:of|for)\s+(.+?)\s+confirmed$/i;
   if(conditions.every(condition=>{
+   condition=condition.replace(/^(?:you(?:'re| are)\s+sure\s+(?:that\s+)?|(?:I|we|you)(?:'ve| have)?\s+(?:confirmed|verified|checked)\s+that\s+)/i,'');
+   if(new RegExp('^'+referent+'\\s+matches$','i').test(condition))return true;
    const object=scoped.exec(condition)?.[1]||nominal.exec(condition)?.[1];
    return !!object&&!/\b(?:not|never|no|doesn't|don't|isn't|aren't|and|or|unless|if|when|because|since|before|after|once|provided|confirms?|approves?|discount|approval|permission|authorized|certif\w*|guarantee\w*)\b|[;!?]/i.test(object);
   }))return 'scope_required';
@@ -450,6 +454,48 @@ export function reportDeliveryCondition(buyerText:string):'scope_required'|'unre
  if(new RegExp('\\b'+delivery+'\\b','i').test(text)&&/\b(?:only if|only when|unless|provided that|on condition that|as long as)\b/i.test(text))return 'unresolved';
 }
 
+function buyerApprovalRequired(text:string):boolean {
+ const approval=/\bapprov\w*|\bsign(?:s|ed)?\s*[- ]?off\b/i.test(text),delivery=/\b(?:send|email|share|reply|documents?)\b/i.test(text);
+ return approval&&delivery&&(/\b(?:until|before)\b/i.test(text)&&/\b(?:do not|don't|never|no documents?|wait|hold)\b/i.test(text)||/\bonly\b[^.!?]{0,80}\b(?:after|once|when)\b/i.test(text));
+}
+type BuyerReleaseState={scope:boolean;approval:boolean;approver:'buyer'|'engineering';hold:boolean;unresolved:boolean};
+/** Release conditions are actual buyer instructions, not the last sentence.
+ * Courtesy and rep promises cannot erase them. A later explicit buyer release,
+ * approval or cancellation can update this same-call state. */
+function buyerReleaseState(context:VerificationPolicyContext):BuyerReleaseState {
+ const state:BuyerReleaseState={scope:false,approval:false,approver:'buyer',hold:false,unresolved:false};
+ const texts=(context.turns||[]).filter(turn=>turn.role==='buyer'||turn.role==='customer').map(turn=>turn.text);
+ if(context.buyerText!==undefined&&texts.at(-1)!==context.buyerText)texts.push(context.buyerText);
+ for(const raw of texts){
+  const text=raw.replace(/[’‘]/g,"'");
+  const currentCondition=reportDeliveryCondition(text);
+  const cancellation=/\b(?:cancel|forget|withdraw)\b[^.!?]{0,35}\b(?:send|request|documents?|report)\b|\b(?:do not|don't)\s+(?:send|email|share)\s+(?:anything|it|the report)[.!]?\s*$/i.test(text)&&!currentCondition&&!/\b(?:until|before|unless)\b/i.test(text);
+  if(cancellation){state.scope=false;state.approval=false;state.unresolved=false;state.hold=true;continue;}
+  const permitted=/\b(?:you\s+(?:can|may)|please|go ahead and)\s+(?:send|email|share)\b/i.test(text)&&! /\b(?:only|until|unless|before|if|when|once|after|not|don't)\b/i.test(text);
+  if(permitted)state.hold=false;
+  const waivesScope=/\b(?:send|email|share)\b[^.!?]{0,80}\b(?:regardless of|even if|without checking)\b/i.test(text);
+  const condition=currentCondition;
+  if(waivesScope){state.scope=false;state.unresolved=false;}
+  else if(condition==='scope_required')state.scope=true;
+  else if(condition==='unresolved')state.unresolved=true;
+  if(buyerApprovalRequired(text)){state.approval=true;state.approver=/\b(?:engineer|engineering)\b/i.test(text)?'engineering':'buyer';}
+  else{
+   const approved=text.split(/(?<=[.!?])\s+/).some(sentence=>/^(?:(?:thanks|okay|ok)[,. ]+)?(?:I|we|(?:my|our|the)\s+(?:engineer|engineering team|team|manager))\s+(?:(?:have|has)\s+)?(?:approved|approve|signed off)\b/i.test(sentence));
+   if(approved&&(state.approver!=='engineering'||/\b(?:engineer|engineering)\b/i.test(text)))state.approval=false;
+  }
+ }
+ return state;
+}
+function preservesBuyerApproval(say:string,approver:BuyerReleaseState['approver']='buyer'):boolean {
+ if(/\b(?:regardless|anyway|without (?:your )?approval|even if you (?:do not|don't) approve)\b/i.test(say))return false;
+ if(approver==='engineering'&&!/\b(?:engineer|engineering)\b/i.test(say))return false;
+ const line=say.replace(/your (?:engineer|engineering team|team|manager)(?:'s)? approval/ig,'your approval').replace(/your (?:engineer|engineering team|team|manager)\s+approv/ig,'you approv');
+ return /\b(?:wait|hold)\b[^.!?]{0,35}\byour approval\b[^.!?]{0,25}\bbefore\s+(?:sending|emailing|sharing)/i.test(line)
+  ||/\b(?:won't|will not|do not|don't)\s+(?:send|email|share)\b[^.!?]{0,60}\buntil\s+(?:you|your team)\s+(?:approv|sign)/i.test(line)
+  ||/\b(?:send|email|share|reply)\b[^.!?]{0,50}\b(?:after|once|when)\s+(?:you|your team)\s+(?:approv|sign)/i.test(line)
+  ||/^\s*(?:once|after|when)\s+(?:you|your team)\s+(?:approv|sign)[^,;.!?]*,\s*(?:I|we)(?:['’]ll|\s+(?:will|can))\s+(?:send|email|share|reply)\b/i.test(line);
+}
+
 /** Offering a technical method or qualified artifact asserts support exists.
  * Document follow-through separately respects buyer and release conditions. */
 function technicalSupportAssertion(clause:string,context:VerificationPolicyContext,evidence:Evidence[]):Pick<ReplyFactClaim,'supported'|'pending'|'candidateSourceIds'|'reason'|'sourceId'|'verificationBoundary'>|undefined {
@@ -457,13 +503,14 @@ function technicalSupportAssertion(clause:string,context:VerificationPolicyConte
  const delivery=investigationThenDocumentDelivery(clause,context);
  if(delivery){
   const buyer=latestBuyerText(context).replace(/[’‘]/g,"'");
-  const buyerCondition=reportDeliveryCondition(buyer);
+  const release=buyerReleaseState(context),buyerCondition=release.scope?'scope_required':release.unresolved?'unresolved':undefined;
   if(buyerCondition==='scope_required'&&delivery.deliveryCondition!=='stated_condition')return {supported:false,reason:'The buyer made document delivery conditional on the report matching their product. Checking and then sending is only an action sequence; preserve the buyer’s explicit condition instead of promising delivery regardless of the result.'};
   if(buyerCondition==='unresolved')return {supported:false,pending:true,reason:'The buyer placed a condition on document delivery that is not established by merely completing the report check. Verify that this proposed send preserves the actual condition; document availability does not satisfy it.'};
   // “That report” can carry the one explicit report type in the current
   // buyer's request. Resolve the referent from their words, never from whichever
   // report happens to be available in the catalog or a previous company.
-  const requestedReports=[...new Set((buyer.match(/\b(?:(?:material\s+)?test|inspection|certification|quality)\s+reports?\b/gi)||[]).map(value=>value.toLowerCase().replace(/reports$/,'report')))];
+  const reportRequest=[buyer,...[...(context.turns||[])].reverse().filter(turn=>turn.role==='buyer').map(turn=>turn.text)].find(text=>/\b(?:(?:material\s+)?test|inspection|certification|quality)\s+reports?\b/i.test(text))||buyer;
+  const requestedReports=[...new Set((reportRequest.match(/\b(?:(?:material\s+)?test|inspection|certification|quality)\s+reports?\b/gi)||[]).map(value=>value.toLowerCase().replace(/reports$/,'report')))];
   const document=delivery.document==='report'&&requestedReports.length===1?requestedReports[0]:delivery.document;
   const availability=technicalSupportAssertion(`I can send the ${document}.`,context,evidence);
   return availability||{supported:false,reason:'The document proposed after checking coverage is not established as available by Company Knowledge.'};
@@ -691,6 +738,20 @@ export function assessReplyVerification(say: string, context: VerificationPolicy
   const identities = [...say.matchAll(IDENTITY)];
   const companySpans: { start: number; end: number }[] = [];
   const companyName = context.manufacturer?.name?.trim();
+  const release=buyerReleaseState(context),buyerApproval=release.approval,buyerScope=release.scope;
+  if(buyerApproval||buyerScope||release.hold)for(const sentence of replySentences(say,context)){
+   // A permission clause cannot license a second subject's contradictory
+   // action. Keep fronted conditions with their action, while examining each
+   // coordinated new rep promise separately (not a whole-reply checkbox).
+   // The existing bounded sentence grouper preserves only an adjacent
+   // explicit inquiry + "if it does" referent, never a later unrelated send.
+   for(const action of sentence.text.split(/\b(?:and|but|however)\s+(?=(?:I|we)(?:['’]ll|\s+(?:will|can|would))\b)/i))if(/\b(?:I|we)(?:['’]ll|\s+(?:will|can|would))\b[^.!?]{0,180}\b(?:send|email|share|reply|respond)\b|\b(?:report|documents?)\s+will\s+be\s+(?:sent|emailed|shared)\b/i.test(action)){
+    const start=sentence.start+sentence.text.indexOf(action);
+    if(release.hold)add(action,start,'supplier_claim',{supported:false,reason:'The buyer cancelled or withheld this send and has not released it again. A company document being available does not override that instruction.'});
+    if(buyerApproval&&!preservesBuyerApproval(action,release.approver))add(action,start,'supplier_claim',{supported:false,reason:'The buyer withheld permission to send until they approve. Preserve the buyer’s stated approver before every promised document send; confirming report coverage or mentioning approval for a different action does not release the documents.'});
+    if(buyerScope&&investigationThenDocumentDelivery(action.trim(),context)?.deliveryCondition!=='stated_condition')add(action,start,'supplier_claim',{supported:false,reason:'The buyer made delivery conditional on a positive report match. Preserve that condition for every promised send; completing a check or conditioning a different action does not authorize this delivery.'});
+   }
+  }
   if (companyName) {
     let from = 0;
     for (;;) {

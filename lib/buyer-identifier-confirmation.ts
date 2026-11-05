@@ -9,6 +9,17 @@ const confirmationQuestion=(text:string)=>!/\b(?:phone|telephone|callback|contac
  &&/\b(?:confirm|repeat|spell|say (?:that|it) again)\b/i.test(text)
  &&(/\b(?:model|product|part|code|identifier)\b/i.test(text)||/\brepeat\s+(?:that|the)\s+number\b/i.test(text));
 const spokenDigits:Record<string,string>={zero:'0',one:'1',two:'2',three:'3',four:'4',five:'5',six:'6',seven:'7',eight:'8',nine:'9'};
+function spelledReplyConfirms(identifier:string,text:string):boolean {
+ const parts=identifier.replace(/[^A-Za-z0-9]/g,'').split('').map(char=>{
+  if(/[A-Za-z]/.test(char))return escaped(char)+'(?:\\s+as in\\s+[A-Za-z]+(?:-[A-Za-z]+)*)?';
+  const word=Object.keys(spokenDigits).find(key=>spokenDigits[key]===char);
+  return '(?:'+char+'|'+word+')';
+ });
+ // A spelling answer must actually spell the complete identifier, not merely
+ // echo a fragment or mention some unrelated person's spelling.
+ const match=new RegExp('\\b'+parts.join('[\\s,\\-–—]+')+'\\b','i').exec(text);
+ return !!match&&!/\b(?:no|not|instead)\b[^.!?]{0,35}$/i.test(text.slice(0,match.index));
+}
 function attachedSpellingConfirms(identifier:string,text:string):boolean {
  const spelling=new RegExp(escaped(identifier)+'(?=[\\s,])\\s*,?\\s*(?:(?:which is|it is|it\\x27s|is)\\s+)?(?:spelled|spelling is|letters are)\\s*[:,-]?\\s*(.*)$','i').exec(text)?.[1];
  if(!spelling)return false;
@@ -29,11 +40,12 @@ function explicitlyConfirmed(identifier:string,turns:NonNullable<CoachingContext
  const literal=escaped(identifier);
  for(let index=0;index<turns.length;index++){
   const turn=turns[index];if(turn.role!=='buyer'||turn.transcriptionUncertainty)continue;
-  const text=normalize(turn.text);if(!text.includes(identifier))continue;
+  const text=normalize(turn.text),previous=turns[index-1];
+  if(previous?.role==='you'&&!previous.transcriptionUncertainty&&confirmationQuestion(previous.text)&&/^\s*(?:yes|correct|right|exactly)\b/i.test(text)&&spelledReplyConfirms(identifier,text))return true;
+  if(!text.includes(identifier))continue;
   const declaration=new RegExp('\\b(?:(?:the|our|my)\\s+)?(?:model|part|product)(?:\\s+(?:code|number|identifier))?\\s+is\\s+["“]?'+literal+'(?=$|[\\s,.!?"”])','i');
   const customerPart=new RegExp(literal+'\\s+is\\s+(?:(?:our|my|the)\\s+)?(?:internal\\s+|customer\\s+)?(?:part|model|product)\\s+(?:code|number|identifier)\\b','i');
   if(declaration.test(text)||customerPart.test(text))return true;
-  const previous=turns[index-1];
   const echo=new RegExp('^\\s*(?:(?:yes|correct|right|exactly)[,.!\\s]+)?(?:(?:it|that)(?:\\x27s| is)\\s+)?'+literal+'(?=$|[\\s,.!?])','i');
   if(previous?.role==='you'&&!previous.transcriptionUncertainty&&confirmationQuestion(previous.text)&&echo.test(text))return true;
   if(attachedSpellingConfirms(identifier,text))return true;
