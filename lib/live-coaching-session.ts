@@ -34,6 +34,7 @@ export type QueuedCoachingRequest={id:string;requestedAt:number;status:'listenin
 export type LiveRequestReceipt=LiveReplyTicket|{queued:true;id:string;requestedAt:number};
 type QueuedRequest={id:string;requestedAt:number;started:number;queuedAt:number;queueWaitMs:number;preparationMs:number;continuedDrafts:number;context:LiveContext;status?:QueuedCoachingRequest['status'];stoppedAt?:number;timer?:ReturnType<typeof setTimeout>;waitExpired?:boolean;waitFailed?:boolean;speechIds:Set<string>;partials:CoachingSpeechSnapshot['partials'];pending:CoachingSpeechSnapshot['pendingSpeech']};
 type Work={phaseClock:CoachingPhaseClock;ticket:LiveReplyTicket;context:LiveContext;library:KnowledgeReference[];lookupSources?:KnowledgeReference[];id:string;started:number;timer?:ReturnType<typeof setTimeout>;fallback?:AbortController;rescued:boolean;answered:boolean;ready:boolean;toolRounds:number;verifier:LiveVerification<Guidance>;
+  assessmentCache?:{key:string;value:ReturnType<typeof assessReplyVerification>};
   purpose:boolean;route:ReturnType<typeof fastRouteFor>;cached?:Guidance;checking:boolean;archived:boolean;superseded:boolean;published?:Guidance;publishedAt?:number;proposedSay?:string;representativeText?:string;analysis?:Partial<Guidance>;analysisTimer?:ReturnType<typeof setTimeout>;analysisShown:boolean;metadataComplete:boolean;
   awaitingTranscript?:boolean;deferredResponse?:Record<string,unknown>;repairCount:number;repairPending:boolean;repairReason?:string;rejected?:boolean;candidateAttempt?:number;
   firstDisplayAt?:number;verificationAt?:number;verificationCandidate?:string;verificationGuidance?:Guidance;unverifiedDisplayed?:string;lastDisplayedSay?:string;verificationFailure?:string;replacementLogged?:boolean;contextReplacement?:{originalSay:string;reason:string;originalWasDisplayed:boolean}};
@@ -945,8 +946,17 @@ export class LiveCoachingSession {
     // reason to rewrite an otherwise clean spoken confirmation.
     return {...value,missing:[buyer.slice(0,500)],caution:value.caution||"The requested quotation is not an approved figure."};
   }
+  private assessCandidate(say:string,work:Work):ReturnType<typeof assessReplyVerification> {
+    // Only this request owns this single result. Include the entire exact
+    // snapshot, rather than object identity or selected source fields, so
+    // changed transcript, evidence, authority or final recognition recomputes.
+    const key=JSON.stringify([say,work.context]);
+    if(work.assessmentCache?.key===key)return work.assessmentCache.value;
+    const value=assessReplyVerification(say,work.context);
+    work.assessmentCache={key,value};return value;
+  }
   private guardSalesMove(value:Guidance,work:Work):Guidance {
-    const assessment=assessReplyVerification(value.say,work.context);
+    const assessment=this.assessCandidate(value.say,work);
     // Keep the rejected claim intact for the explicit request's bounded repair.
     // Sanitizing this into a generic acknowledgment would hide a failed move.
     if(work.context.coachingRequest&&assessment.unsupportedClaims.length)return value;
@@ -966,7 +976,7 @@ export class LiveCoachingSession {
     // Plain speech and labeled SAY use the same unbudgeted safety input. An
     // unsupported opening must not consume a sentence slot and hide the valid
     // final question. Factual paragraph/stream completion remains unchanged.
-    if(assessReplyVerification(rawSay,buffer.work.context).classification.kind!=='fact_request'){
+    if(this.assessCandidate(rawSay,buffer.work).classification.kind!=='fact_request'){
       const guarded=this.guardSalesMove({...main,say:rawSay},buffer.work);
       const budget=spokenReplyBudget(buffer.work.context);
       return {...guarded,say:limitScript(guarded.say,budget.words,budget.sentences)};
@@ -1032,7 +1042,7 @@ export class LiveCoachingSession {
     main=this.guardSalesMove(this.quoteMetadata(main,buffer.work),buffer.work);
     buffer.primed=main.say;buffer.work.proposedSay=main.say;
     buffer.work.phaseClock.wordingComplete();
-    const assessment=buffer.work.phaseClock.validate(()=>assessReplyVerification(main.say,buffer.work.context));
+    const assessment=buffer.work.phaseClock.validate(()=>this.assessCandidate(main.say,buffer.work));
     if(buffer.work.context.coachingRequest&&assessment.unsupportedClaims.length){
       this.repairDemand(buffer,assessment.unsupportedClaims.map(claim=>'Unsupported claim '+JSON.stringify(claim.text)+': '+claim.reason).join('; ')+' Rewrite the full useful move with the supported broad company category or applicable original evidence. Do not delete the subject and leave a vague question or repeat the unsupported predicate.',main.say);return;
     }
@@ -1090,8 +1100,8 @@ export class LiveCoachingSession {
     const work=buffer.work;if(!this.current(work)||work.ready)return;
     value=this.guardSalesMove(value,work);
     if(!work.purpose){this.publish(buffer,value,true);return;}
-    const immediateMove=assessReplyVerification(value.say,work.context).classification.kind!=='fact_request';
-    if(immediateMove&&!assessReplyVerification(value.say,work.context).requiresVerification)factChecked=true;
+    const assessment=this.assessCandidate(value.say,work),immediateMove=assessment.classification.kind!=='fact_request';
+    if(immediateMove&&!assessment.requiresVerification)factChecked=true;
     const landing=!immediateMove&&(work.route.verificationRequired||work.checking||!!work.cached);
     let next={...this.quoteMetadata(value,work),backup:"",phase:landing?"landing" as const:"answer" as const,questionEcho:coachingRequestFocus(work.context).displayText,analysisReady:false};
     let verdict=work.phaseClock.validate(()=>checkSuggestion(next,work.context,{landing,factChecked}));
