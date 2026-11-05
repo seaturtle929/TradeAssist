@@ -195,6 +195,11 @@ export function isBoundedEpistemicFactAction(text:string,context?:Context):boole
  // A closed courtesy prefix changes neither the action nor its uncertainty.
  // Preserve everything after it so attached factual/timing claims still fail.
  let line=text.trim().replace(/[’‘]/g,"'");
+ // Reviewing the incoming artifact is a prerequisite, not a positive answer
+ // about it. Remove only this closed review action and check the ENTIRE
+ // following uncertainty action normally, including any attached claims.
+ const reviewPrerequisite=/^(?:once|after|when)\s+(?:I|we)(?:'ve| have)?\s+(?:review(?:ed)?|check(?:ed)?|seen)\s+(?:it|(?:the|that|your)\s+drawing)\s*,\s*(.+)$/i.exec(line);
+ if(reviewPrerequisite)return isBoundedEpistemicFactAction(reviewPrerequisite[1],context);
  const followThrough=/^(?:once|after|when)\s+(.+?),\s*(?:I|we)(?:'ll|\s+(?:will|can))\s+(?:follow up|report back|let you know|get back to you)[.!]?$/i.exec(line);
  if(followThrough){
   const condition=followThrough[1].replace(/^(?:I|we)(?:'ve| have)?\s+(?:reviewed|seen|checked)\s+(?:that|the|your)\s+drawing\s+and\s+/i,'');
@@ -285,8 +290,20 @@ export function isBoundedEpistemicFactAction(text:string,context?:Context):boole
  * availability and company permission; return its explicit referent so the
  * ordinary document-action checks can enforce those independently. */
 export function investigationThenDocumentDelivery(text:string,context?:Context):{investigation:string;document:string;deliveryCondition:'sequence_only'|'stated_condition'|'check_completion';conditionText?:string}|undefined {
- const line=text.trim().replace(/[’‘]/g,"'");
- const fronted=/^(?:once|after|when|if)\s+(.+?),\s*(?:I|we)(?:'ll|\s+(?:will|can|could))\s+((?:reply|respond)\s+with\s+|(?:send|email|share|include|attach)\s+)(?:it|that report|the report|the documents|the details)(?:\s+(?:over|along|to you|for review|your way|back to you|right back to you))?[.!]?$/i.exec(line);
+ let line=text.trim().replace(/[’‘]/g,"'");
+ if(/\s+as you requested[.!]?$/i.test(line)){
+  const requested=[context?.buyerText||'',...(context?.turns||[]).filter(turn=>turn.role==='buyer'||turn.role==='customer').map(turn=>turn.text)].some(turn=>/\breport\b/i.test(turn)&&/\b(?:send|email|share|forward|reply|respond|include|attach)\b/i.test(turn));
+  if(!requested)return;line=line.replace(/\s+as you requested(?=[.!]?$)/i,'');
+ }
+ const actor="(?:I|we)(?:'ll|\\s+(?:will|can|could))\\s+";
+ const action='(?:(?:send|email|share|forward|include|attach)\\s+|(?:reply|respond)\\s+with\\s+)';
+ const artifact='(?:it|that report|the report|the documents|the details)';
+ const tail='(?:\\s+(?:over|along|to you|for review|your way|back to you|right back to you))?';
+ const delivery=action+artifact+tail;
+ // The object may be the buyer's actual code or a natural reference phrase.
+ // Parse its complete predicate below rather than whitelisting object words.
+ const positiveCondition='(?:only\\s+)?if\\s+(?:it|that report|the report)\\s+(?:does|matches?(?:\\s+[^,;.!?]+)?|covers?\\s+[^,;.!?]+)';
+ const fronted=new RegExp('^(?:once|after|when|if)\\s+(.+?),\\s*'+actor+delivery+'[.!]?$','i').exec(line);
  if(fronted){
   let condition=fronted[1].trim();
   condition=condition.replace(/^(?:I|we)(?:'ve| have)?\s+(?:reviewed|seen|checked)\s+(?:that|the|your)\s+drawing\s+and\s+/i,'');
@@ -300,11 +317,11 @@ export function investigationThenDocumentDelivery(text:string,context?:Context):
  }
  // A repeated subject is optional in a coordinated action (“I'll check ...
  // and then send it”). Sequence does NOT mean “only if it covers the product”.
- const continuation=/\s*,?\s+(?:and\s+)?then\s+(?:(?:I|we)(?:'ll|\s+(?:will|can|could))\s+)?(?:send|email|share|include|attach)\s+(?:it|that report|the report)(?:\s+(?:over|along|to you|for review))?[.!]?$/i.exec(line)
-  ||/\s*,?\s+and\s+((?:once|after|when)\s+(?:I|we)(?:'ve| have)\s+got\s+(?:that|it))\s*,\s*(?:I|we)(?:'ll|\s+(?:will|can))\s+(?:reply|respond)\s+with\s+(?:it|the report|the documents|the details)[.!]?$/i.exec(line)
-  ||/[.!]\s+(?:then\s+)?(?:I|we)(?:'ll|\s+(?:will|can|could))\s+(?:send|email|share|include|attach)\s+(?:it|that report|the report)(?:\s+(?:over|along|to you|for review))?\s+((?:only\s+)?if\s+(?:it|that report|the report)\s+(?:does|matches?(?:\s+(?:the|your)\s+requirements)?|covers?\s+(?:it|that product|your product|your mesh|the requirements)))[.!]?$/i.exec(line)
-  ||/(?:\s*,?\s+and\s+|[.!]\s+)((?:only\s+)?if\s+(?:it|that report|the report)\s+(?:does|covers?\s+(?:it|that product|your product|your mesh|the requirements)|matches?\s+(?:the|your)\s+requirements))\s*,?\s+(?:I|we)(?:'ll|\s+(?:will|can|could))\s+(?:send|email|share|include|attach)\s+(?:it|that report|the report)(?:\s+(?:over|along|to you|for review))?[.!]?$/i.exec(line)
-  ||/[.!]\s+((?:once|after|when)\s+(?:that|it|the (?:scope|coverage|answer))(?:(?:'s|\s+is|\s+has been)\s+(?:checked|verified|confirmed)))\s*,\s*(?:I|we)(?:'ll|\s+(?:will|can|could))\s+(?:send|email|share|include|attach)\s+(?:it|that report|the report)(?:\s+(?:over|along|to you|for review))?[.!]?$/i.exec(line);
+ const continuation=new RegExp('\\s*,?\\s+(?:and\\s+)?then\\s+(?:'+actor+')?'+delivery+'[.!]?$','i').exec(line)
+  ||new RegExp('\\s*,?\\s+and\\s+((?:once|after|when)\\s+(?:I|we)(?:\x27ve| have)\\s+got\\s+(?:that|it))\\s*,\\s*'+actor+delivery+'[.!]?$','i').exec(line)
+  ||new RegExp('(?:\\s*,?\\s+and\\s+|[.!]\\s+)(?:then\\s+)?(?:'+actor+')?'+delivery+'\\s+('+positiveCondition+')[.!]?$','i').exec(line)
+  ||new RegExp('(?:\\s*,?\\s+and\\s+|[.!]\\s+)('+positiveCondition+')\\s*,?\\s+'+actor+delivery+'[.!]?$','i').exec(line)
+  ||new RegExp('[.!]\\s+((?:once|after|when)\\s+(?:that|it|the (?:scope|coverage|answer))(?:(?:\x27s|\\s+is|\\s+has been)\\s+(?:checked|verified|confirmed)))\\s*,\\s*'+actor+delivery+'[.!]?$','i').exec(line);
  if(!continuation)return;
  const investigation=line.slice(0,continuation.index).trim();
  if(!isBoundedEpistemicFactAction(investigation,context))return;
@@ -312,7 +329,12 @@ export function investigationThenDocumentDelivery(text:string,context?:Context):
  if(referents.length!==1||! /report$/.test(referents[0].kind))return;
  // Bare “matches” can only refer back to this explicit report-scope inquiry,
  // not an unresolved price/approval/availability predicate or earlier call.
- if(continuation[1]&&/\bmatches?$/i.test(continuation[1])&&!requestsDocumentProductCoverage(investigation))return;
+ if(continuation[1]&&/^(?:only\s+)?if\b/i.test(continuation[1])){
+  const predicate=continuation[1].replace(/^(?:only\s+)?if\s+/i,'').replace(/^(?:it|that report|the report)\b/i,'the '+referents[0].kind);
+  if(/\b(?:does|matches?)$/i.test(predicate)){
+   if(!requestsDocumentProductCoverage(investigation))return;
+  }else if(!isBoundedEpistemicFactAction('I will check whether '+predicate,context))return;
+ }
  const deliveryCondition=continuation[1]?/^(?:once|after|when)\b/i.test(continuation[1])?'check_completion':'stated_condition':'sequence_only';
  return {investigation,document:referents[0].kind,deliveryCondition,...(continuation[1]?{conditionText:continuation[1]}:{})};
 }

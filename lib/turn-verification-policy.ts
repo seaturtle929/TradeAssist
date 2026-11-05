@@ -425,7 +425,7 @@ function paraphraseCandidates(clause:string,evidence:Evidence[],context:Verifica
  * condition remains pending rather than becoming permission to send. */
 export function reportDeliveryCondition(buyerText:string):'scope_required'|'unresolved'|undefined {
  const text=buyerText.replace(/[’‘]/g,"'");
- const delivery='(?:send|email|share|forward|reply|respond|sending|emailing|sharing|forwarding)';
+ const delivery='(?:send|email|share|forward|include|attach|reply|respond|sending|emailing|sharing|forwarding|including|attaching)';
  const patterns=[
   new RegExp('\\bonly\\s+'+delivery+'\\b[^.!?]*?\\bif\\s+([^.!?]+)','gi'),
   new RegExp('\\b'+delivery+'\\b[^.!?]*?\\b(?:only\\s+)?(?:if|when)\\s+([^.!?]+)','gi'),
@@ -466,7 +466,7 @@ export function reportDeliveryCondition(buyerText:string):'scope_required'|'unre
 }
 
 function buyerApprovalRequired(text:string):boolean {
- const approval=/\bapprov\w*|\bsign(?:s|ed)?\s*[- ]?off\b/i.test(text),delivery=/\b(?:send|email|share|reply|documents?)\b/i.test(text);
+ const approval=/\bapprov\w*|\bsign(?:s|ed)?\s*[- ]?off\b/i.test(text),delivery=/\b(?:send|email|share|forward|include|attach|reply|documents?)\b/i.test(text);
  return approval&&delivery&&(/\b(?:until|before)\b/i.test(text)&&/\b(?:do not|don't|never|no documents?|wait|hold)\b/i.test(text)||/\bonly\b[^.!?]{0,80}\b(?:after|once|when)\b/i.test(text));
 }
 export type BuyerReleaseState={scope:boolean;approval:boolean;approver:'buyer'|'engineering'|'manager';hold:boolean;unresolved:boolean};
@@ -510,10 +510,10 @@ function preservesBuyerApproval(say:string,approver:BuyerReleaseState['approver'
  if(approver==='engineering'&&!/\b(?:engineer|engineering)\b/i.test(say))return false;
  if(approver==='manager'&&!/\bmanager\b/i.test(say))return false;
  const line=say.replace(/[’‘]/g,"'").replace(/your (?:engineer|engineering team|team|manager)(?:'s)? approval/ig,'your approval').replace(/your (?:engineer|engineering team|team|manager)\s+approv/ig,'you approv');
- return /\b(?:wait|hold)\b[^.!?]{0,35}\byour approval\b[^.!?]{0,25}\bbefore\s+(?:sending|emailing|sharing)/i.test(line)
-  ||/\b(?:won't|will not|do not|don't)\s+(?:send|email|share)\b[^.!?]{0,60}\buntil\s+(?:you|your team)\s+(?:approv|sign)/i.test(line)
-  ||/\b(?:send|email|share|reply)\b[^.!?]{0,50}\b(?:after|once|when)\s+(?:you|your team)\s+(?:approv|sign)/i.test(line)
-  ||/^\s*(?:once|after|when)\s+(?:you|your team)\s+(?:approv|sign)[^,;.!?]*,\s*(?:I|we)(?:['’]ll|\s+(?:will|can))\s+(?:send|email|share|reply)\b/i.test(line);
+ return /\b(?:wait|hold)\b[^.!?]{0,35}\byour approval\b[^.!?]{0,25}\bbefore\s+(?:sending|emailing|sharing|forwarding|including|attaching)/i.test(line)
+  ||/\b(?:won't|will not|do not|don't)\s+(?:send|email|share|forward|include|attach)\b[^.!?]{0,60}\buntil\s+(?:you|your team)\s+(?:approv|sign)/i.test(line)
+  ||/\b(?:send|email|share|forward|include|attach|reply|respond)\b[^.!?]{0,50}\b(?:after|once|when)\s+(?:you|your team)\s+(?:approv|sign)/i.test(line)
+  ||/^\s*(?:once|after|when)\s+(?:you|your team)\s+(?:approv|sign)[^,;.!?]*,\s*(?:I|we)(?:['’]ll|\s+(?:will|can))\s+(?:send|email|share|forward|include|attach|reply|respond)\b/i.test(line);
 }
 
 /** Offering a technical method or qualified artifact asserts support exists.
@@ -765,7 +765,7 @@ export function assessReplyVerification(say: string, context: VerificationPolicy
    // coordinated new rep promise separately (not a whole-reply checkbox).
    // The existing bounded sentence grouper preserves only an adjacent
    // explicit inquiry + "if it does" referent, never a later unrelated send.
-   for(const action of sentence.text.split(/\b(?:and|but|however)\s+(?=(?:I|we)(?:['’]ll|\s+(?:will|can|would))\b)/i))if(!isAwaitingBuyerDocumentReceipt(action)&&/\b(?:I|we)(?:['’]ll|\s+(?:will|can|would))\b[^.!?]{0,180}\b(?:send|email|share|reply|respond)\b|\b(?:report|documents?)\s+will\s+be\s+(?:sent|emailed|shared)\b/i.test(action)){
+   for(const action of sentence.text.split(/\b(?:and|but|however)\s+(?=(?:I|we)(?:['’]ll|\s+(?:will|can|would))\b)/i))if(!isAwaitingBuyerDocumentReceipt(action)&&/\b(?:I|we)(?:['’]ll|\s+(?:will|can|would))\b[^.!?]{0,180}\b(?:send|email|share|forward|include|attach|reply|respond)\b|\b(?:report|documents?)\s+will\s+be\s+(?:sent|emailed|shared|forwarded|included|attached)\b/i.test(action)){
     const start=sentence.start+sentence.text.indexOf(action);
     if(release.hold)add(action,start,'supplier_claim',{supported:false,reason:'The buyer cancelled or withheld this send and has not released it again. A company document being available does not override that instruction.'});
     if(buyerApproval&&!preservesBuyerApproval(action,release.approver))add(action,start,'supplier_claim',{supported:false,reason:'The buyer withheld permission to send until they approve. Preserve the buyer’s stated approver before every promised document send; confirming report coverage or mentioning approval for a different action does not release the documents.'});
