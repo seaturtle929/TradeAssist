@@ -1,7 +1,8 @@
 import {deriveCallParticipant} from './call-participant.ts';
 import type {ClientCoachingContext} from './client-coaching-context';
 
-type RouteContext={clientContext?:ClientCoachingContext;brain?:unknown;coachingRequest?:{listeningSession?:{currentTurnIds:string[]}};turns?:{id?:string;role:string;text:string;transcriptionUncertainty?:unknown}[]};
+type RouteContext={clientContext?:ClientCoachingContext;brain?:unknown;coachingRequest?:{listeningSession?:{currentTurnIds:string[]};partials?:unknown[];pendingSpeech?:unknown[];transcriptState?:string};turns?:{id?:string;role:string;text:string;transcriptionUncertainty?:unknown}[]};
+const capturedUnfinishedSpeech=(context:RouteContext)=>!!(context.coachingRequest?.partials?.length||context.coachingRequest?.pendingSpeech?.length||['partial','pending'].includes(context.coachingRequest?.transcriptState||''));
 const nameKey=(value:string)=>value.toLowerCase().replace(/[^a-z'-]+/g,' ').trim();
 const sameName=(a:string,b:string)=>{const x=nameKey(a),y=nameKey(b);return !!x&&!!y&&(x===y||(!x.includes(' ')||!y.includes(' '))&&x.split(' ')[0]===y.split(' ')[0]);};
 
@@ -23,6 +24,7 @@ export function callRouteAtRequest(context:RouteContext){
 
 export function callRouteDecisionRules(context:RouteContext):string {
  const route=callRouteAtRequest(context);if(!route?.routingNeeded)return '';
+ if(capturedUnfinishedSpeech(context))return 'DIALED ROUTE AND UNFINISHED SPEECH: Current speech is being recognized or clarified; this is not an empty-call opener. Do not force a transfer request over a listening or audio-clarification move. The intended contact remains unconfirmed: do not greet them as present or assert their prior requests. Route state: '+JSON.stringify(route);
  return 'DIALED ROUTE BEFORE SALES STAGE: This call is through the company main line. The intended contact is '+JSON.stringify(route.target||{name:'not known'})+', but that selection is not evidence they answered. Until current speech identifies that person, do not greet them by name or address their prior requests as if they are present. For an empty-call opener or a generic office greeting, briefly identify the rep and represented company using known information, then politely ask to be connected to the intended contact (and known role). This routing step applies in EVERY sales stage; it does not change the selected stage or restart discovery. If a transfer is underway, acknowledge and hold; if unavailable, use an appropriate known alternate route. Respond to an actual question from the current speaker before any useful routing request. Once the intended person identifies themselves, use the reviewed prior relationship and this call\'s selected objective. Route state: '+JSON.stringify(route);
 }
 
@@ -32,7 +34,7 @@ export function callRouteSuggestionProblems(say:string,context:RouteContext):str
  if(name&&new RegExp('\\b(?:hi|hello|hey|good morning|good afternoon|thanks|thank you|of course)[, !—-]*'+name+'\\b','i').test(say))errors.push('The intended contact has not identified themselves on the company main line. Address the current answerer and request a transfer; do not greet the intended contact yet.');
  if(route.opening){
   const connection=/\b(?:connect|transfer|put me through|speak (?:to|with)|speaking (?:to|with)|reach|pass me|speaking (?:with|to))\b/i.test(say);
-  if(!connection)errors.push('A main-line opener must politely ask to reach the intended contact before using their prior relationship or the sales-stage objective.');
+  if(!connection&&!capturedUnfinishedSpeech(context))errors.push('A main-line opener must politely ask to reach the intended contact before using their prior relationship or the sales-stage objective.');
   if(/\b(?:have you|did you|have your|has your|you(?:['’]d| had)? requested|your (?:requirements|needs|team))\b/i.test(say))errors.push('Do not direct the absent contact’s discovery or document follow-up to an unidentified main-line answerer.');
  }
  return errors;

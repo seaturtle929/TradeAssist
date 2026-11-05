@@ -6,7 +6,7 @@ import {deriveConversationState,commitmentReply,committedMaterialDescription,has
 import {deriveCallParticipant} from './call-participant.ts';
 import {gentleBoundaryReply,needsQuestionPlan} from './needs-guidance.ts';
 import {buyerQuestionAgendaFor,isCompanyChoiceQuestion,spokenReplyBudget,substantiveBuyerQuestions} from './buyer-turn-intent.ts';
-import {assessReplyVerification,classifyBuyerTurn,isBoundedFactCheckReply} from './turn-verification-policy.ts';
+import {assessReplyVerification,classifyBuyerTurn,isNonAssertiveReply} from './turn-verification-policy.ts';
 import {applyCoachingConfiguration,configurationNeedsInterpretation,configurationSuggestionProblems,configuredSafeReply,selectedConfigurationStage,authorizedCurrentOfferStatement} from './coaching-configuration.ts';
 
 const STAGES = {
@@ -250,9 +250,13 @@ export function needsFactCheck(say:string,backupOrContext:string|CoachingContext
   if(context.coachingRequest||(context.turns||[]).some(turn=>turn.role==='buyer')) {
     const primary=assessReplyVerification(say,context),secondary=backup.trim()?assessReplyVerification(backup,context):undefined;
     if(primary.classification.kind!=='fact_request')return primary.requiresVerification||!!secondary?.requiresVerification;
-    // Naming the buyer's requested standard while checking whether it exists
-    // is not a certification assertion. All other clauses were assessed above.
-    if(context.coachingRequest&&isBoundedFactCheckReply(say,primary.claims)&&!primary.requiresVerification&&!backup.trim())return false;
+    // An acknowledgment, clarification or bounded promise to investigate does
+    // not answer the factual question. Use the complete proposed wording and
+    // claim/boundary assessment instead of the legacy keyword scan for an
+    // intentional request. Unknown predicates retain normal verification.
+    // In particular, a courtesy/name must not make “check whether [report]
+    // covers [product]” pay for an unrelated document-content model request.
+    if(context.coachingRequest)return !((primary.locallyVerifiedWholeReply||isNonAssertiveReply(say,primary.claims,context))&&!primary.requiresVerification&&(!backup.trim()||secondary&&!secondary.requiresVerification&&(secondary.locallyVerifiedWholeReply||isNonAssertiveReply(backup,secondary.claims,context))));
   }
   if(!backup.trim()&&isWrittenQuoteConfirmation(say,context))return false;
   if(!backup.trim() && isDocumentDelivery(say))return false;

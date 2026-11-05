@@ -3,6 +3,7 @@ import {selectClientPhoneRoute} from "../lib/client-phone-routes";
 import {callOutcomeLabel} from '../lib/call-outcome-label';
 import {createEnglishTranscriptionGuard} from '../lib/english-transcription';
 import {buyerTranscriptionConfig} from '../lib/buyer-transcription-config';
+import {buyerVadSilenceMs} from '../lib/turn-detection';
 import {snapshotCoachingContext,coachingRequestFocus} from '../lib/coaching-context-snapshot';
 import type {CoachingRequest} from '../lib/on-demand-coaching';
 
@@ -1073,11 +1074,11 @@ export default function Workspace() {
       const session=new LiveCoachingSession({
         initialTranscriptIds:context.current.turns.map(turn=>turn.id),
         initialQuestions:buyerQuestionLogRef.current.at(-1)?.questions||[],
-        vadSilenceMs:audioMode==="computer"?300:400,
+        vadSilenceMs:buyerVadSilenceMs(audioMode),
         snapshot:()=>observationPayload(context.current.turns) as LiveContext,
-        latestContext:()=>{
+        latestContext:(turns)=>{
           const repSpeech=repAudio.current?.observedSpeechSnapshot()||{partials:[],pendingSpeech:[]};
-          return {...payload("coach",context.current.turns),coachingRequest:{id:'',requestedAt:0,...repSpeech}} as LiveContext;
+          return {...payload("coach",(turns as Turn[]|undefined)??context.current.turns),coachingRequest:{id:'',requestedAt:0,...repSpeech}} as LiveContext;
         },
         onQueuedRequest:state=>{if(peer.current===pc){setQueuedRequest(state);if(state)setThinking(false);}},
         knowledgeSources:snapshot=>{

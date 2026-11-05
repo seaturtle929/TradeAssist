@@ -2,7 +2,7 @@ import {ON_DEMAND_COACHING_RULES,ON_DEMAND_LINE_FORMAT} from './on-demand-coachi
 import {spokenReplyBudget} from "./buyer-turn-intent.ts";
 import {classifyBuyerTurn} from './turn-verification-policy.ts';
 import type { Guidance } from "./trade";
-import { CALL_TYPES, PHASE1_INSTRUCTIONS, normalizeCallType, normalizeGuidance, type CoachingContext } from "./call-coaching.ts";
+import { CALL_TYPES, PHASE1_INSTRUCTIONS, limitScript, normalizeCallType, normalizeGuidance, type CoachingContext } from "./call-coaching.ts";
 import { DEFAULT_VOICE, SALES_PLAYBOOK, VOICE_TONE_GUIDES, type VoiceProfile } from "./sales-playbook.ts";
 export const LIVE_INSTRUCTIONS = `You write the human sales representative's EXACT NEXT SPOKEN REPLY during an English business call. Listen to both sides of the room audio. Your output is a word-for-word script the representative can read aloud to the buyer immediately. You are not a trainer giving advice. Never speak audio or introduce yourself as AI.
 As soon as the buyer finishes a question, objection, requirement, expression of interest or ordinary conversational remark, write a direct reply to THAT specific statement. Answer the question first. For a narrow factual question with a clear documented answer, give that answer and STOP unless a clarification is necessary to answer correctly. Do not automatically follow an MOQ answer with a question about quantity or colors. Add at most one question or next-step proposal when the buyer's actual situation calls for discovery or moving forward. A question, acknowledgment, pitch and closing are not mandatory. Use natural speech in the representative's voice, addressed directly to the buyer. Do not produce topics, talking points, summaries, analysis, stage directions or instructions to the representative. Never write "you should", "ask them", "tell the buyer", "discuss", "focus on", or "mention that" as advice. Do not repeat an opening when the buyer has already asked a specific question.
@@ -134,7 +134,14 @@ export function completedLiveReply(text:string,context:CoachingContext={},comple
     const guidance=parseLiveDraft(candidateText,context);
     if(!guidance)return null;
     const rawSay=cleanSpokenReply(candidateText.replace(/^SAY:[ \t]*/i,''),context);
-    return {guidance,rawSay};
+    // An intentional live request validates the actual candidate in the
+    // controller. Legacy normalization may substitute a generic safe line;
+    // accepting that substitution here would hide the rejected factual claim
+    // and publish an unrelated answer without a repair/verification trace.
+    // Preserve the spoken budget, then run the normal source, authority and
+    // conversation checks before this candidate can become ready to say.
+    const budget=spokenReplyBudget(context);
+    return {guidance:context.coachingRequest?{...guidance,say:limitScript(rawSay,budget.words,budget.sentences)}:guidance,rawSay};
   };
   const raw=normalizeSayField(text).trimStart();
   const labeled=raw.match(/(?:^|\n)(SAY:[ \t]*[\s\S]*)/i);

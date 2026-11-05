@@ -3,7 +3,9 @@ import {clientContextSuggestionProblems,clientContextSafeReply,reviewedClientCon
 import { hasClearConversationRefusal } from './conversation-boundary.ts';
 import {applyCoachingConfiguration,configurationSuggestionProblems,configurationAuthorizesAction,configuredSafeReply} from './coaching-configuration.ts';
 import {literalSpecificationEvidence,specificationNumberEvidence} from './scoped-specification-evidence.ts';
-import {assessDocumentProductCoverage,isBoundedEpistemicFactAction,requestsDocumentProductCoverage} from './document-product-evidence.ts';
+import {buyerProductIdentifierReferences,canonicalizeKnownProductIdentifiers,productIdentityReferences} from './product-identity-evidence.ts';
+import {availableDocumentActionEvidence} from './document-availability-evidence.ts';
+import {assessDocumentProductCoverage,documentIdentifierReferences,documentIdentifierSource,investigationThenDocumentDelivery,isBoundedEpistemicFactAction,isConversationalAcknowledgment,literalDocumentScopeEvidence,literalDocumentStatementEvidence,requestsDocumentProductCoverage} from './document-product-evidence.ts';
 export type BuyerTurnKind = 'fact_request' | 'sales_move' | 'confirmation';
 export type VerificationPolicyContext = {
   coachingRequest?:{id:string;requestedAt:number};
@@ -48,6 +50,10 @@ export type ReplyVerificationAssessment = {
   unsupportedClaims: ReplyFactClaim[];
   supportedClaims: ReplyFactClaim[];
   pendingClaims: ReplyFactClaim[];
+  /** Closed local entailment of every asserted clause from current original
+   * sources. Candidate retrieval or matching a number alone is never enough. */
+  locallyVerifiedWholeReply: boolean;
+  localEvidence: {sourceId:string;quote:string;claim:string}[];
   sanitizedReply: string;
   changed: boolean;
 };
@@ -170,8 +176,13 @@ function sentences(text: string): { text: string; start: number; end: number }[]
   return result.filter(part => part.text.trim());
 }
 
-function replyClauses(text: string): { text: string; start: number; end: number }[] {
-  return sentences(text).flatMap(sentence => {
+function replyClauses(text: string,context?:VerificationPolicyContext): { text: string; start: number; end: number }[] {
+  return replySentences(text,context).flatMap(sentence => {
+    // Preserve a closed check → (possibly result-conditional) document send.
+    // Cutting “if it does, I will send it” at the second comma would invent an
+    // unfinished coverage assertion; the combined action still gets source
+    // availability and company-authority checks below.
+    if(investigationThenDocumentDelivery(sentence.text,context))return [sentence];
     const separator = /,\s*(?=but\b)|,\s*(?=(?:and\s+)?(?:can|could|would|may|what|which|how|I|we|our|it|you)\b)|\s+(?=and\s+(?:can|could|would|what|which|how|I|we|our|it|you)\b)/gi;
     const parts: { text: string; start: number; end: number }[] = [];
     let offset = 0;
@@ -183,6 +194,20 @@ function replyClauses(text: string): { text: string; start: number; end: number 
     parts.push({ text: sentence.text.slice(offset), start: sentence.start + offset, end: sentence.end });
     return parts.filter(part => part.text.trim());
   });
+}
+
+/** A following pronoun may refer to exactly one preceding bounded report
+ * check. Keep that closed action pair together; never borrow a referent from
+ * earlier calls, unknown intervening sentences or a different company. */
+function replySentences(text:string,context?:VerificationPolicyContext):{text:string;start:number;end:number}[]{
+ const original=sentences(text),grouped:{text:string;start:number;end:number}[]=[];
+ for(const sentence of original){
+  const previous=grouped.at(-1),together=previous?text.slice(previous.start,sentence.end):'';
+  if(previous&&(investigationThenDocumentDelivery(together,context)||isBoundedEpistemicFactAction(together,context))){
+   grouped[grouped.length-1]={text:together,start:previous.start,end:sentence.end};
+  }else grouped.push(sentence);
+ }
+ return grouped;
 }
 
 function evidenceForNumber(number: string, clause: string, evidence: Evidence[]): Evidence | undefined {
@@ -232,16 +257,42 @@ function supplierApplicationClaim(clause:string):boolean {
 }
 /** A promise to find out whether a fact is true does not assert that it is.
  * Keep the uncertainty marker mandatory and reject an attached positive claim. */
-function unresolvedFactCheck(clause:string):boolean {
- return isBoundedEpistemicFactAction(clause);
+function unresolvedFactCheck(clause:string,context?:VerificationPolicyContext):boolean {
+ return isBoundedEpistemicFactAction(clause,context);
+}
+/** Closed conversational acts can accompany a fact question without asserting
+ * its answer. Inspect every clause; a polite prefix never exempts its tail. */
+function conversationalClause(text:string,context?:VerificationPolicyContext):boolean {
+ const line=text.trim().replace(/[’‘]/g,"'");
+ if(isConversationalAcknowledgment(line,context))return true;
+ if(/^(?:(?:once|after|when|if)\s+(?:I|we)\s+(?:(?:verify|confirm) (?:that|its availability|it is available)|know for sure)|(?:I|we)(?:'ll| will)\s+(?:follow up(?: and let you know)?|let you know|report back|confirm(?: that for you)?(?: before (?:sending|emailing) (?:it|them|anything|the documents))?))[,.!]?$/i.test(line))return true;
+ // An unqualified investigation promises only the rep's follow-through.
+ // Restricted actions, content assertions and time promises cannot fit it.
+ if(/^(?:(?:I|we)(?:'ll| will| can)|let (?:me|us))\s+(?:check|double[- ]?check|find out|look into (?:it|that)|check (?:it|that|the details))(?:\s+and\s+(?:let you know|report back|confirm before (?:sending|emailing) (?:it|them|anything)))?[.!]?$/i.test(line))return true;
+ // Ask about the buyer's needs/criteria, rather than offering our capability
+ // in interrogative form. Numeric and presupposed factual claims still pass
+ // through assessReplyVerification before this whole-reply exemption.
+ return /^(?:what|which|how|when|where|who|does|do|is|are|would|could|can)\b[^.!?]*\?$/i.test(line)
+  &&/\b(?:you|your)\b/i.test(line)
+  &&!/\b(?:our|we|I|guarantee\w*|certif\w*|approved|free|discount\w*|ship|deliver|promise|superior|cheaper|faster|better quality)\b/i.test(line);
+}
+/** Fast factual-turn handling is a whole-meaning decision over the proposed
+ * spoken reply, not a keyword decision about the buyer's question. Unknown
+ * clauses remain conservative; supported factual claims still get their
+ * normal source check, and hard company/context vetoes always win. */
+export function isNonAssertiveReply(say:string,claims:ReplyFactClaim[],context?:VerificationPolicyContext):boolean {
+ if(claims.some(claim=>!claim.supported||(claim.kind!=='product_identity'&&(claim.kind!=='supplier_claim'||claim.reason!==AVAILABLE_DOCUMENT_ACTION))))return false;
+ const parts=replySentences(say,context);
+ return !!parts.length&&parts.every(sentence=>unresolvedFactCheck(sentence.text,context)||replyClauses(sentence.text,context).every(local=>{
+  const part={...local,start:sentence.start+local.start};
+  return unresolvedFactCheck(part.text,context)||conversationalClause(part.text,context)||claims.some(claim=>claim.start===part.start&&claim.text===part.text&&claim.reason===AVAILABLE_DOCUMENT_ACTION);
+ }));
 }
 /** A whole-reply fast path must account for every clause, including a predicate
  * an older lexical detector may not recognize. Unrecognized tails keep the
  * ordinary verification path rather than inheriting the uncertainty exemption. */
-export function isBoundedFactCheckReply(say:string,claims:ReplyFactClaim[]):boolean {
- const parts=replyClauses(say);
- const neutral=(text:string)=>/^\s*(?:(?:thanks|thank you)(?: for (?:asking|raising that|checking|clarifying|pointing that out))?|of course|understood|sure|okay|ok|(?:once|after|when|if)\s+(?:I|we)\s+(?:(?:verify|confirm) (?:that|its availability|it is available)|know for sure)|(?:I|we)(?:['’]ll| will)\s+(?:follow up(?: and let you know)?|let you know|report back))[,.!]?\s*$/i.test(text);
- return parts.some(part=>unresolvedFactCheck(part.text))&&parts.every(part=>unresolvedFactCheck(part.text)||neutral(part.text)||claims.some(claim=>claim.start===part.start&&claim.text===part.text&&claim.supported&&claim.kind==='supplier_claim'&&claim.reason===AVAILABLE_DOCUMENT_ACTION));
+export function isBoundedFactCheckReply(say:string,claims:ReplyFactClaim[],context?:VerificationPolicyContext):boolean {
+ return replyClauses(say,context).some(part=>unresolvedFactCheck(part.text,context)||!!investigationThenDocumentDelivery(part.text,context))&&isNonAssertiveReply(say,claims,context);
 }
 function concreteSupplierAssertion(clause: string): boolean {
   // "That makes sense" is acknowledgment, not a claimed maintenance outcome.
@@ -251,6 +302,10 @@ function concreteSupplierAssertion(clause: string): boolean {
   // or personnel availability; the condition explicitly remains unresolved.
   if(/^\s*(?:I|we)(?:['’]ll|\s+(?:will|can|would))\s+(?:hold|wait|stay on the line)\b/i.test(clause)&&/\b(?:while|as|to)\b.{0,40}\b(?:check|see|find out)\b.{0,25}\b(?:if|whether)\b/i.test(clause)&&! /\b(?:but|however|guarantee|stock|inventory|products?|materials?|samples?|we (?:have|offer|supply))\b/i.test(clause))return false;
   if(declinesResponseDeadline(clause)&&/\b(?:hours?|days?|deadline|turnaround|quote|response)\b/i.test(clause))return false;
+  // A commercial commitment need not use “we will”: “Delivery is Friday”
+  // supplies the same supplier schedule. Questions and explicit investigation
+  // remain nonassertive; a declarative commercial subject needs evidence.
+  if(!/\?\s*$/.test(clause)&&/^\s*(?:(?:and|but|also)\s+)?(?:(?:the|our|your|this|that)\s+)?(?:delivery|shipment|shipping|dispatch|arrival|discount|concession|certification|payment terms)\b.{0,45}\b(?:is|are|will be|has been|have been|takes?|comes?|happens?|starts?|arrives?|leaves?|departs?|includes?)\b/i.test(clause))return true;
   // Restating the buyer's desired outcome is not asserting supplier performance.
   if(/^\s*(?:you(?:['’]re| are)?\s+(?:looking|hoping|aiming)|you\s+(?:want|need)|your\s+(?:goal|priority|requirement|aim)\s+is)\b/i.test(clause)&&!/\b(?:our|we can|we will|guarantee)\b/i.test(clause))return false;
   // Speech and streamed wording may put the predicate in its own sentence:
@@ -270,7 +325,7 @@ function concreteSupplierAssertion(clause: string): boolean {
   // grounded numerical wording before it cannot authorize the new outcome.
   if(/^\s*(?:which|that)\s+(?:guarantees?|ensures?|proves?|certifies?)\b/i.test(clause))return true;
   if (!own || /^\s*(?:and\s+)?(?:is|are|do|does|would|could|can|what|how|when)\b/i.test(clause) || /^\s*which\s+(?!(?:is|are|has|have)\b)/i.test(clause)) return false;
-  if (/\b(?:free\s+samples?|guarantee(?:s|d)?|in\s+stock|(?:is|are|have)\s+available|certif(?:ied|ication|icates?)|ISO\s?\d+|best\s+(?:quality|performance|products?|materials?|grades?|prices?|supply|service)|superior|more\s+reliable|faster\s+delivery|better\s+(?:quality|performance)|(?:good|high|consistent|stable|premium)[-\s]+(?:quality|performance)|(?:is|are)\s+(?:consistent|reliable)|performs?\s+well|based\s+in|protected\s+payment|quality\s+(?:products|materials)|(?:meet|exceed)\w*\s+(?:\w+\s+){0,3}standards|competitive\s+pric(?:e|es|ing)|lowest\s+pric(?:e|es)|sample\s+policy)\b/i.test(clause)||/\b(?:our|we|it)\b.{0,50}\b(?:is|are|offer|offers)\s+(?:the\s+)?best\b/i.test(clause)) return true;
+  if (/\b(?:free\s+samples?|guarantee(?:s|d)?|in\s+stock|(?:is|are|have)\s+available|certif(?:y|ies|ying|ied|ication|icates?)|ISO\s?\d+|best\s+(?:quality|performance|products?|materials?|grades?|prices?|supply|service)|superior|more\s+reliable|faster\s+delivery|better\s+(?:quality|performance)|(?:good|high|consistent|stable|premium)[-\s]+(?:quality|performance)|(?:is|are)\s+(?:consistent|reliable)|performs?\s+well|based\s+in|protected\s+payment|quality\s+(?:products|materials)|(?:meet|exceed)\w*\s+(?:\w+\s+){0,3}standards|competitive\s+pric(?:e|es|ing)|lowest\s+pric(?:e|es)|sample\s+policy)\b/i.test(clause)||/\b(?:our|we|it)\b.{0,50}\b(?:is|are|offer|offers)\s+(?:the\s+)?best\b/i.test(clause)) return true;
   if (CONDITIONAL_PROPOSAL.test(clause) && !/\b(?:guarantee|free|in\s+stock|certified)\b/i.test(clause)) return false;
   // Sending existing documents is a rep action, not factory capacity or a sample policy.
   if (DELIVERY.test(clause) && DOCUMENT.test(clause) && !/\b(?:ship|deliver|free|guarantee|stock|certified)\b/i.test(clause)) return false;
@@ -333,12 +388,13 @@ function safeSupplierEvidence(clause: string, evidence: Evidence[],context?:Veri
  * availability of drawings does not support a new mechanism. The existing
  * semantic verifier decides equivalence, negation, scope and conditions. */
 function paraphraseCandidates(clause:string,evidence:Evidence[],context:VerificationPolicyContext):Evidence[] {
+ clause=canonicalizeKnownProductIdentifiers(clause,evidence);
  const stop=new Set('the a an our your this that these those it they we can could will would has have is are be been allows allow you to of for and or with from design product products'.split(' '));
  const tokens=(text:string)=>new Set((normalize(text).match(/[a-z0-9]+/g)||[]).filter(word=>word.length>2&&!stop.has(word)));
  const identityWords=tokens((context.manufacturer?.products||'')+' '+(context.manufacturer?.name||''));
  const words=tokens(clause),ids=[...clause.matchAll(/\b[a-z]+\d+[a-z0-9]*\b/gi)].map(item=>item[0].toLowerCase());
  return evidence.filter(item=>sentences(item.text).some(part=>{
-   const source=normalize(part.text),shared=[...tokens(source)].filter(word=>words.has(word)&&!ids.includes(word)&&!identityWords.has(word));
+   const source=normalize(canonicalizeKnownProductIdentifiers(part.text,evidence)),shared=[...tokens(source)].filter(word=>words.has(word)&&!ids.includes(word)&&!identityWords.has(word));
    // A grounded design plus a new outcome is not merely a paraphrase of that
    // design. Require evidence about the asserted outcome before asking the
    // semantic checker to resolve equivalent wording; identity overlap cannot
@@ -360,11 +416,58 @@ function paraphraseCandidates(clause:string,evidence:Evidence[],context:Verifica
  }));
 }
 
-/** Offering to explain an actual technical method, or provide a specifically
- * qualified artifact, asserts that support exists even without a number.
- * Ordinary profile/spec sends and questions about needs are not such claims. */
+/** A buyer's delivery condition can survive different word orders. Only a
+ * closed report-scope condition can be satisfied by “if it does”; an unknown
+ * condition remains pending rather than becoming permission to send. */
+export function reportDeliveryCondition(buyerText:string):'scope_required'|'unresolved'|undefined {
+ const text=buyerText.replace(/[’‘]/g,"'");
+ const delivery='(?:send|email|share|forward|sending|emailing|sharing|forwarding)';
+ const patterns=[
+  new RegExp('\\bonly\\s+'+delivery+'\\b[^.!?]*?\\bif\\s+([^.!?]+)','gi'),
+  new RegExp('\\b'+delivery+'\\b[^.!?]*?\\b(?:only\\s+)?(?:if|when)\\s+([^.!?]+)','gi'),
+  new RegExp("\\b(?:do not|don't|never)\\s+"+delivery+'\\b[^.!?]*?\\bunless\\s+([^.!?]+)','gi'),
+  new RegExp('(?:^|[.!?]\\s*)\\s*if\\s+([^,;.!?]+)[,;]\\s*[^.!?]*?\\b'+delivery+'\\b','gi'),
+  new RegExp('(?:^|[.!?]\\s*)\\s*unless\\s+([^,;.!?]+)[,;]\\s*[^.!?]*?\\b(?:do not|don\'t)\\s+'+delivery+'\\b','gi'),
+  new RegExp('([^.!?]*\\b(?:needs?|must|has to|have to|requires?|required)\\b[^.!?]*?)\\bbefore\\b[^.!?]*?\\b'+delivery+'\\b','gi'),
+ ];
+ const conditions=patterns.flatMap(pattern=>[...text.matchAll(pattern)].map(match=>match[1].trim()));
+ if(conditions.length){
+  // Match the condition itself, not an unrelated coverage question elsewhere
+  // in the buyer's turn. Unknown predicates retain semantic checking; neither
+  // an available report nor “once confirmed” establishes the required result.
+  const referent='(?:it|that|this|(?:(?:the|this|that|our|your)\\s+)?(?:(?:material\\s+test|inspection|test|quality)\\s+)?report)';
+  const scoped=new RegExp('^'+referent+'\\s+(?:(?:needs? to|must|has to)\\s+)?(?:covers?|matches?|applies?\\s+to)\\s+(.+)$','i');
+  const nominal=/^(?:we|I)\s+need\s+coverage\s+(?:of|for)\s+(.+?)\s+confirmed$/i;
+  if(conditions.every(condition=>{
+   const object=scoped.exec(condition)?.[1]||nominal.exec(condition)?.[1];
+   return !!object&&!/\b(?:not|never|no|doesn't|don't|isn't|aren't|and|or|unless|if|when|because|since|before|after|once|provided|confirms?|approves?|discount|approval|permission|authorized|certif\w*|guarantee\w*)\b|[;!?]/i.test(object);
+  }))return 'scope_required';
+  return 'unresolved';
+ }
+ // Restrictive wording outside the closed forms above cannot silently become
+ // an unconditional send. Ordinary timing questions or a request to check
+ // before sending contain none of these restriction markers and remain fast.
+ if(new RegExp('\\b'+delivery+'\\b','i').test(text)&&/\b(?:only if|only when|unless|provided that|on condition that|as long as)\b/i.test(text))return 'unresolved';
+}
+
+/** Offering a technical method or qualified artifact asserts support exists.
+ * Document follow-through separately respects buyer and release conditions. */
 function technicalSupportAssertion(clause:string,context:VerificationPolicyContext,evidence:Evidence[]):Pick<ReplyFactClaim,'supported'|'pending'|'candidateSourceIds'|'reason'|'sourceId'|'verificationBoundary'>|undefined {
- if(unresolvedFactCheck(clause))return;
+ if(unresolvedFactCheck(clause,context))return;
+ const delivery=investigationThenDocumentDelivery(clause,context);
+ if(delivery){
+  const buyer=latestBuyerText(context).replace(/[’‘]/g,"'");
+  const buyerCondition=reportDeliveryCondition(buyer);
+  if(buyerCondition==='scope_required'&&delivery.deliveryCondition!=='stated_condition')return {supported:false,reason:'The buyer made document delivery conditional on the report matching their product. Checking and then sending is only an action sequence; preserve the buyer’s explicit condition instead of promising delivery regardless of the result.'};
+  if(buyerCondition==='unresolved')return {supported:false,pending:true,reason:'The buyer placed a condition on document delivery that is not established by merely completing the report check. Verify that this proposed send preserves the actual condition; document availability does not satisfy it.'};
+  // “That report” can carry the one explicit report type in the current
+  // buyer's request. Resolve the referent from their words, never from whichever
+  // report happens to be available in the catalog or a previous company.
+  const requestedReports=[...new Set((buyer.match(/\b(?:(?:material\s+)?test|inspection|certification|quality)\s+reports?\b/gi)||[]).map(value=>value.toLowerCase().replace(/reports$/,'report')))];
+  const document=delivery.document==='report'&&requestedReports.length===1?requestedReports[0]:delivery.document;
+  const availability=technicalSupportAssertion(`I can send the ${document}.`,context,evidence);
+  return availability||{supported:false,reason:'The document proposed after checking coverage is not established as available by Company Knowledge.'};
+ }
  const coverage=assessDocumentProductCoverage(clause,context,evidence);
  if(coverage)return coverage;
  if(!context.coachingRequest)return;
@@ -404,7 +507,11 @@ function technicalSupportAssertion(clause:string,context:VerificationPolicyConte
  const productAssertion=affirmativeProductAssertion(clause,context);
  if(!method&&!offered&&!productAssertion)return;
  const subjects=[...clause.matchAll(IDENTITY)].map(item=>normalize(item[0]));
- const source=method||productAssertion||artifactContent?safeSupplierEvidence(clause,evidence,context):evidence.find(item=>normalize(item.text).includes(normalize(artifact!))&&subjects.every(subject=>normalize(item.text).includes(subject))&&!/\b(?:not available|unavailable|not provided|no (?:test|inspection|certification) report)\b/i.test(item.text));
+ // Existing-document follow-through is fast only while release is actually
+ // permitted. A source saying “available only after manager approval” does
+ // not authorize an unconditional send, even if another list says available.
+ const available=artifact?availableDocumentActionEvidence(artifact,evidence):undefined;
+ const source=method||productAssertion||artifactContent?safeSupplierEvidence(clause,evidence,context):available&&subjects.every(subject=>normalize(available.text).includes(subject))?available:undefined;
  if(source)return {supported:true,reason:offered&&!method&&!productAssertion&&!artifactContent?AVAILABLE_DOCUMENT_ACTION:'This specific technical support or product predicate is documented in Company Knowledge.',sourceId:source.id};
  const candidates=(artifactContent||productAssertion&&!offered)&&!method?paraphraseCandidates(clause,evidence,context):[];
  if(candidates.length)return {supported:false,pending:true,candidateSourceIds:[...new Set(candidates.map(item=>item.id))],reason:'A relevant company source may support this technical paraphrase; semantic support, conditions and scope are not yet verified.'};
@@ -598,20 +705,24 @@ export function assessReplyVerification(say: string, context: VerificationPolicy
     if (/^(?:Al2O3|SiC)$/i.test(match[0])) continue;
     add(match[0], match.index || 0, 'product_identity', identitySupported(match[0], context, evidence));
   }
+  const productIds=productIdentityReferences(say,evidence).filter(reference=>!companySpans.some(span=>span.start<=reference.start&&span.end>=reference.end));
+  for(const reference of productIds)add(reference.text,reference.start,'product_identity',{supported:true,sourceId:reference.sourceId,reason:'This complete product identifier, including equivalent join typography, appears in original company knowledge; this does not verify any quantity, specification or document coverage.'});
+  const documentIds=documentIdentifierReferences(say).map(reference=>({...reference,source:documentIdentifierSource(reference,evidence)}));
+  for(const reference of documentIds)add(reference.identifier,reference.start,'supplier_claim',reference.source?{supported:true,sourceId:reference.source.id,reason:'This exact identifier names the same document type in original Company Knowledge; its scope and contents still need their own checks.'}:{supported:false,reason:'This document identifier is not established for the same document type in current original Company Knowledge.'});
   // Clause splitting must not let “check whether …, which proves …” hide its
   // appended positive predicate. Assess that original sentence as a claim as
   // well; an uncertainty prefix does not support what follows the boundary.
-  for(const sentence of sentences(say))if(replyClauses(sentence.text).some(part=>unresolvedFactCheck(part.text))&&!unresolvedFactCheck(sentence.text)&&/[:,]\s*(?:which|that|we|I|our|it|the (?:product|mesh))\b|:\s*[a-z]|\b(?:and|but|however|plus|also)\s+(?:we|I|our|it)\b/i.test(sentence.text)){
+  for(const sentence of sentences(say))if(replyClauses(sentence.text,context).some(part=>unresolvedFactCheck(part.text,context))&&!unresolvedFactCheck(sentence.text,context)&&/[:,]\s*(?:which|that|we|I|our|it|the (?:product|mesh))\b|:\s*[a-z]|\b(?:and|but|however|plus|also)\s+(?:we|I|our|it)\b/i.test(sentence.text)){
     const source=safeSupplierEvidence(sentence.text,evidence,context);
     add(sentence.text,sentence.start,'supplier_claim',source?{supported:true,sourceId:source.id,reason:'The complete appended supplier predicate is supported by Company Knowledge.'}:{supported:false,reason:'An appended positive supplier claim is not established by an earlier promise to check a different fact. Keep the uncertainty action and remove or independently support the added claim.'});
   }
   // Preserve a fronted qualifier ("For PX20, we have a test report") before
   // splitting its comma into separate clauses and losing the product scope.
-  for(const sentence of sentences(say)){
+  for(const sentence of replySentences(say,context)){
     const coverage=assessDocumentProductCoverage(sentence.text,context,evidence);
     if(coverage?.verificationBoundary)add(sentence.text,sentence.start,'supplier_claim',coverage);
   }
-  for (const part of replyClauses(say)) {
+  for (const part of replyClauses(say,context)) {
     const text = part.text;
     const technicalSupport=technicalSupportAssertion(text,context,evidence);
     if(technicalSupport)add(text,part.start,'supplier_claim',technicalSupport);
@@ -621,9 +732,16 @@ export function assessReplyVerification(say: string, context: VerificationPolicy
     if(commercial)add(text,part.start,'supplier_claim',commercial);
     const responseTiming = /\b(?:I|we)(?:['’]ll|\s+(?:will|can|would))\b.{0,85}\b(?:soon|shortly|ASAP|quickly|in\s+a\s+bit|right\s+away|promptly|immediately|within|by\s+(?:\d|tomorrow|today|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)|in\s+\d+\s+(?:hours?|days?)|tomorrow|today)\b/i.exec(text);
     if (responseTiming&&!declinesResponseDeadline(text)) add(text, part.start, 'timing', { supported: timingAgreed(text, context), reason: 'A rep response deadline requires an explicitly agreed specific day/time; document facts do not authorize it.' });
+    const buyerInquiryIds=unresolvedFactCheck(text,context)?buyerProductIdentifierReferences(text,latestBuyerText(context)):[];
     for (const number of text.matchAll(/(?:\$\s*)?\b\d+(?:[.,]\d+)*(?:\s*(?:%|USD|dollars?|tons?|tonnes?|kg|kilograms?|days?|hours?|weeks?|months?|microns?|μm|um|mm))?/gi)) {
       const start = part.start + (number.index || 0), end = start + number[0].length;
       if (companySpans.some(span => span.start <= start && span.end >= end)) continue;
+      if(documentIds.some(reference=>reference.source&&reference.start<=start&&reference.end>=end))continue;
+      if(productIds.some(reference=>reference.start<=start&&reference.end>=end))continue;
+      // An unresolved inquiry may repeat the buyer's exact unknown identifier.
+      // Its digit is not a measured claim, and this does not establish a
+      // company product, an alias, ownership, or any affirmative fact about it.
+      if(buyerInquiryIds.some(reference=>reference.start<=(number.index||0)&&reference.end>=(number.index||0)+number[0].length))continue;
       if (identities.some(identity => (identity.index || 0) <= start && (identity.index || 0) + identity[0].length >= end)) continue;
       if ([...say.matchAll(FORMULA), ...say.matchAll(EMAIL)].some(identity => (identity.index || 0) <= start && (identity.index || 0) + identity[0].length >= end)) continue;
       if (number[0].trim() === '100%' && /\b(?:yeah|yes|okay|ok|absolutely)[,.\s]+100%/i.test(text)) continue;
@@ -654,9 +772,51 @@ export function assessReplyVerification(say: string, context: VerificationPolicy
       add(text, part.start, 'supplier_claim', source ? { supported: true, reason: 'The supplier assertion appears in company knowledge.', sourceId: source.id } : candidates.length ? {supported:false,pending:true,candidateSourceIds:[...new Set(candidates.map(item=>item.id))],reason:'A relevant company source may support this supplier paraphrase; semantic support, conditions and scope are not yet verified.'} : { supported: false, reason: supplierApplicationClaim(text)?'This product application or customer-use capability is absent from original company evidence. Buyer industry, a possible-fit hypothesis, and an earlier rep claim cannot establish it.':'Supplier capability, policy, certification, stock, or superiority needs explicit company evidence.' });
     }
   }
+  // A retrieved source relationship is ordinarily pending semantic checking.
+  // Promote it only when a closed grammar proves this entire clause from an
+  // original source. Never override a hard conflict or infer an extra predicate
+  // from a correct number/product name elsewhere in the reply.
+  const localEvidence:{sourceId:string;quote:string;claim:string}[]=[];
+  const addLocalEvidence=(item:typeof localEvidence[number])=>{
+    const key=(quote:string)=>quote.trim().replace(/\s+/g,' ');
+    const existing=localEvidence.find(entry=>entry.sourceId===item.sourceId&&key(entry.quote)===key(item.quote));
+    if(!existing)localEvidence.push(item);
+    else if(!existing.claim.includes(item.claim))existing.claim+='\n'+item.claim;
+  };
+  const parts=replyClauses(say,context);
+  const provenParts=new Set<number>();
+  let previousDocument:ReturnType<typeof literalDocumentStatementEvidence>;
+  for(const sentence of sentences(say)){
+    const proof=literalDocumentStatementEvidence(sentence.text,context,evidence.filter(item=>item.original!==false),previousDocument);
+    previousDocument=proof;
+    if(!proof)continue;
+    for(const part of parts.filter(part=>part.start>=sentence.start&&part.end<=sentence.end))provenParts.add(part.start);
+    for(const entry of proof.evidence||[proof])addLocalEvidence({sourceId:entry.sourceId,quote:entry.quote,claim:sentence.text.trim()});
+    // A discourse “Yes,” belongs to its actual report sentence. Do not leave
+    // it pending separately after proving every predicate in that sentence.
+    // Hard conflicts, authorization failures and unknown adjoining sentences
+    // remain untouched and prevent whole-reply proof below.
+    for(const claim of claims)if(claim.pending&&claim.start>=sentence.start&&claim.end<=sentence.end){
+      claim.supported=true;claim.pending=false;claim.sourceId=proof.sourceId;delete claim.candidateSourceIds;claim.reason=proof.reason;
+    }
+  }
+  for(const part of parts){
+    const specification=literalSpecificationEvidence(part.text,evidence.filter(item=>item.original!==false));
+    const document=literalDocumentScopeEvidence(part.text,context,evidence.filter(item=>item.original!==false));
+    const sourceId=specification?.id||document?.sourceId;
+    if(!sourceId)continue;
+    provenParts.add(part.start);
+    const proofSources=document?.evidence||[{sourceId,quote:evidence.find(item=>item.original!==false&&item.id===sourceId)!.text}];
+    for(const proof of proofSources)addLocalEvidence({sourceId:proof.sourceId,quote:proof.quote,claim:part.text.trim()});
+    for(const claim of claims)if(claim.pending&&claim.start===part.start&&claim.end===part.end){
+      claim.supported=true;claim.pending=false;claim.sourceId=sourceId;delete claim.candidateSourceIds;
+      claim.reason=specification?'The entire literal specification assertion is entailed by this current original source.':document!.reason;
+    }
+  }
   const unsupportedClaims = claims.filter(claim => !claim.supported && !claim.pending);
   const pendingClaims = claims.filter(claim => claim.pending);
   const supportedClaims = claims.filter(claim => claim.supported);
+  const locallyVerifiedWholeReply=localEvidence.length>0&&!unsupportedClaims.length&&!pendingClaims.length&&parts.every(part=>provenParts.has(part.start)||isNonAssertiveReply(part.text,claims.filter(claim=>claim.start>=part.start&&claim.end<=part.end).map(claim=>({...claim,start:claim.start-part.start,end:claim.end-part.start})),context));
   const fabricatedCompletion=unsupportedClaims.some(claim=>/prior promise to send does not establish completion|No reply is not approval/i.test(claim.reason));
   const fabricatedApproval=unsupportedClaims.some(claim=>/approval cannot be asserted from company knowledge/i.test(claim.reason));
   // A closing question premised on an unauthorized approval cannot survive as
@@ -672,9 +832,9 @@ export function assessReplyVerification(say: string, context: VerificationPolicy
       .replace(/\s+([,.!?])/g, '$1').trim();
     if (sanitizedReply) sanitizedReply = sanitizedReply[0].toUpperCase() + sanitizedReply.slice(1);
   }
-  const assertedRemainder=replyClauses(say).filter(part=>!unresolvedFactCheck(part.text)).map(part=>part.text).join(' ');
-  const checkAndExistingDocuments=isBoundedFactCheckReply(say,claims)&&claims.every(claim=>claim.supported&&claim.kind==='supplier_claim'&&claim.reason===AVAILABLE_DOCUMENT_ACTION);
-  return { classification, claims, unsupportedClaims, supportedClaims, pendingClaims, requiresVerification: pendingClaims.length>0 || (classification.kind === 'fact_request' ? claims.length > 0&&!checkAndExistingDocuments || /\b(?:yes|correct|we\s+do|we\s+can|it\s+is|we\s+offer|we\s+supply)\b/i.test(assertedRemainder) : unsupportedClaims.length > 0), sanitizedReply, changed: sanitizedReply !== say };
+  const assertedRemainder=replyClauses(say,context).filter(part=>!unresolvedFactCheck(part.text,context)).map(part=>part.text).join(' ');
+  const checkAndExistingDocuments=isBoundedFactCheckReply(say,claims,context)&&claims.every(claim=>claim.supported&&(claim.kind==='product_identity'||claim.kind==='supplier_claim'&&claim.reason===AVAILABLE_DOCUMENT_ACTION));
+  return { classification, claims, unsupportedClaims, supportedClaims, pendingClaims, locallyVerifiedWholeReply, localEvidence, requiresVerification: !locallyVerifiedWholeReply&&(pendingClaims.length>0 || (classification.kind === 'fact_request' ? !checkAndExistingDocuments&&(claims.length > 0 || /\b(?:yes|correct|we\s+do|we\s+can|it\s+is|we\s+offer|we\s+supply)\b/i.test(assertedRemainder)) : unsupportedClaims.length > 0)), sanitizedReply, changed: sanitizedReply !== say };
 }
 
 export function sanitizeSalesReply(say: string, context: VerificationPolicyContext): ReplyVerificationAssessment {

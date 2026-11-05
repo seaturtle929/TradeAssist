@@ -113,6 +113,26 @@ test('Current coverage evidence produces a targeted first-attempt move without a
  assert.doesNotMatch(onDemandDecisionRules(context(undefined,'Please include the test report.')),/DOCUMENT COVERAGE QUESTION/);
 });
 
+test('An anaphoric scope question does not invite an unnecessary technical recap',()=>{
+ const input=context(undefined,'My engineer needs to know whether the report covers our exact mesh. Can you confirm that before you email it?');
+ input.turns.unshift({role:'buyer',text:'We use 70 mesh 316 stainless.'});
+ const rules=onDemandDecisionRules(input);
+ assert.match(rules,/without volunteering earlier technical numbers merely to promise this coverage check/);
+ assert.match(rules,/A number explicitly needed to answer a current question still requires the normal factual check/);
+ const say="I'll confirm whether the report covers your exact mesh and let you know.";
+ const assessment=assessReplyVerification(say,input);
+ assert.deepEqual(assessment.claims,[]);
+ assert.equal(assessment.requiresVerification,false);
+ assert.equal(needsFactCheck(say,input),false);
+ for(const asserted of [
+  "I'll confirm it covers your exact mesh.",
+  "I'll confirm that it covers PX20.",
+  "I'll confirm whether the report covers your exact mesh; it covers PX20.",
+ ])assert.ok(assessReplyVerification(asserted,input).unsupportedClaims.some(claim=>claim.verificationBoundary==='document_product_scope'),asserted);
+ assert.ok(assessReplyVerification('Our mesh is 71 mesh 316 stainless.',input).unsupportedClaims.length);
+ assert.equal(assessReplyVerification("I'll confirm whether the report covers your exact 70 mesh 316 stainless and let you know.",input).requiresVerification,true,'Earlier numerical requirements keep their ordinary evidence check; only unnecessary first-draft repetition is discouraged.');
+});
+
 for(const source of [
  {id:'linked',text:'The material test report covers PX20.'},
  {id:'linked',text:'A PX20 material test report is available for review.'},

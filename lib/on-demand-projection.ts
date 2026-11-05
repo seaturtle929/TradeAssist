@@ -2,6 +2,7 @@ import type {CoachingContext} from './call-coaching';
 import {onDemandTaskContext} from './on-demand-coaching.ts';
 import {callRouteAtRequest} from './call-route.ts';
 import {coachingTranscriptState} from './coaching-context-snapshot.ts';
+import {currentParticipantPickup,deriveCallParticipant} from './call-participant.ts';
 import {BUYER_DECISION_QUESTIONS,SALES_COACHING_PURPOSE,SALES_MOVE_JUDGMENT,SALES_MOVE_REVIEW_STANDARD} from './sales-curriculum.ts';
 
 /** Generation-only removal of exact duplicates. The entire labeled transcript
@@ -60,22 +61,42 @@ export function deduplicateOnDemandReferenceData<F extends object,S extends obje
   const fact=object(value),sourceIndex=sources.findIndex(item=>object(item)?.id===fact?.sourceId&&object(item)?.text===fact?.text);
   if(sourceIndex>=0)replace(fact,'text',object(sources[sourceIndex])?.text,`REQUEST SNAPSHOT.sources[${sourceIndex}].text`,`REQUEST SNAPSHOT.brain.facts[${index}]`);
  });
+ // A current-person action can be repeated in six derived planner fields.
+ // Keep the first complete action and reference it only after exact equality;
+ // never merge a different final-turn objective or any literal evidence.
+ const action=object(root.immediateAction),task=object(request.coachingTask),purpose=object(request.purpose),state=object(purpose?.conversationState);
+ if(action){
+  const target='SALES FOUNDATION.immediateAction';
+  replace(object(root.conversationContext),'currentObjective',action,target,'SALES FOUNDATION.conversationContext');
+  replace(task,'immediateAction',action,target,'REQUEST SNAPSHOT.coachingTask');
+  replace(purpose,'immediateAction',action,target,'REQUEST SNAPSHOT.purpose');
+  replace(state,'nextAction',action,target,'REQUEST SNAPSHOT.purpose.conversationState');
+  replace(state,'immediateObjective',action,target,'REQUEST SNAPSHOT.purpose.conversationState');
+ }
+ const objective=selected?.objective,target='ACTIVE MANAGER CONFIGURATION.configuration.selectedStage.objective';
+ replace(task,'managerObjective',objective,target,'REQUEST SNAPSHOT.coachingTask');
+ replace(object(request.callContext),'goal',objective,target,'REQUEST SNAPSHOT.callContext');
+ replace(state,'stagePurpose',objective,target,'REQUEST SNAPSHOT.purpose.conversationState');
+ replace(object(stage?.legacy),'purpose',objective,target,'SALES FOUNDATION.activeConfiguration.stage.legacy');
+ replace(object(curriculum?.relevantCycle),'objective',objective,target,'SALES FOUNDATION.builtInSalesExpertise.curriculum.relevantCycle');
  return projected;
 }
 
-/** Empty-main-line routing is the immediate prerequisite, even when a returning
- * client's deal stage is Discovery/Quotation. Replace only derived action hints
+/** Routing and a newly reached person's introduction are prerequisites even
+ * when a returning client's deal stage is Discovery/Quotation. Replace only derived action hints
  * in generation projections; never rewrite the canonical state, selected stage,
  * factual memory, authored objective or reviewed history used by checks/storage.
  * Captured partial/pending speech is not an empty call. */
 export function projectOnDemandImmediateAction<T extends object>(context:CoachingContext,projection:T):T {
  if(!context.coachingRequest||['partial','pending'].includes(coachingTranscriptState(context))||['partial','pending'].includes(context.coachingRequest.transcriptState||''))return projection;
  const session=context.coachingRequest.listeningSession,currentIds=session?new Set(session.currentTurnIds):undefined;
+ const reliable=(context.turns||[]).filter(turn=>!turn.transcriptionUncertainty),latest=reliable.at(-1);
+ const greetingPickup=latest?.role==='buyer'&&(!currentIds||currentIds.has(latest.id||''))&&currentParticipantPickup(latest,deriveCallParticipant(reliable))?.kind==='greeting_only';
  const resumedWithoutBuyer=!!currentIds&&(context.turns||[]).some(turn=>!currentIds.has(turn.id||''))&&!(context.turns||[]).some(turn=>turn.role==='buyer'&&currentIds.has(turn.id||''));
- if(!resumedWithoutBuyer&&(context.turns||[]).length)return projection;
+ if(!greetingPickup&&!resumedWithoutBuyer&&(context.turns||[]).length)return projection;
  const route=callRouteAtRequest(context);
- if((!route?.routingNeeded||!route.target)&&!resumedWithoutBuyer)return projection;
- const action=route?.routingNeeded&&route.target?{kind:'route_to_contact',target:route.target,reason:'The number dialed is the company main line; the intended contact has not identified themselves in this listening session.',move:'Briefly identify the known representative and company, then politely request connection to the intended contact and known role. Resume the selected objective after pickup.'}:{kind:'listen_for_current_person',reason:'Listening resumed with historical transcript, but no new buyer words or current speaker identification are available.',move:'Give a brief neutral invitation to speak or listen for the current person. Do not greet a historical contact or answer an earlier-session topic as a newly heard request.'};
+ if(!greetingPickup&&(!route?.routingNeeded||!route.target)&&!resumedWithoutBuyer)return projection;
+ const action=greetingPickup?{kind:'introduce_contact',reason:'The current person has just identified themselves; the introduction to reception did not reach them.',move:'Briefly introduce the verified representative and company and the documented current reason for calling, then give this person the turn. Do not append a needs, priorities or evaluation question.'}:route?.routingNeeded&&route.target?{kind:'route_to_contact',target:route.target,reason:'The number dialed is the company main line; the intended contact has not identified themselves in this listening session.',move:'Briefly identify the known representative and company, then politely request connection to the intended contact and known role. Resume the selected objective after pickup.'}:{kind:'listen_for_current_person',reason:'Listening resumed with historical transcript, but no new buyer words or current speaker identification are available.',move:'Give a brief neutral invitation to speak or listen for the current person. Do not greet a historical contact or answer an earlier-session topic as a newly heard request.'};
  const object=(value:unknown):Record<string,unknown>|undefined=>value&&typeof value==='object'&&!Array.isArray(value)?value as Record<string,unknown>:undefined;
  const value=projection as Record<string,unknown>;
  const state=object(value.state),conversationState=object(value.conversationState),flow=object(value.conversationFlow),foundationConversation=object(value.conversationContext),expertise=object(value.builtInSalesExpertise);
@@ -85,10 +106,10 @@ export function projectOnDemandImmediateAction<T extends object>(context:Coachin
   ...(conversationState?{conversationState:stateAction(conversationState)}:{}),
   ...('questionPlan' in value?{questionPlan:undefined}:{}),
   ...('situation' in value?{situation:{momentType:action.kind,reason:action.reason,role:'current_action'}}:{}),
-  ...('move' in value?{move:{id:action.kind,name:action.kind==='route_to_contact'?'Reach the intended contact':'Listen for the current person',do:[action.move],doNot:['Do not answer historical buyer speech as a current request.'],templateRole:'One immediate action; historical examples do not establish current speaker presence.'}}:{}),
-  ...(flow?{conversationFlow:{...flow,phase:action.kind==='route_to_contact'?'routing':'listening',openingNeeded:false,contactAppropriate:false}}:{}),
+  ...('move' in value?{move:{id:action.kind,name:greetingPickup?'Introduce yourself to the current contact':action.kind==='route_to_contact'?'Reach the intended contact':'Listen for the current person',do:[action.move],doNot:[greetingPickup?'Do not turn a greeting-only pickup into needs discovery or assume a purchasing role.':'Do not answer historical buyer speech as a current request.'],templateRole:'One immediate action; historical examples do not establish current speaker presence.'}}:{}),
+  ...(flow?{conversationFlow:{...flow,phase:greetingPickup?'opening':action.kind==='route_to_contact'?'routing':'listening',openingNeeded:!!greetingPickup,contactAppropriate:false}}:{}),
   ...(foundationConversation?{conversationContext:{...foundationConversation,currentObjective:action}}:{}),
-  ...(resumedWithoutBuyer&&expertise?{builtInSalesExpertise:{...expertise,illustrativeResponses:[],exampleScope:'Historical-turn examples are omitted until current buyer speech identifies this moment.'}}:{}),
+  ...((resumedWithoutBuyer||greetingPickup)&&expertise?{builtInSalesExpertise:{...expertise,illustrativeResponses:[],exampleScope:greetingPickup?'Stage examples are omitted while this current person first hears the identity and documented reason.':'Historical-turn examples are omitted until current buyer speech identifies this moment.'}}:{}),
   ...(resumedWithoutBuyer&&'buyerDeferral' in value?{historicalBuyerDeferral:value.buyerDeferral,buyerDeferral:undefined}:{}),
  };
 }

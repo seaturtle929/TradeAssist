@@ -9,7 +9,7 @@ import {isSimpleMaterialHandoff} from './material-handoff.ts';
 import {deriveConversationState,commitmentReply,validateLeadingQuestion,asksForEmailValue,currentCallMemory,hasAffirmativeMaterialsRequest,hasClearConversationRefusal,materialsNamed,affirmativeMaterialsNamed} from "./conversation-state.ts";
 import {fieldEvidence} from "./buyer-facts.ts";
 import {isSimpleBuyerGreeting} from "./opening-greeting.ts";
-import {coldCallGateFor,isParticipantIntroduction} from "./call-participant.ts";
+import {coldCallGateFor,isParticipantIntroduction,currentParticipantPickup} from "./call-participant.ts";
 export {coldCallGateFor} from './call-participant.ts';
 import {buildOpeningPlan,coldCallGateLineFor,isPermissionToContinue} from './sales-opening.ts';
 import {needsQuestionPlan,discoveryQuestionProblems,gentleBoundaryReply} from './needs-guidance.ts';
@@ -158,14 +158,17 @@ export function conversationFlowFor(context:PurposeContext) {
   const greeting=/^\s*(?:(?:well|yes|yeah|okay|ok)[,.]?\s*)?(?:hello|hi|hey|good (?:morning|afternoon|evening)|this is|[a-z][a-z '\-]{0,35} speaking|[a-z][a-z '\-]{0,35} here)\b/i.test(latest) && !/\b(?:purity|MOQ|certif\w*|price|stock|inventory|lead time|send|quote)\b/i.test(latest);
   const identityQuestion=/who(?:'s| is) (?:calling|this)|who are you|what(?:'s| is) this (?:about|regarding)|how can I help/i.test(latest);
   const currentIntroduction=isParticipantIntroduction(latest);
-  const stageAllowsOpening=!reviewedClientContext(context)?.isReturning&&(!context.companyConfiguration||["cold_call","opening","gatekeeper"].includes(stage.id));
-  const openingNeeded=stageAllowsOpening&&!introduced&&(greeting||identityQuestion||currentIntroduction||state.nextAction.kind==="introduce_contact"||!turns.some(turn=>turn.role==="you"));
-  const gate=coldCallGateFor({...context,callContext,conversationState:state});
+  const latestTurn=turns.at(-1);
+  const currentPickup=latestTurn?.role==='buyer'?currentParticipantPickup(latestTurn,participant):undefined;
+  const greetingPickup=currentPickup?.kind==='greeting_only';
+  const stageAllowsOpening=currentPickup?.kind!=='substantive'&&!reviewedClientContext(context)?.isReturning&&(!context.companyConfiguration||["cold_call","opening","gatekeeper"].includes(stage.id));
+  const openingNeeded=greetingPickup||stageAllowsOpening&&!introduced&&(greeting||identityQuestion||currentIntroduction||state.nextAction.kind==="introduce_contact"||!turns.some(turn=>turn.role==="you"));
+  const gate=currentPickup?.kind==='substantive'?null:coldCallGateFor({...context,callContext,conversationState:state});
   const gatekeeper=!!gate||participant.role==="routing"||(context.callType==="gatekeeper"&&participant.role==="unknown"&&!participant.afterTransfer);
   const directFact=/\b(?:what|which|how|tell|confirm|give)\b.{0,80}\b(?:purity|spec|certif\w*|MOQ|minimum order|lead time|price|stock|inventory)\b|\b(?:CIF|FOB) price\b/i.test(latest);
   const attendingCurrentConcern=!!state.immediateObjective&&state.immediateObjective.kind!=='complete_commitment'&&state.immediateObjective.kind!=='continue_conversation'||!!state.deferredCommitments?.length;
   const contactAppropriate=!closing&&!attendingCurrentConcern&&state.nextAction.kind!=="confirm_handoff_plan"&&(['capture_email','confirm_send'].includes(state.nextAction.kind)||contact||requestedMaterials||explicitNextStep);
-  const phase=closing ? "closing" : gate ? "routing" : stageAllowsOpening&&state.nextAction.kind==="introduce_contact" ? "opening" : contactAppropriate ? "next_step" : gatekeeper&&!directFact ? "routing" : openingNeeded&&(greeting||identityQuestion||currentIntroduction) ? "opening" : /negotiat/.test(stage.id+" "+stage.name) ? "negotiation" : "discovery";
+  const phase=closing ? "closing" : greetingPickup ? "opening" : gate ? "routing" : stageAllowsOpening&&state.nextAction.kind==="introduce_contact" ? "opening" : contactAppropriate ? "next_step" : gatekeeper&&!directFact ? "routing" : openingNeeded&&(greeting||identityQuestion||currentIntroduction) ? "opening" : /negotiat/.test(stage.id+" "+stage.name) ? "negotiation" : "discovery";
   return {phase,participant,openingNeeded:phase==="opening",contactAppropriate:phase!=="opening"&&contactAppropriate,reason:phase==="opening" ? "Introduce the representative/company and the reason for calling to this person before asking for buyer details." : phase==="next_step" ? "The buyer requested or accepted a concrete next step; confirm only the practical detail still missing." : phase==="routing" ? "Reach the purchasing contact; acknowledge an offered transfer without asking again." : phase==="closing" ? "Respect the buyer's boundary and end politely." : participant.role==="unknown"?"The person's role is not yet known. Respond first; clarify purchasing responsibility before treating them as a buyer when useful.":"Respond to this turn and learn about the buyer's stated needs; the checklist does not require a contact request."};
 }
 function introductionFor(context:PurposeContext):string {
@@ -257,9 +260,10 @@ function momentFor(line:string):BuyerMoment {
 export function getPurposeContext(context:PurposeContext,options:{observationOnly?:boolean}={}) {
   const {callContext,stage}=selectedStage(context);
   const conversationState=deriveConversationState({...context,callContext,stageMap:normalizeStageMap(context.stageMap),buyerMemory:context.brain?.buyerMemory});
+  const conversationFlow=conversationFlowFor(context);
   // Passive UI observation maintains state; literal moves and questions are
   // prepared only inside an explicit generation request.
-  return {callContext,stage,conversationState,conversationFlow:conversationFlowFor(context),checklist:checklistFor(context),nextMove:options.observationOnly?'':proactiveMoveFor(context),questionPlan:options.observationOnly?undefined:needsQuestionPlan(conversationState,context),examples:options.observationOnly?[]:normalizeExampleLines(context.exampleLines).filter(example=>example.approved && example.moment===conversationState.moment && (!example.stageId || example.stageId===conversationState.stageId)).slice(0,3)};
+  return {callContext,stage,conversationState,conversationFlow,checklist:checklistFor(context),nextMove:options.observationOnly?'':proactiveMoveFor(context),questionPlan:options.observationOnly||conversationFlow.openingNeeded?undefined:needsQuestionPlan(conversationState,context),examples:options.observationOnly?[]:normalizeExampleLines(context.exampleLines).filter(example=>example.approved && example.moment===conversationState.moment && (!example.stageId || example.stageId===conversationState.stageId)).slice(0,3)};
 }
 function guidanceFor(say:string,context:PurposeContext,move:string):Guidance {
   const {stage}=selectedStage(context),zh=!!context.bilingual;

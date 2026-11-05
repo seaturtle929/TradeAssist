@@ -1,6 +1,7 @@
 /** Small, extractive specification matching. A number is not evidence by
  * itself: product, property, value, unit and qualification must travel together.
  * This does not interpret tables, convert units or establish product fitness. */
+import {canonicalizeKnownProductIdentifiers} from './product-identity-evidence.ts';
 export type SpecificationSource={id:string;text:string;title?:string;complete?:boolean};
 type Fact={product:string;property:string;value:string;unit:string;start:number;end:number};
 const productPattern=/\b[A-Z]{1,6}\d{1,6}[A-Z0-9-]*\b/gi;
@@ -78,6 +79,9 @@ function clauseFacts(clause:string):Fact[]{const product=ids(clause);return prod
 /** handled=true prevents a looser whole-document numeric search from borrowing
  * another product's opening or the same value for a different property. */
 export function specificationNumberEvidence(number:string,clause:string,sources:SpecificationSource[]):{handled:boolean;source?:SpecificationSource}{
+ const originals=sources;
+ clause=canonicalizeKnownProductIdentifiers(clause,originals);
+ sources=originals.map(source=>({...source,text:canonicalizeKnownProductIdentifiers(source.text,originals)}));
  const claims=clauseFacts(clause),value=number.match(/^\s*(\d+(?:\.\d+)?)/)?.[1];
  const target=claims.find(fact=>value!==undefined&&fact.value===String(Number(value))&&norm(number).replace(/\s/g,'')===norm(clause.slice(fact.start,fact.end).match(/\d+(?:\.\d+)?\s*(?:mm|millimet(?:er|re)s?|μm|um|micromet(?:er|re)s?|microns?|cm|inches?|inch)?/)?.[0]||'').replace(/\s/g,''));
  // Once a product and specification property are present, an unfamiliar word
@@ -87,17 +91,20 @@ export function specificationNumberEvidence(number:string,clause:string,sources:
  const entries=sources.map(sourceFacts);
  if(!supported(target,entries))return {handled:true};
  const index=entries.findIndex(entry=>entry.facts.some(fact=>same(target,fact)));
- return {handled:true,source:sources[index]};
+ return {handled:true,source:originals[index]};
 }
 
 /** Local entailment only for a closed literal specification grammar. Any new
  * benefit, certification, guarantee, condition or extra predicate falls through
  * to the ordinary source checks rather than inheriting the numeric verdict. */
 export function literalSpecificationEvidence(clause:string,sources:SpecificationSource[]):SpecificationSource|undefined{
+ const originals=sources;
+ clause=canonicalizeKnownProductIdentifiers(clause,originals);
+ sources=originals.map(source=>({...source,text:canonicalizeKnownProductIdentifiers(source.text,originals)}));
  const claims=clauseFacts(clause);if(!claims.length)return;
  if(specificationResidue(clause,claims))return;
  const entries=sources.map(sourceFacts);
  if(!claims.every(claim=>supported(claim,entries)))return;
  const index=entries.findIndex(entry=>claims.every(claim=>entry.facts.some(fact=>same(claim,fact))));
- return index<0?undefined:sources[index];
+ return index<0?undefined:originals[index];
 }

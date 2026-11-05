@@ -1,4 +1,4 @@
-import {isSimpleBuyerGreeting} from "./opening-greeting.ts";
+import {isSimpleBuyerGreeting,normalizeGreetingSeparator} from "./opening-greeting.ts";
 export type ParticipantTurn={id?:string;role:string;text:string};
 export type TransferAction={
   status:"intended"|"pending"|"completed"|"unavailable";
@@ -19,12 +19,15 @@ export type CallParticipant={
   roleQuestionPending?:boolean;
   /** A request to reach purchasing is not itself a direct role question. */
   roleRequestPending?:boolean;
+  /** The rep requested this person; this is a routing target, never evidence
+   * that the target has joined or handles purchasing. */
+  requestedConnection?:{targetName:string;evidence:{turnId:string;quote:string}};
   /** Actual acceptance of the earlier person's sending plan in this segment. */
   handoffPlanAccepted?:boolean;
 };
 export type ColdCallGateKind='right_person_check'|'gatekeeper_intent'|'unavailable_contact'|'transfer_wait';
 type GateContext={turns?:ParticipantTurn[];callType?:unknown;callContext?:unknown;conversationState?:{participant?:CallParticipant;movedPastDiscovery?:boolean}};
-const normalize=(value:string)=>value.replace(/[’‘]/g,"'").replace(/\s+/g," ").trim();
+const normalize=(value:string)=>normalizeGreetingSeparator(value).replace(/[’‘]/g,"'").replace(/\s+/g," ").trim();
 const purchasing=/\b(?:purchasing|procurement|buying|buyer)\b/i;
 const transfer=/\b(?:I(?:'ll| will| can| am going to|'m going to)?|let me|we(?:'ll| will| can)?|one moment[, ]+I(?:'ll| will))\b.{0,35}\b(?:transfer you|put(?:ting)? you (?:straight )?through|connect you|pass you (?:over|through|to)|hand you (?:over|to))\b|\b(?:I'm|I am) (?:transferring|connecting) you\b/i;
 // A brief routing hold is not a completed transfer. ASR may nevertheless put
@@ -50,7 +53,12 @@ const excludedNames=new Set(["a","an","the","not","just","calling","sorry","afra
 function speakerName(line:string):string|undefined {
   const prefix=identityPrefix.exec(line);
   let tail=prefix?line.slice(prefix[0].length):undefined;
-  if(!tail){const speaking=line.replace(greeting,'').replace(/^[,.!\s]+/,'').match(/(?:^|[,;:])\s*([a-z][a-z'-]*(?:\s+[a-z][a-z'-]*)?)\s+(?:speaking|here)\b/i);tail=speaking?.[1];}
+  if(!tail){
+    const cleaned=line.replace(greeting,'').replace(/^[,.!\s]+/,'');
+    const speaking=cleaned.match(/(?:^|[,;:])\s*([a-z][a-z'-]*(?:\s+[a-z][a-z'-]*)?)\s+(?:speaking|here)\b/i);
+    if(speaking&&/["“”]|\b(?:said|says|told|tell|hear|heard|will|would|should|might|may)\b/i.test(cleaned.slice(0,(speaking.index||0)+speaking[0].indexOf(speaking[1]))))return;
+    tail=speaking?.[1];
+  }
   if(!tail)return;
   // A generic "I'm ready" or "This is urgent" is not a definite new identity.
   // Without a pickup/identity suffix, require the capitalization of an actual name.
@@ -114,13 +122,33 @@ export function isCurrentParticipantIntroduction(latest:Pick<ParticipantTurn,'id
   return isParticipantIntroduction(latest.text)||participant.afterTransfer&&participant.segmentStartTurnId===latest.id&&participant.transfer?.status==='completed'&&isParticipantIntroduction(participant.transfer.evidence.quote);
 }
 
+/** A person can introduce themselves and ask a real question in the same
+ * item. Recognize the pickup separately from the move that should follow it. */
+export function currentParticipantPickup(latest:Pick<ParticipantTurn,'id'|'text'>,participant:CallParticipant):{kind:'greeting_only'|'substantive';quote:string;participant:CallParticipant}|undefined {
+  if(participant.transferPending||participant.role==='routing'||!participant.speakerName||!participant.introductionNeeded||participant.segmentStartTurnId!==latest.id)return;
+  const quote=participant.afterTransfer&&participant.transfer?.status==='completed'&&participant.transfer.evidence.turnId===latest.id?participant.transfer.evidence.quote:latest.text;
+  if(!speakerName(normalize(quote)))return;
+  return {kind:isParticipantIntroduction(quote)?'greeting_only':'substantive',quote,participant};
+}
+
 const actualIntro=(line:string)=>{
   if(/\b(?:I'm|I am|we're|we are)\s+(?:with|from)\b|\b(?:I'm|I am|we're|we are)\s+calling\s+(?:from|on behalf of)\b|\b(?:I (?:represent|work for)|on behalf of)\b/i.test(line))return true;
   const identity=line.match(/\b(?:I'm|I am|this is|my name is)\s+([a-z][a-z'-]*(?:\s+[a-z][a-z'-]*){0,2})\s+(?:with|from)\b/i)?.[1];
   return !!identity&&identity.split(/\s+/).every(part=>/^[A-Z]/.test(part)&&!excludedNames.has(part.toLowerCase()));
 };
 const roleQuestion=(line:string)=>purchasing.test(line)&&(/\b(?:who|which person)\b.{0,65}\b(?:purchasing|procurement|buying|buyer|handles?|manages?|responsible|in charge)\b/i.test(line)||/\b(?:are you|is this|am I speaking (?:to|with)|would you be|is [a-z][a-z'-]*)\b.{0,70}\b(?:purchasing|procurement|buyer|responsible|in charge|right person)\b/i.test(line)||/\bdo you\b.{0,40}\b(?:handle|manage|oversee|look after|take care of)\b/i.test(line));
-const roleRequest=(line:string)=>purchasing.test(line)&&/\b(?:(?:could|can|may) I (?:speak|talk|reach)|(?:could|can|would) you (?:connect me|put me through))\b.{0,75}\b(?:purchasing|procurement|buyer)\b/i.test(line);
+const roleRequest=(line:string)=>purchasing.test(line)&&/\b(?:(?:could|can|may) I (?:please )?(?:speak|talk|reach)|(?:could|can|would) you (?:please )?(?:connect me|put me through))\b.{0,75}\b(?:purchasing|procurement|buyer)\b/i.test(line);
+function requestedConnectionName(line:string):string|undefined {
+  const request=/\b(?:(?:(?:could|can|would) you\s+(?:please\s+)?|please\s+)(?:(?:connect|transfer) me (?:with|to)|put me through (?:to|with))|(?:could|can|may) I\s+(?:please\s+)?(?:speak|talk) (?:with|to))\s+/i.exec(line);
+  if(!request)return;
+  const name=line.slice(request.index+request[0].length).split(/[,;.!?]|\s+(?:in|from|at|with|please|who|that|the|responsible|handling)\b/i)[0].trim();
+  const words=name.split(/\s+/);
+  return name&&words.length<=3&&words.every(word=>/^[a-z][a-z'-]*$/i.test(word)&&!excludedNames.has(word.toLowerCase())&&!/^(?:person|someone|somebody|team|department|office|manager)$/i.test(word))?name:undefined;
+}
+const samePersonName=(one:string,two:string)=>{
+  const a=normalize(one).toLowerCase(),b=normalize(two).toLowerCase();
+  return a===b||a.startsWith(b+' ')||b.startsWith(a+' ');
+};
 const affirmative=(line:string)=>/^(?:(?:yes|yeah|yep|correct|right)[,.! ]*)?(?:that's me|that is me|that would be me|I do|speaking)[.! ]*$|^(?:yes|yeah|yep|correct|right)[.! ]*$/i.test(line);
 const explicitRoleSelf=(line:string)=>/^(?:(?:yes|yeah|yep|correct|right)[,.! ]*)?(?:that's me|that is me|that would be me|I do|speaking)[.! ]*$/i.test(line);
 
@@ -133,6 +161,8 @@ export function deriveCallParticipant(turns:ParticipantTurn[]=[],seed?:CallParti
     const turn=events[index],line=normalize(turn.text||"");if(!line)continue;
     if(turn.role==="you"){
       if(actualIntro(line))result.introductionNeeded=false;
+      const targetName=requestedConnectionName(line);
+      if(targetName)result.requestedConnection={targetName,evidence:{turnId:turn.id||`rep-${index}`,quote:turn.text}};
       result.roleRequestPending=roleRequest(line)&&!roleQuestion(line);result.roleQuestionPending=roleQuestion(line)||result.roleRequestPending;continue;
     }
     if(turn.role!=="buyer")continue;
@@ -146,8 +176,11 @@ export function deriveCallParticipant(turns:ParticipantTurn[]=[],seed?:CallParti
     // intention it is ambiguous: require an identity/role, not merely "hello".
     const unresolvedTransfer=result.transferPending||result.transfer?.status==='unavailable';
     const pickup=unresolvedTransfer&&!hasTransfer&&!sameName&&!definiteUnavailable(line)&&identityOrPickup(line)&&(result.transfer?.status==='pending'||!result.transfer||definiteIdentity);
-    if(pickup||differentSpeaker){
-      const completed=unresolvedTransfer&&result.transfer?{...result.transfer,status:'completed' as const,evidence:{turnId,quote:turn.text}}:undefined;
+    // ASR need not capture a hold. The requested person explicitly identifying
+    // themselves is sufficient pickup evidence, but the request alone is not.
+    const requestedPickup=!!name&&!!result.requestedConnection&&!sameName&&!hasTransfer&&!definiteUnavailable(line)&&samePersonName(name,result.requestedConnection.targetName);
+    if(pickup||differentSpeaker||requestedPickup){
+      const completed=unresolvedTransfer&&result.transfer?{...result.transfer,status:'completed' as const,evidence:{turnId,quote:turn.text}}:requestedPickup?{status:'completed' as const,targetName:result.requestedConnection!.targetName,evidence:{turnId,quote:turn.text}}:undefined;
       result={role:"unknown",introductionNeeded:true,transferPending:false,afterTransfer:true,segmentStartTurnId:turnId,...completed?{transfer:completed}:{}};
       knownName=undefined;
     }
