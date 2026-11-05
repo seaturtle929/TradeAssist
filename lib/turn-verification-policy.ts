@@ -5,6 +5,8 @@ import {applyCoachingConfiguration,configurationSuggestionProblems,configuration
 import {literalSpecificationEvidence,specificationNumberEvidence} from './scoped-specification-evidence.ts';
 import {buyerProductIdentifierReferences,buyerSpelledIdentifierClarificationReferences,isBuyerIdentifierClarification,canonicalizeKnownProductIdentifiers,productIdentityReferences} from './product-identity-evidence.ts';
 import {availableDocumentActionEvidence} from './document-availability-evidence.ts';
+import {hasAffirmativeOutgoingDocumentAction} from './document-action-syntax.ts';
+export {hasAffirmativeOutgoingDocumentAction} from './document-action-syntax.ts';
 import {assessDocumentProductCoverage,documentIdentifierReferences,documentIdentifierSource,hasConditionalReportReplyForSemanticReview,hasFutureReportInquiry,investigationThenDocumentDelivery,isBoundedEpistemicFactAction,isConversationalAcknowledgment,literalDocumentScopeEvidence,literalDocumentStatementEvidence,requestsDocumentProductCoverage} from './document-product-evidence.ts';
 export type BuyerTurnKind = 'fact_request' | 'sales_move' | 'confirmation';
 export type VerificationPolicyContext = {
@@ -508,27 +510,6 @@ export function buyerReleaseState(context:VerificationPolicyContext):BuyerReleas
  * the entire closed action so an attached send/claim is checked separately. */
 export function isAwaitingBuyerDocumentReceipt(text:string):boolean {
  return /^(?:I|we)(?:['’]ll|\s+(?:will|can))\s+(?:be\s+)?(?:(?:look(?:ing)? out|watch(?:ing)?|wait(?:ing)?)\s+for|await(?:ing)?)\s+(?:your|the)\s+(?:email|e-mail|message|drawing|documents?|reply)(?:\s+(?:from you|when ready))?[.!]?$/i.test(text.trim());
-}
-/** A future auxiliary does not turn every later email/reply NOUN into a send.
- * Scan actual outgoing predicates, preserving coordinated affirmative actions
- * while leaving incoming objects and an explicitly negated send alone. */
-export function hasAffirmativeOutgoingDocumentAction(text:string):boolean {
- const line=text.replace(/[’‘]/g,"'");
- for(const future of line.matchAll(/\b(?:I|we)(?:'ll|\s+(?:will|can|would|won't|cannot|can't))\b/gi)){
-  const action=line.slice((future.index||0)+future[0].length).split(/[.!?;]/,1)[0];
-  for(const verb of action.matchAll(/\b(?:send(?:ing)?|email(?:ing)?|shar(?:e|ing)|forward(?:ing)?|includ(?:e|ing)|attach(?:ing)?|reply(?:ing)?|respond(?:ing)?)\b/gi)){
-   const before=action.slice(0,verb.index),coordinator=[...before.matchAll(/\b(?:and|but|then|however)\b/gi)].at(-1);
-   const governing=coordinator?before.slice((coordinator.index||0)+coordinator[0].length):before;
-   if(!coordinator&&/\b(?:won't|cannot|can't)\b/i.test(future[0])||/\b(?:not|never|don't|won't|cannot|can't)\s+(?:\w+\s+)?$/i.test(governing))continue;
-   // A future progressive commits to an action (“will be sending”); a
-   // subordinate gerund in “wait for approval before sending” does not.
-   if(/ing$/i.test(verb[0])&&!/\b(?:be|start|begin|continue)\s+(?:\w+ly\s+)*$/i.test(governing))continue;
-   if(/\b(?:before|until)\s+(?:I|we)\s*$/i.test(governing))continue;
-   if(/^(?:email|reply)$/i.test(verb[0])&&/\b(?:a|an|the|your|our|my|their|his|her|this|that|for|from|by)\s+(?:\w+\s+)?$/i.test(before))continue;
-   return true;
-  }
- }
- return /\b(?:report|documents?)\s+will\s+be\s+(?:sent|emailed|shared|forwarded|included|attached)\b/i.test(line);
 }
 function preservesBuyerApproval(say:string,approver:BuyerReleaseState['approver']='buyer'):boolean {
  if(/\b(?:regardless|anyway|without (?:your )?approval|even if you (?:do not|don't) approve)\b/i.test(say))return false;

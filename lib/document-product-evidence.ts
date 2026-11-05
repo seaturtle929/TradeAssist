@@ -1,6 +1,7 @@
 import {canonicalizeKnownProductIdentifiers,isBuyerIdentifierClarification} from './product-identity-evidence.ts';
 import {availableDocumentActionEvidence} from './document-availability-evidence.ts';
 import {deriveCallParticipant} from './call-participant.ts';
+import {affirmativeOutgoingDocumentActions} from './document-action-syntax.ts';
 
 /** Document availability and product coverage are different propositions.
  * A scope claim must have its own original document→product relationship;
@@ -215,7 +216,7 @@ export function hasFutureReportInquiry(text:string,context?:Context):boolean {
 export function hasConditionalReportReplyForSemanticReview(text:string,context?:Context):boolean {
  const line=text.trim().replace(/[’‘]/g,"'");if(investigationThenDocumentDelivery(line,context))return false;
  const reports=documents(line).filter(document=>/report$/.test(document.kind));if(!reports.length||!reports.every(report=>availableDocumentActionEvidence(report.kind,context?.sources||[])))return false;
- const outgoing=[...line.matchAll(/\b(?:I|we)(?:'ll|\s+(?:will|can|would))\s+(?:(?:send|email|share|forward|include|attach)\b|(?:reply|respond)\s+with\b)/gi)];if(outgoing.length!==1)return false;
+ if(affirmativeOutgoingDocumentActions(line).length!==1)return false;
  if(/\b(?:regardless|anyway|even if|does not|doesn't|not covered|not match|no match|certif\w*|guarantee\w*|discount\w*|price|MOQ|ship\w*|deliver\w*|stock|payment|free|soon|shortly|ASAP|quickly|promptly|immediately|tomorrow|today|within)\b|\bby\s+(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday|\d)/i.test(line))return false;
  const postposed=/\b(?:only\s+)?if\s+(?:it|that report|the report)\s+(?:does|covers?|matches?)\b/i.exec(line);
  if(postposed){

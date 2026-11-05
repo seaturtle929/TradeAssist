@@ -5,6 +5,7 @@ import {checkSuggestion} from '../lib/call-purpose.ts';
 import {mainLineCheckInput} from '../lib/claim-check.ts';
 import {onDemandDecisionRules,onDemandSuggestionProblems} from '../lib/on-demand-coaching.ts';
 import {LiveCoachingSession} from '../lib/live-coaching-session.ts';
+import {affirmativeOutgoingDocumentActions} from '../lib/document-action-syntax.ts';
 
 // Authored fictional fixtures. The provider and semantic verdict below are
 // scripted offline; they are not new model outputs or customer conversations.
@@ -26,7 +27,7 @@ for(const company of companies){
   const run=controller(context,say,{verified:true,verificationStatus:'not_required',evidence:[]});
   try{await new Promise(resolve=>setImmediate(resolve));assert.deepEqual(run.shown,[say]);assert.equal(run.verificationCalls,1);assert.equal(run.sent.filter(event=>event.type==='response.create').length,1);assert.equal(run.traces.filter(event=>event.event==='repair_requested').length,0);}finally{run.session.stop();}
  });
- for(const say of [`I'll confirm if the ${company.report} covers ZX72 once we review your drawing, and if it does, I'll send the report as requested.`,`Once we review your drawing and confirm the ${company.report} covers that ZX72 reference, I'll reply with the report as requested.`,`We'll confirm whether the ${company.report} covers ZX72 once we review your drawing. If it does, we'll reply with the report as requested.`,`Once we review the drawing and confirm that the ${company.report} covers ZX72, we'll reply with it as you requested. We'll be looking out for your email.`])test(`${company.name}: an unparsed positive-result condition uses the existing whole-line check: ${say}`,async()=>{
+ for(const say of [`I'll confirm if the ${company.report} covers ZX72 once we review your drawing, and if it does, I'll send the report as requested.`,`Once we review your drawing and confirm the ${company.report} covers that ZX72 reference, I'll reply with the report as requested.`,`We'll confirm whether the ${company.report} covers ZX72 once we review your drawing. If it does, we'll reply with the report as requested.`,`Once we review the drawing and confirm that the ${company.report} covers ZX72, we'll reply with it as you requested. We'll be looking out for your email.`,`Once I've reviewed the drawing with the ZX72 reference, I'll confirm whether the ${company.report} covers it and reply with the report if it does.`])test(`${company.name}: an unparsed positive-result condition uses the existing whole-line check: ${say}`,async()=>{
   const context=fixture(company);context.turns.at(-1).text="I'll email the drawing. Once you're sure the report matches, reply with it.";
   const assessment=assessReplyVerification(say,context);assert.deepEqual(assessment.unsupportedClaims,[]);assert.ok(assessment.pendingClaims.some(claim=>claim.verificationKind==='speech_act'));assert.equal(assessment.sanitizedReply,say);
   const run=controller(context,say,{verified:true,verificationStatus:'verified',evidence:[{sourceId:'availability',quote:context.sources[0].text}]});
@@ -63,4 +64,6 @@ test('An incoming email noun is not an outgoing delivery predicate',()=>{
  const context=fixture(companies[0]);context.turns.at(-1).text='Only send the report if it covers the reference. Do not send anything until my engineer approves the drawing.';
  assert.ok(assessReplyVerification("We'll be sending the report.",context).unsupportedClaims.some(claim=>/withheld permission/.test(claim.reason)));
  assert.deepEqual(assessReplyVerification("We will not send anything until your engineer approves.",context).unsupportedClaims,[]);
+ assert.equal(affirmativeOutgoingDocumentActions("I'll check whether the inspection report covers it and reply with the report if it does.").length,1,'A coordinated outgoing predicate shares the future subject.');
+ assert.equal(affirmativeOutgoingDocumentActions("I'll check the report, and if it covers the reference, I'll send it.").length,1,'Repeating a subject cannot count the same outgoing predicate twice.');
 });

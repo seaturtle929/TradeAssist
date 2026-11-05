@@ -11,6 +11,7 @@ import {documentCoverageQuestionEvidence,hasFutureReportInquiry,investigationThe
 import {buyerIdentifierConfirmation,buyerIdentifierConfirmationProblems} from './buyer-identifier-confirmation.ts';
 import {buyerReleaseState,isAwaitingBuyerDocumentReceipt,reportDeliveryCondition} from './turn-verification-policy.ts';
 import {availableDocumentActionEvidence} from './document-availability-evidence.ts';
+import {hasAffirmativeOutgoingDocumentAction} from './document-action-syntax.ts';
 
 /** The button/shortcut is the generation event. Speech is context, never a
  * request; partial speech stays separate so it cannot become an agreement. */
@@ -314,7 +315,7 @@ export function onDemandSuggestionProblems(say:string,context:CoachingContext):s
   if(!acknowledgesHold||releaseRestriction.approval&&!acknowledgesApproval)problems.push('Acknowledge the buyer’s current restriction on sending and the stated approver. A promise to check coverage alone misses the changed request; do not imply that a coverage match releases this hold.');
  }
  const conditionalReply=conditionalReportReply(context);
- const repDocumentReply=conditionalReply&&say.split(/(?<=[.!?;])\s+/).some(part=>!isAwaitingBuyerDocumentReceipt(part)&&(!!investigationThenDocumentDelivery(part,context)||/\b(?:I|we)(?:['’]ll|\s+(?:will|can|would))\s+(?:send|email|reply|respond|share|forward)\b/i.test(part)));
+ const repDocumentReply=conditionalReply&&say.split(/(?<=[.!?;])\s+/).some(part=>!isAwaitingBuyerDocumentReceipt(part)&&(!!investigationThenDocumentDelivery(part,context)||hasAffirmativeOutgoingDocumentAction(part)));
  if(conditionalReply&&(!/\breport\b/i.test(say)||!repDocumentReply))problems.push('The buyer requested the available '+conditionalReply.document+' as a reply only if its coverage matches. Explicitly acknowledge that conditional document reply; a vague follow-up or check alone loses the agreed action. Preserve the positive report-scope condition and any later release gate.');
  if((transcriptState==='partial'||transcriptState==='pending')&&!audioClarification(say,context)&&(say.includes('?')||/\b(?:can|could|would) you (?:tell|share|explain)|\bwhat(?:'s| is| are)\b/i.test(say)))problems.push('The buyer statement is unfinished at this request. Give a brief listening cue with no question; do not repeat discovery from an older turn.');
  if(pickup?.kind==='greeting_only'){
