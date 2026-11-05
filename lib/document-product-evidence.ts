@@ -184,6 +184,50 @@ function presupposesOwnedProduct(subject:string):boolean {
  }
  return false;
 }
+/** This is a routing signal for the EXISTING whole-line semantic checker,
+ * never local proof or an exemption. A future whether/if investigation may
+ * use grammar outside the closed fast path. Keep independent assertions,
+ * presupposed ownership and restricted terms on their ordinary hard path. */
+export function hasFutureReportInquiry(text:string,context?:Context):boolean {
+ const line=text.trim().replace(/[’‘]/g,"'");
+ if(isBoundedEpistemicFactAction(line,context)||investigationThenDocumentDelivery(line,context))return false;
+ if(!documents(line).some(document=>/report$/.test(document.kind))||!relationWords(line))return false;
+ const future=/\b(?:I|we)(?:'ll|\s+(?:will|can|would))\b/i.exec(line);if(!future)return false;
+ const action=line.slice(future.index),uncertainty=/\bwhether\b|\b(?:check|verify|confirm|find out|look into)\b[^.!?;]{0,80}\bif\b/i.exec(action);if(!uncertainty)return false;
+ const before=line.slice(0,future.index+uncertainty.index),predicate=action.slice(uncertainty.index);
+ // A scoped report already claimed before the investigation cannot inherit
+ // its uncertainty. Nor can a qualified noun or an appended assertion.
+ if(assessDocumentProductCoverage(before,context||{},context?.sources||[])?.verificationBoundary||presupposesOwnedProduct(before)||presupposesOwnedProduct(predicate))return false;
+ if(/\b(?:confirm|verify|establish)\s+that\b|\b(?:which|that)\s+(?:is|are|was|were|has|have|can|will|meets?|complies|passes?|guarantees?|certifies?|proves?)\b/i.test(line))return false;
+ if(/[;:—–()[\]"“”]|[.!?]\s+\S|\b(?:because|since|therefore|thus|despite)\b|\b(?:and|but|however|plus|also)\s+(?:I|we|our|it|this|that|the)\b/i.test(predicate))return false;
+ // These are independent safety/authority domains, not uncertainty grammar.
+ // A noncanonical mixed reply keeps the normal hard checks and repair path.
+ if(/\b(?:certif\w*|guarantee\w*|discount\w*|price|USD|MOQ|ship\w*|deliver\w*|stock|payment|free|soon|shortly|ASAP|quickly|promptly|immediately|tomorrow|today|within)\b|\bby\s+(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday|\d)|\b\d+(?:[.,]\d+)?\s*(?:%|mm|microns?|μm|USD|dollars?|kg|hours?|days?)\b/i.test(line))return false;
+ // A proposed outgoing artifact is a separate action with availability and
+ // release requirements. It cannot inherit an inquiry's interpretation.
+ if(/\b(?:send|email|share|forward|include|attach)\b|\b(?:reply|respond)\s+with\b/i.test(action))return false;
+ return true;
+}
+/** A noncanonical positive-result condition may need semantic attachment
+ * checking. This signal authorizes only that check, not the send. Definite
+ * sequence/check-completion, absent release authority and contradictory sends
+ * never get downgraded to grammar uncertainty. */
+export function hasConditionalReportReplyForSemanticReview(text:string,context?:Context):boolean {
+ const line=text.trim().replace(/[’‘]/g,"'");if(investigationThenDocumentDelivery(line,context))return false;
+ const reports=documents(line).filter(document=>/report$/.test(document.kind));if(!reports.length||!reports.every(report=>availableDocumentActionEvidence(report.kind,context?.sources||[])))return false;
+ const outgoing=[...line.matchAll(/\b(?:I|we)(?:'ll|\s+(?:will|can|would))\s+(?:(?:send|email|share|forward|include|attach)\b|(?:reply|respond)\s+with\b)/gi)];if(outgoing.length!==1)return false;
+ if(/\b(?:regardless|anyway|even if|does not|doesn't|not covered|not match|no match|certif\w*|guarantee\w*|discount\w*|price|MOQ|ship\w*|deliver\w*|stock|payment|free|soon|shortly|ASAP|quickly|promptly|immediately|tomorrow|today|within)\b|\bby\s+(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday|\d)/i.test(line))return false;
+ const postposed=/\b(?:only\s+)?if\s+(?:it|that report|the report)\s+(?:does|covers?|matches?)\b/i.exec(line);
+ if(postposed){
+  const before=line.slice(0,postposed.index),inquiry=/\b(?:whether|if)\b/i.exec(before);
+  if(!inquiry||!requestsDocumentProductCoverage(before))return false;
+  if(assessDocumentProductCoverage(before.slice(0,inquiry.index),context||{},context?.sources||[])?.verificationBoundary||presupposesOwnedProduct(before.slice(0,inquiry.index))||presupposesOwnedProduct(before.slice(inquiry.index)))return false;
+  return true;
+ }
+ const fronted=/^\s*(?:once|after|when|if)\s+([\s\S]+?),\s*(?:I|we)(?:'ll|\s+(?:will|can|would))\s+/i.exec(line);
+ if(!fronted||/\b(?:whether|if)\b/i.test(fronted[1])||!documents(fronted[1]).length||!relationWords(fronted[1]))return false;
+ return !presupposesOwnedProduct(fronted[1])&&!/\b(?:which|that)\s+(?:is|are|has|have|can|will|meets?|guarantees?|proves?)\b/i.test(fronted[1]);
+}
 function investigationAcknowledgment(text:string,context?:Context):boolean {
  if(!acknowledgmentVocativesKnown(text,context))return false;
  return isConversationalAcknowledgment(text,context)||/^[Yy]es(?:,\s*[A-Z][A-Za-z'-]*(?:\s+[A-Z][A-Za-z'-]*){0,2})?[.!]$/.test(text);

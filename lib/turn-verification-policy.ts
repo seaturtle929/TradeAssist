@@ -5,7 +5,7 @@ import {applyCoachingConfiguration,configurationSuggestionProblems,configuration
 import {literalSpecificationEvidence,specificationNumberEvidence} from './scoped-specification-evidence.ts';
 import {buyerProductIdentifierReferences,buyerSpelledIdentifierClarificationReferences,isBuyerIdentifierClarification,canonicalizeKnownProductIdentifiers,productIdentityReferences} from './product-identity-evidence.ts';
 import {availableDocumentActionEvidence} from './document-availability-evidence.ts';
-import {assessDocumentProductCoverage,documentIdentifierReferences,documentIdentifierSource,investigationThenDocumentDelivery,isBoundedEpistemicFactAction,isConversationalAcknowledgment,literalDocumentScopeEvidence,literalDocumentStatementEvidence,requestsDocumentProductCoverage} from './document-product-evidence.ts';
+import {assessDocumentProductCoverage,documentIdentifierReferences,documentIdentifierSource,hasConditionalReportReplyForSemanticReview,hasFutureReportInquiry,investigationThenDocumentDelivery,isBoundedEpistemicFactAction,isConversationalAcknowledgment,literalDocumentScopeEvidence,literalDocumentStatementEvidence,requestsDocumentProductCoverage} from './document-product-evidence.ts';
 export type BuyerTurnKind = 'fact_request' | 'sales_move' | 'confirmation';
 export type VerificationPolicyContext = {
   coachingRequest?:{id:string;requestedAt:number};
@@ -37,6 +37,9 @@ export type ReplyFactClaim = {
   /** Lexical mismatch is uncertainty, not evidence of fabrication. */
   pending?: boolean;
   candidateSourceIds?: string[];
+  /** Parser uncertainty about an investigation, not a claimed source fact.
+   * Only the existing whole-line semantic verdict may resolve this state. */
+  verificationKind?:'speech_act';
   /** An absent required source relationship cannot be overturned by a remote
    * verifier that matches a related product or document instead. */
   verificationBoundary?:'document_product_scope';
@@ -893,6 +896,19 @@ export function assessReplyVerification(say: string, context: VerificationPolicy
       claim.supported=true;claim.pending=false;claim.sourceId=sourceId;delete claim.candidateSourceIds;
       claim.reason=specification?'The entire literal specification assertion is entailed by this current original source.':document!.reason;
     }
+  }
+  // A closed local grammar can prove an uncertainty action, but failure to
+  // parse a natural future inquiry is not proof of a positive factual claim.
+  // Defer ONLY these parser-produced claim spans to the existing semantic
+  // verifier. Independent source, numeric, timing and authority vetoes remain.
+  for(const claim of claims)if(!claim.supported&&!claim.pending&&claim.kind==='supplier_claim'
+    &&((claim.verificationBoundary==='document_product_scope'||claim.reason.startsWith('An appended positive supplier claim'))&&hasFutureReportInquiry(claim.text,context)
+     ||claim.reason.startsWith('The buyer made delivery conditional on a positive report match')&&hasConditionalReportReplyForSemanticReview(claim.text,context))){
+   claim.pending=true;claim.verificationKind='speech_act';delete claim.verificationBoundary;
+   claim.reason='The local grammar cannot establish this future investigation or conditional-action meaning. Check the entire unchanged reply, every attached claim and EVERY outgoing action against the actual buyer’s positive-report-scope condition and any approval/hold; completing a check alone is not a positive coverage result. Do not infer report coverage from availability.';
+  }
+  if(hasFutureReportInquiry(say,context)&&!isBoundedFactCheckReply(say,claims,context)&&!claims.some(claim=>!claim.supported)){
+   claims.push({text:say,start:0,end:say.length,kind:'supplier_claim',supported:false,pending:true,verificationKind:'speech_act',reason:'This noncanonical future investigation needs a whole-line semantic speech-act check before display.'});
   }
   const unsupportedClaims = claims.filter(claim => !claim.supported && !claim.pending);
   const pendingClaims = claims.filter(claim => claim.pending);

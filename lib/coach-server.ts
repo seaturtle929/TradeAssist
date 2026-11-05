@@ -81,7 +81,9 @@ export async function coachResponse(request: Request):Promise<Response> {
     // Guard the complete model line before the display sentence budget can
     // truncate away the useful move following an unsupported factual clause.
     let guidance=normalizeGuidance({...data,say:immediateMove?turnAssessment.sanitizedReply||'I understand.':rawSay},input);
-    ambiguousClaim=assessReplyVerification(guidance.say,input).pendingClaims.length>0;
+    const pendingAssessment=assessReplyVerification(guidance.say,input);
+    ambiguousClaim=pendingAssessment.pendingClaims.length>0;
+    const substantiveAmbiguity=pendingAssessment.pendingClaims.some(claim=>claim.verificationKind!=='speech_act');
     if(immediateMove&&!ambiguousClaim) {
       // For sales moves and closes the local guard removes only unsupported
       // factual spans. A remote whole-line verdict must not erase the move.
@@ -104,7 +106,7 @@ export async function coachResponse(request: Request):Promise<Response> {
       const saySupported=verdict.saySupported===true;
       // A checker cannot dismiss an explicitly detected technical assertion as
       // 'no facts'. Missing source support is inconclusive, never verified.
-      if(ambiguousClaim&&saySupported&&(verdict.sayHasCompanyFacts!==true||!support.evidence.length))throw new AppError('The factual check did not establish source support for the technical claim. Confirm the detail before using it.',502,'verification_inconclusive');
+      if(substantiveAmbiguity&&saySupported&&(verdict.sayHasCompanyFacts!==true||!support.evidence.length))throw new AppError('The factual check did not establish source support for the technical claim. Confirm the detail before using it.',502,'verification_inconclusive');
       const backupSupported=verdict.backupSupported===true;
       const retainedFacts=verdict.sayHasCompanyFacts===true || (backupSupported && verdict.backupHasCompanyFacts===true);
       if (saySupported!==true || (verdict.sayHasCompanyFacts===true && !support.evidence.length)) {

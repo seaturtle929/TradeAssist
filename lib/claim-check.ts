@@ -18,7 +18,10 @@ export function mainLineCheckInput(say:string,context:CoachingContext) {
  const allReferences=referenceExcerpts(context.sources||[]);
  // Scope ambiguous paraphrases to the original candidate sources. IDs remain
  // stable and quotes are resolved only from these original excerpts.
- const references=assessment.pendingClaims.length?allReferences.filter(ref=>candidateIds.has(ref.sourceId)):allReferences;
+ // Speech-act uncertainty has no candidate source: the checker must decide
+ // whether the whole line asserts a fact. Keep all original references so
+ // any accompanying real claim still needs its actual source support.
+ const references=assessment.pendingClaims.length&&!assessment.pendingClaims.some(claim=>claim.verificationKind==='speech_act')?allReferences.filter(ref=>candidateIds.has(ref.sourceId)):allReferences;
  return {references,input:{proposedResponse:say,references,pendingClaims:assessment.pendingClaims.map(claim=>({text:claim.text,reason:claim.reason,candidateSourceIds:claim.candidateSourceIds})),manufacturer:context.manufacturer,companyRules:context.brain?.rules,clientContext:context.clientContext,callContext:context.callContext,conversation:context.turns?.slice(-30)}};
 }
 
