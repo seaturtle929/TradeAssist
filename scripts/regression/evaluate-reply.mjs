@@ -8,8 +8,8 @@ const questionCount = line => (line.match(/\?/g) || []).length;
 const checkVerb = /\b(?:check|verify|confirm|find out|look into|review|compare|investigate|determine|establish)\b/i;
 const uncertainty = /\b(?:whether|if|scope|coverage|appl(?:y|ies)|match)\b/i;
 const outgoing = /\b(?:send|email|forward|share|reply|respond|provide|return)\b/i;
-const followup = /\b(?:follow[- ]?up|check(?:ed)? back|call(?:ed)? (?:you )?back|reconnect|contact you|speak again)\b/i;
-const permission = /\b(?:would (?:it|that|you)|could I|can I|may I|is it (?:alright|all right|okay|ok)|does that work|would that work)\b/i;
+const followup = /\b(?:follow(?:ed|ing)?[- ]?up|check(?:ed|ing)? back|call(?:ed|ing)? (?:you )?back|reconnect(?:ed|ing)?|contact(?:ed|ing)? you|(?:get|got|getting)(?: back)? in touch|touch(?:ed|ing)? base|(?:catch|caught|catching) up|speak again)\b/i;
+const permission = /\b(?:would (?:it|that|you)|(?:could|can|may) (?:I|we)|is it (?:alright|all right|okay|ok)|does that work|would that work)\b/i;
 const date = /\b(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday|tomorrow|next week|within \d|in \d|24[- ]?hour|ASAP|shortly|soon)\b/i;
 
 function referencePresent(line, reference) {
@@ -129,3 +129,14 @@ export function evaluateReply(say, rubric={}) {
 }
 
 export default evaluateReply;
+
+// A safety rejection and successful recovery are separate release outcomes.
+// `identityProblems` comes from the tested build's production identity check;
+// nothing here supplies a name or corrective line to generation instructions.
+export function scoreIdentityRecovery({candidate,identityProblems,issues,publishedIdentityProblems,stableUsable,publicationCount,cardCount,providerRequests}) {
+  const rejected=issues.some(issue=>issue.status==='rejected'&&issue.originalSay?.trim()===candidate.trim()&&identityProblems.some(reason=>issue.reason.includes(reason)));
+  return {
+    identitySafety:{tested:true,pass:identityProblems.length>0&&rejected&&publishedIdentityProblems.length===0,rejectedCandidate:candidate,reasons:identityProblems,publishedViolations:publishedIdentityProblems},
+    samePressRecovery:{tested:true,pass:stableUsable&&publishedIdentityProblems.length===0&&publicationCount===1&&cardCount===1,providerRequests,publicationCount,cardCount},
+  };
+}

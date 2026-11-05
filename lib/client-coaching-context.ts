@@ -165,6 +165,14 @@ function completedClientMaterialEvidence(entry:ClientContextEntry):string[]{
  });
 }
 export const completedClientMaterials=(entry:ClientContextEntry):boolean=>completedClientMaterialEvidence(entry).length>0;
+/** The reviewed "anything new" field is already attributed to the rep. Some
+ * request contexts retain it without the optional mirrored memory entry.
+ * Evaluate that original field by the same completion/scope rules; never turn
+ * it into buyer speech, a receipt, review or approval event. */
+function outsideRepMaterialEvidence(client:ClientCoachingContext):string[]{
+ if(!client.outsideUpdate.trim())return [];
+ return completedClientMaterialEvidence({id:'reviewed-outside-update:'+client.callId,kind:'update',text:client.outsideUpdate,source:'rep_update',at:client.reviewedAt,recordedAt:client.reviewedAt,status:'current',scope:client.contactId?'contact':'client',...client.contactId?{contactId:client.contactId}:{}});
+}
 const materialKinds=(text:string)=>[
  ['specifications',/\b(?:specs?|specifications?|data sheets?)\b/i],['profile',/\bprofiles?\b/i],['drawings',/\bdrawings?\b/i],['catalog',/\bcatalog(?:ue)?s?\b/i],['test report',/\btest reports?\b/i],
 ].filter(([,pattern])=>(pattern as RegExp).test(text)).map(([kind])=>kind as string);
@@ -178,7 +186,7 @@ export function clientContextSuggestionProblems(say:string,context:ClientContext
  const client=reviewedClientContext(context);if(!client)return [];
  const problems:string[]=[];
  const sent=assertedSendClauses(say).length>0;
- const sendEvidence=[...(context.turns||[]).filter(turn=>turn.role==='you').flatMap(turn=>materialClauses(turn.text).filter(affirmativeRepSend)),...client.entries.flatMap(completedClientMaterialEvidence),...client.standing?.sendStatus==='sent'&&client.standing.documents.length?['I sent the '+client.standing.documents.join(' and ')+'.']:[]];
+ const sendEvidence=[...(context.turns||[]).filter(turn=>turn.role==='you').flatMap(turn=>materialClauses(turn.text).filter(affirmativeRepSend)),...client.entries.flatMap(completedClientMaterialEvidence),...outsideRepMaterialEvidence(client),...client.standing?.sendStatus==='sent'&&client.standing.documents.length?['I sent the '+client.standing.documents.join(' and ')+'.']:[]];
  if(sent&&!supportsSentScope(say,sendEvidence))problems.push('A prior promise to send does not establish completion; require affirmative completion for these specific materials and item instead of claiming it was sent.');
  const approvalEvidence=[...(context.turns||[]).filter(turn=>turn.role==='buyer').flatMap(turn=>materialClauses(turn.text).filter(affirmativeEngineeringApproval)),...client.entries.filter(entry=>!entry.needsReview&&['buyer','rep_update','manager'].includes(entry.source)).flatMap(entry=>materialClauses(entry.text).filter(affirmativeEngineeringApproval))];
  const scopedApproval=approvalEvidence.filter(text=>{const historic=text.match(/\b(?:last year|last quarter|previous (?:order|project|evaluation)|old (?:order|project|evaluation)|in 20\d{2})\b/ig)||[];return historic.every(scope=>say.toLowerCase().includes(scope.toLowerCase()));});
@@ -196,7 +204,7 @@ export function clientContextSafeReply(context:ClientContextCarrier):string|unde
  const routing=client.history.find(call=>!!call.routing)?.routing;
  if(greeting&&routing&&!client.standing?.contact&&client.history.every(call=>!!call.routing))return "I'm following up on an earlier call to your office. Could you please connect me with the person who handles purchasing?";
  const open=client.entries.find(entry=>entry.kind==='commitment'&&['open','promised'].includes(entry.status));
- const completed=client.entries.some(completedClientMaterials)||client.standing?.sendStatus==='sent';
+ const completed=client.entries.some(completedClientMaterials)||outsideRepMaterialEvidence(client).length>0||client.standing?.sendStatus==='sent';
  const engineer=client.entries.some(entry=>!entry.needsReview&&['buyer','rep_update','manager'].includes(entry.source)&&/\bengineer(?:s|ing)?\b/i.test(entry.text));
  const reviewQuestion=engineer?'Has your engineer had a chance to review the information, or is there something they still need?':'Have you had a chance to review the information, or is there something else you need?';
  if(sendingStatus&&!completed)return "Let me check the send status before I tell you it's gone out.";

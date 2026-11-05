@@ -243,7 +243,10 @@ function investigationAcknowledgment(text:string,context?:Context):boolean {
 export function isBoundedEpistemicFactAction(text:string,context?:Context):boolean {
  // A closed courtesy prefix changes neither the action nor its uncertainty.
  // Preserve everything after it so attached factual/timing claims still fail.
- let line=text.trim().replace(/[’‘]/g,"'");
+ // Callers may pass a complete semicolon-delimited clause. Its terminal
+ // separator is not part of the predicate; internal separators and every
+ // following clause still retain their independent factual checks.
+ let line=text.trim().replace(/[’‘]/g,"'").replace(/;$/,'.');
  // Reviewing the incoming artifact is a prerequisite, not a positive answer
  // about it. Remove only this closed review action and check the ENTIRE
  // following uncertainty action normally, including any attached claims.
@@ -350,7 +353,9 @@ export function isBoundedEpistemicFactAction(text:string,context?:Context):boole
  * availability and company permission; return its explicit referent so the
  * ordinary document-action checks can enforce those independently. */
 export function investigationThenDocumentDelivery(text:string,context?:Context):{investigation:string;document:string;deliveryCondition:'sequence_only'|'stated_condition'|'check_completion';conditionText?:string}|undefined {
- let line=text.trim().replace(/[’‘]/g,"'");
+ // Preserve a whole fronted condition when the clause extractor ends it at
+ // a semicolon. Never strip an internal separator or its adjoining claims.
+ let line=text.trim().replace(/[’‘]/g,"'").replace(/;$/,'.');
  if(/\s+as you (?:requested|asked)[.!]?$/i.test(line)){
   const requested=[context?.buyerText||'',...(context?.turns||[]).filter(turn=>turn.role==='buyer'||turn.role==='customer').map(turn=>turn.text)].some(turn=>/\breport\b/i.test(turn)&&/\b(?:send|email|share|forward|reply|respond|include|attach)\b/i.test(turn));
   if(!requested)return;line=line.replace(/\s+as you (?:requested|asked)(?=[.!]?$)/i,'');
@@ -384,7 +389,7 @@ export function investigationThenDocumentDelivery(text:string,context?:Context):
   const inquiry=/^(?:(?:I|we)(?:'ve| have)?\s+)?(?:check(?:ed)?|verif(?:y|ied)|confirm(?:ed)?)\s+(?:(whether|if|that)\s+)?(.+)$/i.exec(condition);
   const predicate=inquiry?inquiry[2]:condition;
   const referents=documents(predicate);
-  const positive=/^(?:(?:the|that|this|our|your)\s+)?(?:(?:material test|inspection|test)\s+)?report\s+(?:covers?|matches?|includes?)\s+[^,;.!?]+$/i.test(predicate)
+  const positive=/^(?:(?:the|that|this|our|your)\s+)?(?:(?:material test|inspection|test)\s+)?report\s+(?:covers?|matches?|includes?|appl(?:y|ies)\s+to)\s+[^,;.!?]+$/i.test(predicate)
    ||/^(?:(?:the|that|this)\s+)?(?:(?:material test|inspection|test)\s+)?report\s+coverage\s+(?:for|of)\s+[^,;.!?]+$/i.test(predicate);
   const inquiryPredicate=predicate.replace(/^((?:(?:the|that|this)\s+)?(?:(?:material test|inspection|test)\s+)?report)\s+coverage\s+(?:for|of)\s+/i,'$1 covers ');
   if(positive&&referents.length===1&&!/\b(?:and|but|however|not|never|no|certif\w*|guarantee\w*|discount|approval|price|ship\w*|deliver\w*)\b/i.test(predicate)&&isBoundedEpistemicFactAction('I will check whether '+inquiryPredicate,context))return {investigation:'I will check whether '+inquiryPredicate,document:referents[0].kind,deliveryCondition:inquiry&&/^(?:if|whether)$/i.test(inquiry[1]||'')?'check_completion':'stated_condition',conditionText:fronted[1]};

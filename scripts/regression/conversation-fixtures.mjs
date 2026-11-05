@@ -96,7 +96,22 @@ const prototypeConversation = {
 };
 
 export const conversations = [drawingConversation, reviewConversation, prototypeConversation];
-export const suite = {version: 1, provenance: 'authored-synthetic-scripted-transport', conversations};
+const identityRecoveryContext=clone(drawingConversation.context);
+delete identityRecoveryContext.voice;
+export const identityRecoveryConversation={
+  id:'identity-safe-recovery',name:'Unverified name blocked and same press repaired',category:'control',
+  provenance:'Authored synthetic identity safety and repair transport, not a saved call or model observation.',
+  context:identityRecoveryContext,
+  steps:[
+    buyer('Elm Components reception.'),
+    rep('Could you put me through to Lena in purchasing, please?'),
+    buyer('Lena speaking.',{id:'identity-same-press-recovery',candidates:[
+      'Hi Lena, this is Jordan from Harbor Process Screens. I’m following up on the specification sheet and material test report you requested.',
+      'Hi Lena, I’m with Harbor Process Screens. I’m following up on the specification sheet and material test report you requested. Have you had a chance to look at them?',
+    ],identityProbe:{candidateIndex:0,required:true},rubric:{move:'introduction',companyName:'Harbor Process Screens',purposeTerms:['specification|spec sheet','test report'],mustNot:['Jordan']},expect:'usable'}),
+  ],
+};
+export const suite = {version: 2, provenance: 'authored-synthetic-scripted-transport', conversations:[...conversations,identityRecoveryConversation]};
 export default suite;
 
 // Reserved until the production change is written. They are not training data,
