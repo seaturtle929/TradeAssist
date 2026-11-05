@@ -67,6 +67,16 @@ for(const company of companies){
   assert.ok(assessReplyVerification(`I'll email the ${report}.`,cancelled).unsupportedClaims.some(claim=>/cancelled/.test(claim.reason)));
   cancelled.turns.push({role:'buyer',text:`Please send the ${report} now.`});fast(`I'll email the ${report}.`,cancelled);
  });
+ test(`${name}: the buyer cannot substitute for their stated manager approver`,()=>{
+  const input=make(company);input.turns.push({role:'buyer',text:'Do not send anything until my manager approves the drawing revision.'});
+  assert.ok(assessReplyVerification(`I'll send the ${report} once you approve the drawing revision.`,input).unsupportedClaims.some(claim=>/stated approver/.test(claim.reason)));
+  fast(`I'll send the ${report} once your manager approves the drawing revision.`,input);
+ });
+ test(`${name}: drawing approval does not erase a trailing hold on sending`,()=>{
+  const input=make(company);input.turns.push({role:'buyer',text:'Do not send anything until I approve the drawing revision.'},{role:'buyer',text:"I approve the drawing revision, but don't send it yet."});
+  assert.ok(assessReplyVerification(`I'll send the ${report}.`,input).unsupportedClaims.some(claim=>/withheld|cancelled/.test(claim.reason)));
+  input.turns.push({role:'buyer',text:'Please send it now.'});fast(`I'll send the ${report}.`,input);
+ });
  for(const say of [`The ${report} covers ${product}.`,`We have a ${product} report, and I'll check the details.`,`I'll check whether the report covers ${product}. We can offer a 12% discount.`,`If the report covers your reference, we'll ship the order tomorrow.`,`Once we confirm the report covers ${product}, we'll send it soon.`])test(`${name}: uncertainty never supports another claim: ${say}`,()=>{
   const result=assessReplyVerification(say,make(company,true));assert.ok(result.requiresVerification||result.unsupportedClaims.length,say);
  });

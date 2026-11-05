@@ -459,7 +459,7 @@ function buyerApprovalRequired(text:string):boolean {
  const approval=/\bapprov\w*|\bsign(?:s|ed)?\s*[- ]?off\b/i.test(text),delivery=/\b(?:send|email|share|reply|documents?)\b/i.test(text);
  return approval&&delivery&&(/\b(?:until|before)\b/i.test(text)&&/\b(?:do not|don't|never|no documents?|wait|hold)\b/i.test(text)||/\bonly\b[^.!?]{0,80}\b(?:after|once|when)\b/i.test(text));
 }
-type BuyerReleaseState={scope:boolean;approval:boolean;approver:'buyer'|'engineering';hold:boolean;unresolved:boolean};
+type BuyerReleaseState={scope:boolean;approval:boolean;approver:'buyer'|'engineering'|'manager';hold:boolean;unresolved:boolean};
 /** Release conditions are actual buyer instructions, not the last sentence.
  * Courtesy and rep promises cannot erase them. A later explicit buyer release,
  * approval or cancellation can update this same-call state. */
@@ -472,6 +472,9 @@ function buyerReleaseState(context:VerificationPolicyContext):BuyerReleaseState 
   const currentCondition=reportDeliveryCondition(text);
   const cancellation=/\b(?:cancel|forget|withdraw)\b[^.!?]{0,35}\b(?:send|request|documents?|report)\b|\b(?:do not|don't)\s+(?:send|email|share)\s+(?:anything|it|the report)[.!]?\s*$/i.test(text)&&!currentCondition&&!/\b(?:until|before|unless)\b/i.test(text);
   if(cancellation){state.scope=false;state.approval=false;state.unresolved=false;state.hold=true;continue;}
+  // Approval of a drawing is distinct from permission to send it. A later
+  // hold in the same buyer turn still applies even after the approval below.
+  if(/\b(?:do not|don't|never)\s+(?:send|email|share)\s+(?:anything|it|the report|the documents)\s+(?:yet|for now)(?=[.!?]|$)/i.test(text))state.hold=true;
   const permitted=/\b(?:you\s+(?:can|may)|please|go ahead and)\s+(?:send|email|share)\b/i.test(text)&&! /\b(?:only|until|unless|before|if|when|once|after|not|don't)\b/i.test(text);
   if(permitted)state.hold=false;
   const waivesScope=/\b(?:send|email|share)\b[^.!?]{0,80}\b(?:regardless of|even if|without checking)\b/i.test(text);
@@ -479,10 +482,10 @@ function buyerReleaseState(context:VerificationPolicyContext):BuyerReleaseState 
   if(waivesScope){state.scope=false;state.unresolved=false;}
   else if(condition==='scope_required')state.scope=true;
   else if(condition==='unresolved')state.unresolved=true;
-  if(buyerApprovalRequired(text)){state.approval=true;state.approver=/\b(?:engineer|engineering)\b/i.test(text)?'engineering':'buyer';}
+  if(buyerApprovalRequired(text)){state.approval=true;state.approver=/\b(?:engineer|engineering)\b/i.test(text)?'engineering':/\bmanager\b/i.test(text)?'manager':'buyer';}
   else{
    const approved=text.split(/(?<=[.!?])\s+/).some(sentence=>/^(?:(?:thanks|okay|ok)[,. ]+)?(?:I|we|(?:my|our|the)\s+(?:engineer|engineering team|team|manager))\s+(?:(?:have|has)\s+)?(?:approved|approve|signed off)\b/i.test(sentence));
-   if(approved&&(state.approver!=='engineering'||/\b(?:engineer|engineering)\b/i.test(text)))state.approval=false;
+   if(approved&&(state.approver==='buyer'||state.approver==='engineering'&&/\b(?:engineer|engineering)\b/i.test(text)||state.approver==='manager'&&/\bmanager\b/i.test(text)))state.approval=false;
   }
  }
  return state;
@@ -490,7 +493,8 @@ function buyerReleaseState(context:VerificationPolicyContext):BuyerReleaseState 
 function preservesBuyerApproval(say:string,approver:BuyerReleaseState['approver']='buyer'):boolean {
  if(/\b(?:regardless|anyway|without (?:your )?approval|even if you (?:do not|don't) approve)\b/i.test(say))return false;
  if(approver==='engineering'&&!/\b(?:engineer|engineering)\b/i.test(say))return false;
- const line=say.replace(/your (?:engineer|engineering team|team|manager)(?:'s)? approval/ig,'your approval').replace(/your (?:engineer|engineering team|team|manager)\s+approv/ig,'you approv');
+ if(approver==='manager'&&!/\bmanager\b/i.test(say))return false;
+ const line=say.replace(/[’‘]/g,"'").replace(/your (?:engineer|engineering team|team|manager)(?:'s)? approval/ig,'your approval').replace(/your (?:engineer|engineering team|team|manager)\s+approv/ig,'you approv');
  return /\b(?:wait|hold)\b[^.!?]{0,35}\byour approval\b[^.!?]{0,25}\bbefore\s+(?:sending|emailing|sharing)/i.test(line)
   ||/\b(?:won't|will not|do not|don't)\s+(?:send|email|share)\b[^.!?]{0,60}\buntil\s+(?:you|your team)\s+(?:approv|sign)/i.test(line)
   ||/\b(?:send|email|share|reply)\b[^.!?]{0,50}\b(?:after|once|when)\s+(?:you|your team)\s+(?:approv|sign)/i.test(line)
