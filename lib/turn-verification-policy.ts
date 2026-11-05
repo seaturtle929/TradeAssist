@@ -3,7 +3,7 @@ import {clientContextSuggestionProblems,clientContextSafeReply,reviewedClientCon
 import { hasClearConversationRefusal } from './conversation-boundary.ts';
 import {applyCoachingConfiguration,configurationSuggestionProblems,configurationAuthorizesAction,configuredSafeReply} from './coaching-configuration.ts';
 import {literalSpecificationEvidence,specificationNumberEvidence} from './scoped-specification-evidence.ts';
-import {buyerProductIdentifierReferences,buyerSpelledIdentifierClarificationReferences,isBuyerIdentifierClarification,canonicalizeKnownProductIdentifiers,productIdentityReferences} from './product-identity-evidence.ts';
+import {buyerConversationIdentifierReferences,buyerProductIdentifierReferences,buyerSpelledIdentifierClarificationReferences,isBuyerIdentifierClarification,canonicalizeKnownProductIdentifiers,productIdentityReferences} from './product-identity-evidence.ts';
 import {availableDocumentActionEvidence} from './document-availability-evidence.ts';
 import {hasAffirmativeOutgoingDocumentAction} from './document-action-syntax.ts';
 export {hasAffirmativeOutgoingDocumentAction} from './document-action-syntax.ts';
@@ -771,7 +771,8 @@ export function assessReplyVerification(say: string, context: VerificationPolicy
    // coordinated new rep promise separately (not a whole-reply checkbox).
    // The existing bounded sentence grouper preserves only an adjacent
    // explicit inquiry + "if it does" referent, never a later unrelated send.
-   for(const action of sentence.text.split(/\b(?:and|but|however)\s+(?=(?:I|we)(?:['’]ll|\s+(?:will|can|would))\b)/i))if(!isAwaitingBuyerDocumentReceipt(action)&&hasAffirmativeOutgoingDocumentAction(action)){
+   const actions=investigationThenDocumentDelivery(sentence.text,context)?[sentence.text]:sentence.text.split(/\b(?:and|but|however)\s+(?=(?:I|we)(?:['’]ll|\s+(?:will|can|would))\b)/i);
+   for(const action of actions)if(!isAwaitingBuyerDocumentReceipt(action)&&hasAffirmativeOutgoingDocumentAction(action)){
     const start=sentence.start+sentence.text.indexOf(action);
     if(release.hold)add(action,start,'supplier_claim',{supported:false,reason:'The buyer cancelled or withheld this send and has not released it again. A company document being available does not override that instruction.'});
     if(buyerApproval&&!preservesBuyerApproval(action,release.approver))add(action,start,'supplier_claim',{supported:false,reason:'The buyer withheld permission to send until they approve. Preserve the buyer’s stated approver before every promised document send; confirming report coverage or mentioning approval for a different action does not release the documents.'});
@@ -817,9 +818,13 @@ export function assessReplyVerification(say: string, context: VerificationPolicy
     if(conflicts.length)add(text,part.start,'supplier_claim',{supported:false,reason:conflicts.join(' ')});
     const commercial=commercialActionSupport(text,context);
     if(commercial)add(text,part.start,'supplier_claim',commercial);
-    const responseTiming = /\b(?:I|we)(?:['’]ll|\s+(?:will|can|would))\b.{0,85}\b(?:soon|shortly|ASAP|quickly|in\s+a\s+bit|right\s+away|promptly|immediately|within|by\s+(?:\d|tomorrow|today|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)|in\s+\d+\s+(?:hours?|days?)|tomorrow|today)\b/i.exec(text);
+    const temporalText=text.replace(/\bwithin(?=\s+(?:(?:the|that|this|our|your)\s+)?(?:(?:material test|inspection|test)\s+)?report(?:['’]s)?\s+(?:scope|coverage)\b)/gi,'inside');
+    const responseTiming = /\b(?:I|we)(?:['’]ll|\s+(?:will|can|would))\b.{0,85}\b(?:soon|shortly|ASAP|quickly|in\s+a\s+bit|right\s+away|promptly|immediately|within|by\s+(?:\d|tomorrow|today|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)|in\s+\d+\s+(?:hours?|days?)|tomorrow|today)\b/i.exec(temporalText);
     if (responseTiming&&!declinesResponseDeadline(text)) add(text, part.start, 'timing', { supported: timingAgreed(text, context), reason: 'A rep response deadline requires an explicitly agreed specific day/time; document facts do not authorize it.' });
-    const buyerInquiryIds=[...(unresolvedFactCheck(text,context)?buyerProductIdentifierReferences(text,latestBuyerText(context)):[]),...buyerSpelledIdentifierClarificationReferences(text,latestBuyerText(context))];
+    // A bounded inquiry followed by a result-conditional document send still
+    // uses the buyer's identifier as a reference, not a measured company fact.
+    // The complete delivery retains availability, scope and release checks.
+    const buyerInquiryIds=[...(unresolvedFactCheck(text,context)||investigationThenDocumentDelivery(text,context)?[...buyerProductIdentifierReferences(text,latestBuyerText(context)),...buyerConversationIdentifierReferences(text,context.turns||[])]:[]),...buyerSpelledIdentifierClarificationReferences(text,latestBuyerText(context))];
     for (const number of text.matchAll(/(?:\$\s*)?\b\d+(?:[.,]\d+)*(?:\s*(?:%|USD|dollars?|tons?|tonnes?|kg|kilograms?|days?|hours?|weeks?|months?|microns?|μm|um|mm))?/gi)) {
       const start = part.start + (number.index || 0), end = start + number[0].length;
       if (companySpans.some(span => span.start <= start && span.end >= end)) continue;

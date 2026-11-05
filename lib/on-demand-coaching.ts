@@ -307,7 +307,7 @@ export function onDemandSuggestionProblems(say:string,context:CoachingContext):s
  const pickup=newContactPickup(context),handoff=buyerDocumentHandoff(context),documentAddition=requestedDocumentAddition(context),transcriptState=coachingTranscriptState(context);
  const releaseRestriction=currentDocumentReleaseRestriction(context);
  const pendingCoverage=pendingReportCoverageHandoff(context);
- if(pendingCoverage&&!releaseRestriction&&(!/\breports?\b/i.test(say)||! /\b(?:check|verify|confirm|find out|look into|let you know)\b/i.test(say))&&!hasFutureReportInquiry(say,context))problems.push('The buyer offered the drawing to answer the still-open report-coverage question. Explicitly acknowledge checking that report’s coverage for their reference; a generic drawing/specification fit discussion loses the unanswered question.');
+ if(pendingCoverage&&!releaseRestriction&&(!/\breports?\b/i.test(say)||! /\b(?:check|verify|confirm|find out|look into|let you know)\b/i.test(say))&&!hasFutureReportInquiry(say,context)&&investigationThenDocumentDelivery(say,context)?.deliveryCondition!=='stated_condition')problems.push('The buyer offered the drawing to answer the still-open report-coverage question. Explicitly acknowledge checking that report’s coverage for their reference; a generic drawing/specification fit discussion loses the unanswered question.');
  if(releaseRestriction){
   const line=say.replace(/[’‘]/g,"'");
   const acknowledgesHold=/\b(?:wait|hold|won't\s+(?:send|email|share)|will not\s+(?:send|email|share)|not\s+(?:send|email|share|sending|emailing|sharing))\b/i.test(line);
@@ -332,7 +332,7 @@ export function onDemandSuggestionProblems(say:string,context:CoachingContext):s
   // A specific conditional report reply acknowledges the chosen handoff even
   // without repeating the word “drawing”. Its action/condition and ordinary
   // factual checks remain independent; a vague follow-up does not qualify.
-  if(!/\b(?:email|e-mail|send|drawing|document)\b/i.test(say)&&!(conditionalReply&&repDocumentReply))problems.push('Acknowledge the buyer’s offered document/email next step rather than the prior discovery topic.');
+  if(!/\b(?:email|e-mail|send|drawing|document)\b/i.test(say)&&!(conditionalReply&&repDocumentReply)&&!investigationThenDocumentDelivery(say,context)&&!(pendingCoverage&&/\breport\b/i.test(say)&&/\b(?:check|verify|confirm|find out|look into|whether)\b/i.test(say)))problems.push('Acknowledge the buyer’s offered document/email next step rather than the prior discovery topic.');
  }
  if(documentAddition?.acknowledgmentComplete&&(/\?|\b(?:tell (?:me|us)|(?:can|could|would) you (?:tell|share|explain)|anything else)\b/i.test(say)))problems.push('The buyer already requested an available document with the response. Keep the specific document acknowledgment and remove the extra question; no new discovery, permission check, or “anything else” is needed. Availability does not support claims about document contents or a response deadline.');
  if(documentAddition?.unestablishedDocuments.length){

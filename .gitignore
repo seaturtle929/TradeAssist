@@ -94,3 +94,13 @@ next-env.d.ts
 !/scripts/stop-local.mjs
 !/scripts/repository-privacy-check.mjs
 !/scripts/connector-preview/
+
+# Reviewed, deliberately synthetic offline conversation suite. Private evidence
+# and historical QA runners above remain excluded.
+!/scripts/conversation-regression-suite.mjs
+!/scripts/regression/
+/scripts/regression/*
+!/scripts/regression/typescript-loader.mjs
+!/scripts/regression/conversation-worker.mjs
+!/scripts/regression/conversation-fixtures.mjs
+!/scripts/regression/evaluate-reply.mjs
