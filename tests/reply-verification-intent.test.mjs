@@ -30,6 +30,11 @@ for(const company of companies){
   `I'll check whether we have a ${report} for ${product}.`,
   'I can verify the coverage and let you know.',
   `Could I check whether the ${report} covers ${product}?`,
+  `Hi Priya, I'll confirm whether the ${report} covers ${product} before we send it. Let me check that detail and get back to you.`,
+  `Hello, Morgan, I'll check whether the ${report} covers ${product}, and I will get back to you.`,
+  'Let me check that detail and get back to you.',
+  "I'll verify the information and report back with the findings.",
+  "Hello Priya. I'll check this detail and let you know.",
   `I can't confirm whether the ${report} covers ${product} yet. I'll check and let you know.`,
   'Which requirements would your engineer like to compare?',
   'Could you clarify which product you mean?',
@@ -45,6 +50,7 @@ for(const company of companies){
  });
  for(const tail of [
   'and get back to you with that information',
+  'and get back to you with that detail',
   'and get back to you on that',
   'and come back to you with the findings',
   'and follow up with you with an update',
@@ -54,6 +60,9 @@ for(const company of companies){
   'and let you know whether it does',
   'and confirm that for you before I email it',
   'and confirm back before sending it',
+  'and confirm back before sending',
+  'and follow up before sending',
+  'and confirm to you before I send',
   'and follow up with you',
   'and get back to you with an answer',
   'and get back to you with a clear answer',
@@ -78,11 +87,22 @@ for(const company of companies){
   assert.equal(isNonAssertiveReply(say,assessment.claims),true,say);
   assert.equal(needsFactCheck(say,request),false,say);
  });
- for(const courtesy of ['Thanks for letting me know.','Priya, thanks for your question.','Thanks for confirming, Priya.','Thank you for sharing that.','Thanks for clarifying—','Got it.','Thanks for keeping us informed.',...['this','that','the','your'].flatMap(determiner=>['question','update','clarification','information'].map(noun=>`Thanks for ${determiner} ${noun}, Priya.`))])test(`${company.name}: neutral conversational acknowledgment does not reclassify the next investigation: ${courtesy}`,()=>{
+ for(const courtesy of ['Thanks for letting me know.','Priya, thanks for your question.','Thanks for confirming, Priya.','Thank you for sharing that.','Thanks for clarifying—','Got it.','Thanks for keeping us informed.','Thanks for that, Priya.','Thank you for this.',...['this','that','the','your'].flatMap(determiner=>['question','update','clarification','information'].map(noun=>`Thanks for ${determiner} ${noun}, Priya.`))])test(`${company.name}: neutral conversational acknowledgment does not reclassify the next investigation: ${courtesy}`,()=>{
   const request=context(company),say=`${courtesy} I'll check whether the ${report} covers ${product} and get back to you before sending it.`,assessment=assessReplyVerification(say,request);
   assert.deepEqual(assessment.unsupportedClaims,[],say);
   assert.equal(isNonAssertiveReply(say,assessment.claims),true,say);
   assert.equal(needsFactCheck(say,request),false,say);
+ });
+ for(const comma of ['',','])for(const auxiliary of ['', 'will ', "I'll ", 'we will '])test(`${company.name}: punctuation and repeated subject preserve the same neutral coordinator: ${comma} and ${auxiliary}`,()=>{
+  const request=context(company),say=`Thanks for that, Priya. I'll check whether the ${report} covers ${product}${comma} and ${auxiliary}get back to you before sending it.`;
+  const assessment=assessReplyVerification(say,request);
+  assert.deepEqual(assessment.unsupportedClaims,[],say);
+  assert.equal(needsFactCheck(say,request),false,say);
+  for(const suffix of ['confirm that it covers your product','give you an approved discount','get back to you tomorrow']){
+   const unsafe=`I'll check whether the ${report} covers ${product}${comma} and ${auxiliary}${suffix}.`;
+   assert.equal(needsFactCheck(unsafe,request),true,unsafe);
+   assert.equal(isNonAssertiveReply(unsafe,assessReplyVerification(unsafe,request).claims),false,unsafe);
+  }
  });
  for(const continuation of [', then we can send it over',' and then I will email it to you',", then I'll share that report"])
  test(`${company.name}: check and follow-through can precede an available document send: ${continuation}`,()=>{
@@ -115,6 +135,9 @@ for(const company of companies){
   `Thanks for confirming our ${report} covers ${product}. I'll check the details.`,
   `Thanks for asking about our ${product} ${report}. I'll check the details.`,
   `Thanks for that update confirming our ${report} covers ${product}. I'll check the details.`,
+  `Thanks for that ${report} covering ${product}. I'll check the details.`,
+  `Hi Priya, our ${report} covers ${product}.`,
+  `Hello Morgan, I'll check the details and confirm that our ${report} covers ${product}.`,
   `I'll look into what our ${product} ${report} contains.`,
   `I'll check whether the ${report} we have for ${product} includes your test.`,
   `I'll check whether the ${report} that we have for ${product} includes your test.`,
@@ -141,6 +164,9 @@ for(const company of companies){
   'and get back to you with a guaranteed result',
   'and follow up with you with an approved discount',
   'and get back to you with that information tomorrow',
+  'and confirm back before sending tomorrow',
+  'and follow up before shipping',
+  'and get back to you right now',
   'and get back to you on Friday',
   'and report back with confirmation of coverage',
   'and confirm back with you that it covers your product',

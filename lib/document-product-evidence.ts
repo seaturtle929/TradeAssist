@@ -97,13 +97,16 @@ function bareDocumentAction(line:string){
 export function requestsDocumentProductCoverage(text:string):boolean {
  return !!documents(text).length&&/\?|\b(?:confirm|whether|if|need to know|tell me)\b/i.test(text)&&(relationWords(text)||/\b(?:report|sheet|certificate)\b.{0,55}\bfor\b/i.test(text));
 }
-const courtesyAction='(?:asking|(?:this|that|the|your) (?:question|update|clarification|information)|your time|your patience|raising that|checking|pointing that out|bringing that up|letting (?:me|us) know|keeping (?:me|us) informed|(?:sharing|explaining|clarifying|confirming|flagging|mentioning)(?: (?:that|this))?)';
+const courtesyAction='(?:asking|(?:this|that|the|your) (?:question|update|clarification|information)|this|that|your time|your patience|raising that|checking|pointing that out|bringing that up|letting (?:me|us) know|keeping (?:me|us) informed|(?:sharing|explaining|clarifying|confirming|flagging|mentioning)(?: (?:that|this))?)';
 const courtesyStart=new RegExp('^(?:(?:thanks|thank you)(?: for '+courtesyAction+')?|of course|understood|sure|okay|ok|got it|that makes sense|that helps|that[\'’]s helpful|I understand)(.*)$','i');
 /** Courtesy words describe the interaction, never an answer about the product.
  * Require the complete acknowledgment, including an optional name, so “thanks
  * for confirming the report covers…” cannot hide its factual proposition. */
 export function isConversationalAcknowledgment(text:string):boolean {
  const line=text.trim().replace(/[’‘]/g,"'").replace(/^[A-Z][A-Za-z'-]*(?:\s+[A-Z][A-Za-z'-]*){0,2},\s*(?=(?:thanks|thank you|understood|got it)\b)/,'');
+ // A closed salutation asserts no product fact. Participant and identity
+ // validation still decide whether this is the person the rep may address.
+ if(/^(?:[Hh]i|[Hh]ello)(?:(?:,\s*|\s+)[A-Z][A-Za-z'-]*(?:\s+[A-Z][A-Za-z'-]*){0,2})?[.!]?$/.test(line))return true;
  const courtesy=courtesyStart.exec(line);if(!courtesy)return false;
  const tail=courtesy[1].trim();
  // A topic label after “asking about” names the subject of the question, not
@@ -121,12 +124,12 @@ export function isConversationalAcknowledgment(text:string):boolean {
 function reportsInvestigationResult(tail:string):boolean {
  const action=/^and\s+(?:(?:(?:I|we)(?:'ll|\s+(?:will|can))|will|can)\s+)?(?:(?:get|come) back to (?:you|them)|let (?:you|them|him|her) know|tell (?:you|them|him|her)|report back(?: to (?:you|them))?|follow up(?: with (?:you|them))?|confirm(?: back)?(?: (?:with|to) (?:you|them))?)\b/i.exec(tail);
  if(!action)return false;
- const remainder=tail.slice(action[0].length).trim().replace(/(?:\s*,)?\s*\bbefore\s+(?:(?:sending|emailing)\s+(?:it|them|anything|the documents)|(?:I|we)\s+(?:send|email)\s+(?:it|them|anything|the documents))(?: over)?$/i,'')
+ const remainder=tail.slice(action[0].length).trim().replace(/(?:\s*,)?\s*\bbefore\s+(?:(?:sending|emailing)(?:\s+(?:it|them|anything|the documents))?|(?:I|we)\s+(?:send|email)(?:\s+(?:it|them|anything|the documents))?)(?: over)?$/i,'')
   .replace(/(?:\s*,)?\s*\b(?:once|after|when)\s+(?:(?:I|we)\s+have\s+(?:that|the|an?)\s+(?:answer|information|results?|confirmation)|(?:I|we)(?:'ve| have)\s+(?:checked|verified|confirmed)\s+(?:it|that|the (?:scope|coverage)))$/i,'').trim();
  if(!remainder)return true;
  return /^(?:that|it)(?: for you)?$/i.test(remainder)
   ||/^with\s+(?:that|it)$/i.test(remainder)
-  ||/^(?:with\s+)?(?:(?:that|this|the|an?)\s+)?(?:(?:clear|specific|detailed|written)\s+)?(?:confirmation|results?|details|answer|information|update|findings|outcome|clarification)(?: for you)?$/i.test(remainder)
+  ||/^(?:with\s+)?(?:(?:that|this|the|an?)\s+)?(?:(?:clear|specific|detailed|written)\s+)?(?:confirmation|results?|details?|answer|information|update|findings|outcome|clarification)(?: for you)?$/i.test(remainder)
   ||/^on\s+(?:that|this|it|(?:the|its|that)\s+(?:scope|coverage|availability))$/i.test(remainder)
   ||/^what\s+(?:I|we)\s+(?:find(?: out)?|learn|discover)$/i.test(remainder)
   ||/^whether\s+(?:it|that)\s+(?:does|is covered)$/i.test(remainder);
@@ -156,7 +159,10 @@ export function isBoundedEpistemicFactAction(text:string):boolean {
   // Follow-through may report the result; it cannot predetermine the answer,
   // authorize a concession, promise shipment or attach an unagreed deadline.
   if(!reportsInvestigationResult(tail))return false;
-  subject=subject.slice(0,next).trim();
+  // The coordinator has passed its own closed communication grammar. An
+  // optional comma immediately before it is punctuation, not a new claim;
+  // commas anywhere else in the predicate remain subject to the check below.
+  subject=subject.slice(0,next).trim().replace(/,$/,'').trim();
  }
  // Only the closed communication/ordering suffix above may consume a comma.
  // Punctuation anywhere in the unresolved predicate remains conservative.
@@ -179,6 +185,7 @@ export function isBoundedEpistemicFactAction(text:string):boolean {
  }
  // These nominal objects ask about an unresolved property. A qualified noun
  // such as “the PX20 report” would instead presuppose a product/report link.
+ if(investigation&&/^(?:that|the|this)\s+(?:details?|information)$/i.test(subject))return true;
  return !!investigation&&/^(?:(?:the|that|this|its|our|your)\s+)?(?:(?:(?:material test|inspection|test)\s+)?report(?:'s)?\s+)?(?:scope|coverage|availability)(?:\s+before\s+(?:(?:sending|emailing)\s+(?:it|them|anything|the documents)|(?:I|we)\s+(?:send|email)\s+(?:it|them|anything|the documents)))?$/i.test(subject);
 }
 
