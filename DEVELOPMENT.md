@@ -13,11 +13,20 @@ The user chose **GitHub Desktop for pushes**. Codex prepares a branch and commit
    ```sh
    npm run check:types
    npm run check:privacy
+   npm run check:conversations -- --baseline=fb8e23c --candidate=working
    npm run lint
    npm run build
    ```
 
    Run focused tests that actually ship with the repository when they cover the change. Local QA runners and private evidence are not part of the published project. Do not run paid AI calls, capture a microphone or exercise user storage without task authorization. Browser tests need an isolated origin/profile and synthetic data, following `AGENTS.md`.
+
+   For coaching or validation changes, use the committed offline conversation
+   runner before and after the fix. Select an explicit baseline commit and retain
+   its report. See `CONVERSATION-REGRESSIONS.md`: scripted transport exercises the
+   production live request lifecycle but does not measure live model quality or
+   audio-to-screen latency. Run reserved paraphrases only after writing the fix.
+   Keep all evidence-derived private fixtures and reports under ignored `outputs/`.
+   Propose cost and scope before seeking authorization for a paid comparison.
 4. Review the final diff and stage only explicitly reviewed paths. Keep tests synthetic and safe to share. Commit a concise description of the resulting change.
 
 ## Review before publishing

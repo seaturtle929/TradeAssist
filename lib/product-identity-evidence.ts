@@ -85,6 +85,42 @@ export function buyerProductIdentifierReferences(text:string,buyerText:string):B
  }
  return references;
 }
+/** An earlier question alone cannot establish what the buyer meant. Require
+ * an actual declaration or complete spelling/echo after a rep clarification.
+ * This proves reference identity only, never company ownership or coverage. */
+export function buyerReferenceExplicitlyConfirmed(identifier:string,turns:{role:string;text:string;transcriptionUncertainty?:unknown}[]):boolean {
+ const literal=escaped(identifier),canonical=key(identifier).replace(/\s/g,''),spelling=buyerCodeSpellingPattern(identifier);
+ if(!spelling||excluded.test(canonical))return false;
+ for(let index=0;index<turns.length;index++){
+  const turn=turns[index];if(!/^(?:buyer|customer)$/.test(turn.role)||turn.transcriptionUncertainty)continue;
+  const line=turn.text.replace(/[’‘]/g,"'"),previous=turns[index-1];
+  const declared=new RegExp('\\b(?:(?:the|our|my)\\s+)?(?:model|part|product|reference)(?:\\s+(?:code|number|identifier))?\\s+is\\s+["“]?'+literal+'(?=$|[\\s,.!?"”])','i');
+  if(declared.test(line))return true;
+  const completeSpelling=new RegExp('(?<![a-z0-9])'+spelling+'(?![a-z0-9])','i').test(line);
+  const asked=previous?.role==='you'&&!previous.transcriptionUncertainty&&/\b(?:confirm|repeat|spell|say (?:that|it) again)\b/i.test(previous.text)&&/\b(?:model|part|product|code|reference|identifier|number)\b/i.test(previous.text)&&! /\b(?:report|certificate|phone|callback|account)\s+(?:code|reference|identifier|number)\b/i.test(previous.text);
+  if(asked&&/^\s*(?:yes|correct|right|exactly)\b/i.test(line)&&completeSpelling)return true;
+  const literalAnswer=new RegExp('^\\s*(?:(?:yes|correct|right|exactly)[,.!\\s]+)?(?:(?:it|that)(?:\\x27s| is)\\s+)?'+literal+'(?=$|[\\s,.!?:])','i');
+  if(asked&&literalAnswer.test(line))return true;
+  // A literal code followed by its full spelling and labeled as a drawing
+  // reference is an explicit confirmation even without a preceding "yes".
+  if(new RegExp('\\b'+literal+'\\s*[:,-]','i').test(line)&&completeSpelling&&/\b(?:reference|part|code)\b[^.!?]{0,70}\bdrawing\b|\bdrawing\b[^.!?]{0,70}\b(?:reference|part|code)\b/i.test(line))return true;
+ }
+ return false;
+}
+/** Same-call reference typography, never company product evidence. A later
+ * acknowledgment need not repeat a code the buyer already supplied. Keep all
+ * letters/digits exact and allow only an optional intra-token join mark.
+ * Callers may use these spans only inside separately bounded check actions;
+ * the unfamiliar-code clarification guard still applies before an initial
+ * investigation, and ownership, coverage and quantities remain independent. */
+export function buyerConversationIdentifierReferences(text:string,turns:{role:string;text:string}[]):BuyerProductIdentifierReference[]{
+ const requested=turns.filter(turn=>turn.role==='buyer'||turn.role==='customer').flatMap(turn=>buyerIdentifierMatches(turn.text,true).filter(match=>!excluded.test(key(match[0]))&&!explicitlyDocumentNumber(turn.text,match.index||0)&&buyerReferenceExplicitlyConfirmed(match[0],turns)).map(match=>({text:match[0],key:key(match[0])})));
+ return buyerIdentifierMatches(text).flatMap(match=>{
+  const start=match.index||0,buyer=requested.find(item=>item.key===key(match[0]));
+  if(!buyer||explicitlyDocumentNumber(text,start)||presupposesCompanyProductOwnership(text,start))return [];
+  return [{text:match[0],start,end:start+match[0].length,buyerText:buyer.text}];
+ });
+}
 /** A letter-by-letter echo inside a model-code question names the buyer's
  * reference; its separated digits are not quantities. This never changes the
  * transcript, proves company ownership, or creates a source/product alias. */

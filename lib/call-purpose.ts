@@ -1,5 +1,6 @@
 import {onDemandSuggestionProblems} from './on-demand-coaching.ts';
-import {buyerSpelledIdentifierClarificationReferences} from './product-identity-evidence.ts';
+import {buyerConversationIdentifierReferences,buyerSpelledIdentifierClarificationReferences} from './product-identity-evidence.ts';
+import {investigationThenDocumentDelivery,isBoundedEpistemicFactAction} from './document-product-evidence.ts';
 import {clientContextNeedsInterpretation,clientContextSuggestionProblems,clientContextSafeReply,reviewedClientContext} from './client-coaching-context.ts';
 import {applyCoachingConfiguration,configurationNeedsInterpretation,configurationSuggestionProblems,configuredSafeReply} from './coaching-configuration.ts';
 import {generationFoundationFor} from './generation-foundation.ts';
@@ -399,14 +400,14 @@ export function safePurposeReply(context:PurposeContext,options:{landing?:boolea
 
 export function checkSuggestion(guidance:Partial<Guidance>,context:PurposeContext,options:{landing?:boolean;factChecked?:boolean;partial?:boolean}={}) {
   context=applyCoachingConfiguration(context);
-  const say=guidance.say?.trim()||"",reasons:string[]=[],{callContext,stage}=selectedStage(context),latest=latestBuyer(context),normal=normalized(say);
+  const say=guidance.say?.trim()||"",reasons:string[]=[],qualityFeedback:string[]=[],{callContext,stage}=selectedStage(context),latest=latestBuyer(context),normal=normalized(say);
   if(!say)reasons.push("No spoken answer was supplied");
   reasons.push(...configurationSuggestionProblems(say,context),...clientContextSuggestionProblems(say,context));
   if((say.match(/\?/g)||[]).length>1)reasons.push('Ask one question at a time and leave room for the buyer to answer');
   if(context.coachingRequest)reasons.push(...onDemandSuggestionProblems(say,context));
   if(!context.coachingRequest)reasons.push(...foundationSuggestionProblems(say,generationFoundationFor(context),{partial:options.partial}));
   const budget=spokenReplyBudget(context);
-  if(words(say)>budget.words)reasons.push("Spoken reply exceeds "+budget.words+" words");
+  if(words(say)>budget.words)(context.coachingRequest?qualityFeedback:reasons).push("Spoken reply exceeds "+budget.words+" words; shorten it for easier delivery");
   if(/[\u3400-\u9fff]/.test(say))reasons.push("The spoken reply must remain English");
   if(/^(?:you should|tell the buyer|ask them|focus on|discuss with them)\b/i.test(say))reasons.push("The line gives advice instead of literal words to say");
   const thirdPartyContext=[latest,callContext.background,callContext.knownFacts,...(context.turns||[]).filter(turn=>turn.role!=="you").slice(-4).map(turn=>turn.text)].join(" ");
@@ -416,7 +417,8 @@ export function checkSuggestion(guidance:Partial<Guidance>,context:PurposeContex
   const sourceText=(context.sources||[]).map(source=>source.text).join(" "),buyerText=(context.turns||[]).filter(turn=>turn.role!=="you").map(turn=>turn.text).join(" ");
   const authorizedContext=[context.manufacturer?.name,callContext.background,callContext.knownFacts,buyerText].join(" ");
   const numericValues=(value:string)=>new Set((value.match(/\b\d+(?:[.,]\d+)?/g)||[]).map(number=>String(Number(number.replace(/,/g,"")))));
-  const timeSpans=[...agreedResponseTimeSpans(say,context),...declinedNumericCommitmentSpans(say),...buyerSpelledIdentifierClarificationReferences(say,latest)];
+  const referenceSpans=[...say.matchAll(/[^.!?;]+[.!?;]?/g)].flatMap(part=>isBoundedEpistemicFactAction(part[0],context)||investigationThenDocumentDelivery(part[0],context)?buyerConversationIdentifierReferences(part[0],context.turns||[]).map(reference=>({start:(part.index||0)+reference.start,end:(part.index||0)+reference.end})):[]);
+  const timeSpans=[...agreedResponseTimeSpans(say,context),...declinedNumericCommitmentSpans(say),...buyerSpelledIdentifierClarificationReferences(say,latest),...referenceSpans];
   const sourceNumbers=numericValues(sourceText),contextNumbers=numericValues(authorizedContext),numbers:string[]=[...say.matchAll(/\b\d+(?:[.,]\d+)?(?:%|\b)/g)].filter(match=>!timeSpans.some(span=>match.index>=span.start&&match.index+match[0].length<=span.end)).map(match=>match[0]);
   const numericKey=(value:string)=>String(Number(value.replace(/[,%]/g,"")));
   if(/^(?:okay|ok|yeah)[^.!?]{0,25}100%[.!]/i.test(say)){const index=numbers.indexOf("100%");if(index>=0)numbers.splice(index,1);}
@@ -447,7 +449,7 @@ export function checkSuggestion(guidance:Partial<Guidance>,context:PurposeContex
     if(matchesRejected(say,context.brain?.rejectedSignatures,context.brain?.learningExamples))reasons.push('Candidate repeats an earlier rejected company/stage/moment line');
     reasons.push(...learnedSuggestionProblems(say,context.brain?.learningExamples,context));
     const unique=[...new Set(reasons)];
-    return {ok:!unique.length,reasons:unique,retryReason:unique.join('; '),hasAdvance:!!say,needsVerification};
+    return {ok:!unique.length,reasons:unique,retryReason:unique.join('; '),hasAdvance:!!say,needsVerification,qualityFeedback};
   }
   const checklist=checklistFor(context),flow=conversationFlowFor(context),gaps=checklist.filter(item=>item.required&&!item.complete),gapTokens=gaps.flatMap(item=>item.label.toLowerCase().match(/[a-z]{3,}/g)||[]);
   const contactAppropriate=flow.contactAppropriate;
@@ -526,5 +528,5 @@ export function checkSuggestion(guidance:Partial<Guidance>,context:PurposeContex
     if(normalized(say)===normalized(example.negative)||(!matchesAcceptedExample(say,[example])&&a.length>=5&&b.length>=5&&a.filter(word=>pool.has(word)).length/Math.max(a.length,b.length)>=.88))reasons.push("Candidate repeats a rejected company/stage/moment example");
   }
   const unique=[...new Set(reasons)];
-  return {ok:!unique.length,reasons:unique,retryReason:unique.join("; "),hasAdvance,needsVerification};
+  return {ok:!unique.length,reasons:unique,retryReason:unique.join("; "),hasAdvance,needsVerification,qualityFeedback};
 }

@@ -1,13 +1,13 @@
 import type {CoachingContext} from './call-coaching';
 import {configurationReferences} from './company-configuration.ts';
 import {requestsDocumentProductCoverage} from './document-product-evidence.ts';
-import {buyerProductIdentifierReferences,buyerSpelledIdentifierClarificationReferences,isBuyerIdentifierClarification,productIdentityReferences} from './product-identity-evidence.ts';
+import {buyerProductIdentifierReferences,buyerReferenceExplicitlyConfirmed,buyerSpelledIdentifierClarificationReferences,isBuyerIdentifierClarification,productIdentityReferences} from './product-identity-evidence.ts';
 
 const escaped=(text:string)=>text.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
 const normalize=(text:string)=>text.replace(/[’‘]/g,"'");
-const confirmationQuestion=(text:string)=>!/\b(?:phone|telephone|callback|contact|e-?mail|order|report|cert(?:ificate|ification)?|account)\s+(?:number|code|identifier)\b/i.test(text)
+const confirmationQuestion=(text:string)=>!/\b(?:phone|telephone|callback|contact|e-?mail|order|report|cert(?:ificate|ification)?|account)\s+(?:number|code|identifier|reference)\b/i.test(text)
  &&/\b(?:confirm|repeat|spell|say (?:that|it) again)\b/i.test(text)
- &&(/\b(?:model|product|part|code|identifier)\b/i.test(text)||/\brepeat\s+(?:that|the)\s+number\b/i.test(text));
+ &&(/\b(?:model|product|part|code|identifier|reference)\b/i.test(text)||/\brepeat\s+(?:that|the)\s+number\b/i.test(text));
 const spokenDigits:Record<string,string>={zero:'0',one:'1',two:'2',three:'3',four:'4',five:'5',six:'6',seven:'7',eight:'8',nine:'9'};
 function spelledReplyConfirms(identifier:string,text:string):boolean {
  const parts=identifier.replace(/[^A-Za-z0-9]/g,'').split('').map(char=>{
@@ -37,6 +37,7 @@ function attachedSpellingConfirms(identifier:string,text:string):boolean {
  * substituting a familiar model. Explicit buyer confirmation resolves only
  * the spelling, never product ownership or document coverage. */
 function explicitlyConfirmed(identifier:string,turns:NonNullable<CoachingContext['turns']>):boolean {
+ if(buyerReferenceExplicitlyConfirmed(identifier,turns))return true;
  const literal=escaped(identifier);
  for(let index=0;index<turns.length;index++){
   const turn=turns[index];if(turn.role!=='buyer'||turn.transcriptionUncertainty)continue;
@@ -70,7 +71,7 @@ export function buyerIdentifierConfirmation(context:CoachingContext):{identifier
 
 export function buyerIdentifierConfirmationProblems(say:string,context:CoachingContext):string[]{
  const uncertainty=buyerIdentifierConfirmation(context);if(!uncertainty)return [];
- const narrowQuestion=say.includes('?')&&(confirmationQuestion(say)||/\b(?:did you say|was (?:that|it))\b/i.test(say)||/\bspell\b/i.test(say)&&uncertainty.identifiers.some(identifier=>say.includes(identifier))||say.split(/(?<=[.!])\s+/).some(part=>isBuyerIdentifierClarification(part,uncertainty.buyerText)));
+ const narrowQuestion=say.includes('?')&&(confirmationQuestion(say)||/\b(?:did you say|was (?:that|it))\b/i.test(say)||/\bspell\b/i.test(say)&&uncertainty.identifiers.some(identifier=>say.includes(identifier))||say.split(/(?<=[.!?])\s+/).some(part=>isBuyerIdentifierClarification(part,uncertainty.buyerText)));
  const sources=context.companyConfiguration?configurationReferences(context.companyConfiguration.snapshot):context.sources||[];
  // The buyer-reference helper is deliberately narrow (and excludes owned
  // noun phrases). Also inspect source-known codes so a leading clarification
