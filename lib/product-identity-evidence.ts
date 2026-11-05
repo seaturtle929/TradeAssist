@@ -73,6 +73,35 @@ export function buyerProductIdentifierReferences(text:string,buyerText:string):B
  }
  return references;
 }
+/** A letter-by-letter echo inside a model-code question names the buyer's
+ * reference; its separated digits are not quantities. This never changes the
+ * transcript, proves company ownership, or creates a source/product alias. */
+export function buyerSpelledIdentifierClarificationReferences(text:string,buyerText:string):BuyerProductIdentifierReference[]{
+ const requested=buyerIdentifierMatches(buyerText,true).filter(match=>!excluded.test(key(match[0]))&&!explicitlyDocumentNumber(buyerText,match.index||0));
+ const pattern=new RegExp(`(?<![a-z0-9_${dash}])[a-z](?:[${dash}][a-z0-9]){1,15}(?![a-z0-9_${dash}])`,'gi');
+ const references:BuyerProductIdentifierReference[]=[];
+ for(const match of text.matchAll(pattern)){
+  if(!/\d/.test(match[0]))continue;
+  const start=match.index||0,end=start+match[0].length;
+  const buyer=requested.find(item=>key(item[0]).replace(/\s/g,'')===key(match[0]));
+  if(!buyer||presupposesCompanyProductOwnership(text,start))continue;
+  const from=Math.max(text.lastIndexOf('.',start),text.lastIndexOf('!',start),text.lastIndexOf('?',start),text.lastIndexOf(';',start))+1,to=text.indexOf('?',end);
+  if(to<0||/[.!;]/.test(text.slice(end,to)))continue;
+  const question=text.slice(from,to+1);
+  if(!/\b(?:confirm|repeat|spell)\b[^?]{0,110}\b(?:code|model|part|reference|number)\b|\b(?:was it|is it|did you say)\b/i.test(question))continue;
+  references.push({text:match[0],start,end,buyerText:buyer[0]});
+ }
+ return references;
+}
+/** Closed neutral wording for the whole clarification, including an optional
+ * “just to be sure”. Extra factual or commercial tails keep normal checks. */
+export function isBuyerIdentifierSpellingClarification(text:string,buyerText:string):boolean {
+ const references=buyerSpelledIdentifierClarificationReferences(text,buyerText);if(!references.length||!/^\s*(?:just to be sure[, ]+)?(?:can|could|would|was|is|did)\b/i.test(text)||! /\?\s*$/.test(text))return false;
+ let remainder=text;for(const reference of [...references].reverse())remainder=remainder.slice(0,reference.start)+' '+remainder.slice(reference.end);
+ if(!/^[A-Za-z\s,?—–-]+$/.test(remainder))return false;
+ const allowed=new Set('just to be sure can could would was is did you please confirm repeat spell say the exact model product part code reference number your engineer team mentioned for material me it that this again'.split(' '));
+ return (remainder.toLowerCase().match(/[a-z]+/g)||[]).every(word=>allowed.has(word));
+}
 export function productIdentityReferences(text:string,sources:ProductIdentitySource[]):ProductIdentityReference[]{
  const known=sourceIdentities(sources),references:ProductIdentityReference[]=[];
  for(const match of text.matchAll(tokenPattern)){
