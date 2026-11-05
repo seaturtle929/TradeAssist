@@ -207,11 +207,15 @@ export function isBoundedEpistemicFactAction(text:string,context?:Context):boole
  const original=line;
  line=line.replace(/^\s*(?:and\s+)?(?:if you\s+(?:can\s+)?(?:send|email)\s+(?:over\s+)?(?:that|the|your)\s+drawing(?:\s+over)?\s*,\s*|please\s+(?:go ahead and\s+)?(?:send|email)\s+(?:over\s+)?(?:that|the|your)\s+drawing(?:\s+over)?\s*,\s*(?:and\s+)?)/i,'').replace(/^and\s+(?=(?:I|we)\b)/i,'');
  line=line.replace(/\s+once\s+(?:I|we)\s+(?:review|check|see)\s+(?:it|that|the drawing|your drawing)[.!]?$/i,'');
- const comparison=/^((?:I|we)(?:'ll| will| can))\s+(?:line it up with|check it against)\s+our\s+(?:available\s+)?(?:specs|specifications)\s+and\s+(.+)$/i.exec(line);
+ const comparison=/^((?:I|we)(?:'ll| will| can))\s+(?:line it up with|check it against|compare it with|compare it against)\s+our\s+(?:available\s+)?(?:specs|specifications)\s+and\s+(.+)$/i.exec(line);
  if(comparison){
   if(!availableDocumentActionEvidence('specification',context?.sources||[]))return false;
   line=comparison[1]+' '+comparison[2];
  }
+ line=line.replace(/^((?:I|we)(?:'ll| will| can))\s+(?:review|check)\s+(?:your|the|that)\s+drawing\s+and\s+(?=(?:check|confirm|verify|let you know)\b)/i,'$1 ');
+ // Reporting whether an investigation succeeds leaves its answer open;
+ // reporting "that" it succeeds is still an affirmative claim below.
+ line=line.replace(/^((?:I|we)(?:'ll| will| can))\s+let you know\s+(if|whether)\s+/i,'$1 check $2 ');
  line=line.replace(/^((?:I|we)(?:'ll| will| can))\s+(?:review|check)\s+(?:your|the|that)\s+drawing\s+and\s+(?:check\s+)?(?:the\s+)?(?:report\s+)?coverage\b/i,'$1 check coverage');
  line=line.replace(/\s*,?\s+and\s+wait\s+for\s+your\s+approval\s+before\s+(?:sending|emailing|sharing)\s+(?:anything|it|the report)[.!]?$/i,'');
  if(line!==original)return isBoundedEpistemicFactAction(line,context);

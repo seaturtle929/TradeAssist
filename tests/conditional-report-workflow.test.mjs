@@ -15,6 +15,10 @@ for(const company of companies){
   `Please email the drawing, and I'll confirm if the ${report} covers ${product} once we review it.`,
   `If you send over that drawing, we'll line it up with our specs and confirm if the ${report} covers ${product}.`,
   `If you can send that drawing, we'll check it against our available specs and confirm if the ${report} addresses what your engineer needs.`,
+  `If you can email that drawing, we'll compare it with our specs and confirm whether the ${report} covers ${product}.`,
+  `If you send that drawing, we'll check it against our available specs and let you know if the ${report} applies to ${product}.`,
+  `We'll review your drawing and confirm whether the ${report} covers ${product}.`,
+  `We'll check the drawing and let you know whether the ${report} applies to ${product}.`,
  ])test(`${name}: drawing handoff plus uncertainty is an investigation: ${say}`,()=>fast(say,make(company)));
  for(const say of [
   `Once we've checked that the report covers ${product}, we'll reply with the details.`,
@@ -77,7 +81,7 @@ for(const company of companies){
   assert.ok(assessReplyVerification(`I'll send the ${report}.`,input).unsupportedClaims.some(claim=>/withheld|cancelled/.test(claim.reason)));
   input.turns.push({role:'buyer',text:'Please send it now.'});fast(`I'll send the ${report}.`,input);
  });
- for(const say of [`The ${report} covers ${product}.`,`We have a ${product} report, and I'll check the details.`,`I'll check whether the report covers ${product}. We can offer a 12% discount.`,`If the report covers your reference, we'll ship the order tomorrow.`,`Once we confirm the report covers ${product}, we'll send it soon.`])test(`${name}: uncertainty never supports another claim: ${say}`,()=>{
+ for(const say of [`The ${report} covers ${product}.`,`We have a ${product} report, and I'll check the details.`,`I'll check whether the report covers ${product}. We can offer a 12% discount.`,`If the report covers your reference, we'll ship the order tomorrow.`,`Once we confirm the report covers ${product}, we'll send it soon.`,`If you email the drawing, we'll compare it with our specs and confirm that the ${report} covers ${product}.`,`We'll compare it with our specs and let you know that the ${report} certifies ${product} for medical use.`])test(`${name}: uncertainty never supports another claim: ${say}`,()=>{
   const result=assessReplyVerification(say,make(company,true));assert.ok(result.requiresVerification||result.unsupportedClaims.length,say);
  });
  test(`${name}: approved release restrictions remain binding after a positive coverage check`,()=>{
