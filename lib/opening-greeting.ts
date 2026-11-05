@@ -1,6 +1,12 @@
+/** ASR may join a salutation to an explicit spoken identity with a dash.
+ * This changes only parsing, never the saved transcript or the person's name. */
+export function normalizeGreetingSeparator(value:string):string {
+  return value.replace(/\b(hi|hello|hey)[\-\u2010-\u2015](?=[a-z][a-z'\-]*(?:\s+[a-z][a-z'\-]*)?\s+(?:speaking|here)\b)/gi,'$1 ');
+}
+
 /** A bounded greeting/identity exchange, never a routing or substantive request. */
 export function isSimpleBuyerGreeting(value:string):boolean {
-  let line=value.replace(/[’‘]/g,"'").trim();
+  let line=normalizeGreetingSeparator(value).replace(/[’‘]/g,"'").trim();
   if(!line||(line.match(/\S+/g)?.length||0)>26)return false;
   if(/^(?:who(?:'s| is) (?:this|calling)|who are you|how (?:can|may) I help(?: you)?|what can I do for you|what(?:'s| is) this(?: call)? (?:about|regarding)|what are you calling (?:about|for))[?!.\s]*$/i.test(line))return true;
   line=line.replace(/(?:[,;.!?]\s*|\s+)(?:who(?:'s| is) (?:this|calling)|who are you|how (?:can|may) I help(?: you)?|what can I do for you|what(?:'s| is) this(?: call)? (?:about|regarding)|what are you calling (?:about|for))[?!.\s]*$/i,'').trim();

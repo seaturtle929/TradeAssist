@@ -31,6 +31,35 @@ for(const company of [
   assert.equal(assessReplyVerification(say,context()).locallyVerifiedWholeReply,true);
   assert.equal(needsFactCheck(say,context()),false);
  });
+ for(const joining of [' and records',' and it records','; it records'])test(`${name}: shared subject and singular possessive ${joining}`,()=>{
+  const say=`${headline.slice(0,-1)}${joining} the tested sample’s ${content}; it doesn't certify application suitability or future batches.`;
+  const result=assessReplyVerification(say,context());
+  assert.equal(result.locallyVerifiedWholeReply,true);
+  assert.equal(needsFactCheck(say,context()),false);
+  assert.equal(result.localEvidence.length,1);
+  assert.equal(result.localEvidence[0].quote,source.text);
+ });
+ test(`${name}: equivalent singular possessive and semicolons in original evidence`,()=>{
+  const alternative={...source,text:`${scope.slice(0,-1)}; it records the tested sample's ${content} and does not certify application suitability or future batches.`};
+  const say=`${headline} It shows the ${content} of the tested sample and does not certify future batches.`;
+  const result=assessReplyVerification(say,context([alternative,availability]));
+  assert.equal(result.locallyVerifiedWholeReply,true);
+  assert.equal(needsFactCheck(say,context([alternative,availability])),false);
+  assert.equal(result.localEvidence[0].quote,alternative.text);
+ });
+ for(const tail of [
+  `and records the tested samples' ${content}`,
+  `and records the customer's ${content}`,
+  `and records the tested sample's ${content} and certifies suitability`,
+  `and records the tested sample's guaranteed ${content}`,
+  `and records the tested sample's ${content} only after approval`,
+  `and records the tested sample's ${content}; we can ship tomorrow`,
+  `and records the tested sample's ${content}; it guarantees suitability`,
+ ])test(`${name}: shared-subject tail still needs its full meaning checked: ${tail}`,()=>{
+  const say=`${headline.slice(0,-1)} ${tail}.`;
+  assert.equal(assessReplyVerification(say,context()).locallyVerifiedWholeReply,false);
+  assert.equal(needsFactCheck(say,context()),true);
+ });
  test(`${name}: report proof does not weaken source-scoped numeric specifications`,()=>{
   const say=`${headline} It records the ${content} of the tested sample. Its nominal opening is 0.3 mm.`;
   assert.equal(assessReplyVerification(say,context()).locallyVerifiedWholeReply,false);

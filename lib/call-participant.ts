@@ -1,4 +1,4 @@
-import {isSimpleBuyerGreeting} from "./opening-greeting.ts";
+import {isSimpleBuyerGreeting,normalizeGreetingSeparator} from "./opening-greeting.ts";
 export type ParticipantTurn={id?:string;role:string;text:string};
 export type TransferAction={
   status:"intended"|"pending"|"completed"|"unavailable";
@@ -27,7 +27,7 @@ export type CallParticipant={
 };
 export type ColdCallGateKind='right_person_check'|'gatekeeper_intent'|'unavailable_contact'|'transfer_wait';
 type GateContext={turns?:ParticipantTurn[];callType?:unknown;callContext?:unknown;conversationState?:{participant?:CallParticipant;movedPastDiscovery?:boolean}};
-const normalize=(value:string)=>value.replace(/[’‘]/g,"'").replace(/\s+/g," ").trim();
+const normalize=(value:string)=>normalizeGreetingSeparator(value).replace(/[’‘]/g,"'").replace(/\s+/g," ").trim();
 const purchasing=/\b(?:purchasing|procurement|buying|buyer)\b/i;
 const transfer=/\b(?:I(?:'ll| will| can| am going to|'m going to)?|let me|we(?:'ll| will| can)?|one moment[, ]+I(?:'ll| will))\b.{0,35}\b(?:transfer you|put(?:ting)? you (?:straight )?through|connect you|pass you (?:over|through|to)|hand you (?:over|to))\b|\b(?:I'm|I am) (?:transferring|connecting) you\b/i;
 // A brief routing hold is not a completed transfer. ASR may nevertheless put

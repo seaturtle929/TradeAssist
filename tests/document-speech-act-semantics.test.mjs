@@ -22,6 +22,25 @@ function fixture(company,linked=false){
 }
 for(const company of companies){
  const {product,report}=company;
+ for(const action of ['Then we can send it if it matches','I will email that report only if it matches your requirements','Then I can share it for review if it does'])test(`${company.name}: postposed delivery condition follows exact current report check ${action}`,()=>{
+  const say=`I'll confirm whether the ${report} covers ${product} and let you know. ${action}.`;
+  const parsed=investigationThenDocumentDelivery(say);
+  assert.equal(parsed?.document,report);
+  assert.equal(parsed?.deliveryCondition,'stated_condition');
+  assert.equal(needsFactCheck(say,fixture(company)),false);
+  for(const sourceText of [`The ${report} is unavailable.`,`The ${report} is available under NDA.`,`The ${report} requires manager approval before release.`])assert.equal(needsFactCheck(say,{...fixture(company),sources:[{id:'restriction',text:sourceText}]}),true);
+ });
+ for(const condition of ['if it matches and guarantees suitability','if my engineer approves it','if it matches tomorrow','if the price matches','if it matches; we can discount the order'])test(`${company.name}: postposed delivery does not erase additional condition meaning ${condition}`,()=>{
+  const say=`I'll confirm whether the ${report} covers ${product} and let you know. Then we can send it ${condition}.`;
+  assert.equal(investigationThenDocumentDelivery(say),undefined);
+  assert.equal(needsFactCheck(say,fixture(company)),true);
+ });
+ test(`${company.name}: standalone or unresolved availability cannot supply a report-scope match`,()=>{
+  for(const say of ['Then we can send it if it matches.',`I'll check whether the ${report} is available. Then we can send it if it matches.`]){
+   assert.equal(investigationThenDocumentDelivery(say),undefined);
+   assert.equal(needsFactCheck(say,fixture(company)),true);
+  }
+ });
  for(const topic of ['this','that','it'])for(const punctuation of ['.',', Morgan.','—'])test(`${company.name}: neutral deictic courtesy ${topic}${punctuation}`,()=>{
   const courtesy=`Thanks for asking about ${topic}${punctuation}`;
   assert.equal(isConversationalAcknowledgment(courtesy.replace(/—$/,'')),true);

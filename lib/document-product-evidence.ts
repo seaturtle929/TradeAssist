@@ -221,6 +221,7 @@ export function investigationThenDocumentDelivery(text:string,context?:Context):
  // A repeated subject is optional in a coordinated action (“I'll check ...
  // and then send it”). Sequence does NOT mean “only if it covers the product”.
  const continuation=/\s*,?\s+(?:and\s+)?then\s+(?:(?:I|we)(?:'ll|\s+(?:will|can|could))\s+)?(?:send|email|share|include|attach)\s+(?:it|that report|the report)(?:\s+(?:over|along|to you|for review))?[.!]?$/i.exec(line)
+  ||/[.!]\s+(?:then\s+)?(?:I|we)(?:'ll|\s+(?:will|can|could))\s+(?:send|email|share|include|attach)\s+(?:it|that report|the report)(?:\s+(?:over|along|to you|for review))?\s+((?:only\s+)?if\s+(?:it|that report|the report)\s+(?:does|matches?(?:\s+(?:the|your)\s+requirements)?|covers?\s+(?:it|that product|your product|your mesh|the requirements)))[.!]?$/i.exec(line)
   ||/(?:\s*,?\s+and\s+|[.!]\s+)((?:only\s+)?if\s+(?:it|that report|the report)\s+(?:does|covers?\s+(?:it|that product|your product|your mesh|the requirements)|matches?\s+(?:the|your)\s+requirements))\s*,?\s+(?:I|we)(?:'ll|\s+(?:will|can|could))\s+(?:send|email|share|include|attach)\s+(?:it|that report|the report)(?:\s+(?:over|along|to you|for review))?[.!]?$/i.exec(line)
   ||/[.!]\s+((?:once|after|when)\s+(?:that|it|the (?:scope|coverage|answer))(?:(?:'s|\s+is|\s+has been)\s+(?:checked|verified|confirmed)))\s*,\s*(?:I|we)(?:'ll|\s+(?:will|can|could))\s+(?:send|email|share|include|attach)\s+(?:it|that report|the report)(?:\s+(?:over|along|to you|for review))?[.!]?$/i.exec(line);
  if(!continuation)return;
@@ -228,6 +229,9 @@ export function investigationThenDocumentDelivery(text:string,context?:Context):
  if(!isBoundedEpistemicFactAction(investigation,context))return;
  const referents=documents(investigation);
  if(referents.length!==1||! /report$/.test(referents[0].kind))return;
+ // Bare “matches” can only refer back to this explicit report-scope inquiry,
+ // not an unresolved price/approval/availability predicate or earlier call.
+ if(continuation[1]&&/\bmatches?$/i.test(continuation[1])&&!requestsDocumentProductCoverage(investigation))return;
  const deliveryCondition=continuation[1]?/^(?:once|after|when)\b/i.test(continuation[1])?'check_completion':'stated_condition':'sequence_only';
  return {investigation,document:referents[0].kind,deliveryCondition,...(continuation[1]?{conditionText:continuation[1]}:{})};
 }
@@ -275,7 +279,7 @@ function competingScopeEvidence(kind:string,product:string,identifier:string|und
     if(scopePredicate&&(coverageNegated(raw)||uncertainty.test(raw)||/\b(?:only|limited|excluding|excludes?|omits?|restriction|restricted)\b/i.test(raw)))return true;
     if(scopePredicate&&hasProduct){
      const position=productPosition(raw,{key:target,labels:[target]});
-     const remainder=position?raw.slice(position.end).replace(/[.!]$/,'').trim():'';
+     const remainder=position?raw.slice(position.end).replace(/[.!;]$/,'').trim():'';
      // A second scope statement with an unexplained qualifier must not be
      // ignored merely because an unrestricted positive statement also exists.
      if(remainder&&!productNounTail.test(remainder))return true;
@@ -354,7 +358,7 @@ export function assessDocumentProductCoverage(clause:string,context:Context,sour
  * A complete original source travels with the result through its source ID. */
 export function literalDocumentScopeEvidence(clause:string,context:Context,sources:DocumentProductSource[]):{sourceId:string;reason:string;quote:string;evidence?:{sourceId:string;quote:string;reason:string}[]}|undefined {
  const originals=sources.filter(source=>source.original!==false&&source.complete!==false&&!stale.test((source.title||'')+' '+source.text));
- const normalized=canonicalizeKnownProductIdentifiers(clause,originals).trim().replace(/[’‘]/g,"'").replace(/[.!]$/,'');
+ const normalized=canonicalizeKnownProductIdentifiers(clause,originals).trim().replace(/[’‘]/g,"'").replace(/[.!;]$/,'');
  const line=normalized.replace(/^(?:yes|correct)[,\s]+/i,'');
  const doc=documents(line);if(doc.length!==1)return;
  const document=doc[0],before=line.slice(0,document.start),after=line.slice(document.end);
@@ -396,7 +400,7 @@ export function literalDocumentScopeEvidence(clause:string,context:Context,sourc
    if(sourcePrefix.some(word=>! /^(?:our|the|this|that|product|grade|model)$/.test(word)&&! /^[A-Z][A-Za-z'-]*$/.test(word)))continue;
    const sourceName=sourcePrefix.filter(word=>!/^(?:our|the|this|that|product|grade|model)$/i.test(word));
    if(claimPrefix.length&&norm(claimPrefix.join(' '))!==norm(sourceName.join(' ')))continue;
-   const suffix=sentence.slice(position.end).replace(/[.!]$/,'').trim();
+   const suffix=sentence.slice(position.end).replace(/[.!;]$/,'').trim();
    // No extrapolation from “covers PX20 only if…”, a sample restriction or
    // an attached claim. A following source sentence remains available to the
    // semantic checker whenever the reply makes any additional content claim.
@@ -412,10 +416,12 @@ export function literalDocumentScopeEvidence(clause:string,context:Context,sourc
 type DocumentStatementProof=NonNullable<ReturnType<typeof literalDocumentScopeEvidence>>;
 type ReportProposition={kind:'content';object:string}|{kind:'exclusion';objects:string[]};
 function reportPropositions(text:string):ReportProposition[]|undefined {
- const line=text.trim().replace(/[’‘]/g,"'").replace(/[.!]$/,'');
- const clauses=line.split(/\s*(?:;|,?\s+but\s+|,?\s+though\s+)\s*/i),result:ReportProposition[]=[];
+ const line=text.trim().replace(/[’‘]/g,"'").replace(/[.!;]$/,'');
+ const clauses=line.split(/\s*(?:;|,?\s+but\s+|,?\s+though\s+|\s+and\s+(?=(?:it\s+)?(?:does not|doesn't)\s+certify\b))\s*/i),result:ReportProposition[]=[];
  for(let index=0;index<clauses.length;index++){
-  const clause=clauses[index].trim();
+  // Singular genitive and of-phrase identify the same tested sample. Keep
+  // plural samples, other possessors and appended predicates out of this rule.
+  const clause=clauses[index].trim().replace(/^(it\s+(?:records|shows|documents))\s+the tested sample's\s+([a-z]+(?:[ -][a-z]+){0,4})$/i,'$1 the $2 of the tested sample');
   const content=/^it\s+(?:records|shows|documents)\s+the\s+([a-z]+(?:[ -][a-z]+){0,4}\s+of the tested sample)$/i.exec(clause);
   if(content){
    // The object must be repeated intact, including its singular sample scope.
@@ -438,7 +444,7 @@ function reportPropositions(text:string):ReportProposition[]|undefined {
  * Unknown wording, approval, broader sample populations and guarantee claims
  * continue to the normal semantic verifier. */
 export function literalDocumentStatementEvidence(clause:string,context:Context,sources:DocumentProductSource[],previous?:DocumentStatementProof):DocumentStatementProof|undefined {
- const clean=clause.trim().replace(/[’‘]/g,"'");
+ const clean=clause.trim().replace(/[’‘]/g,"'").replace(/;$/,'');
  const direct=literalDocumentScopeEvidence(clean,context,sources);
  if(direct)return direct;
  let binding=previous,body=clean;
@@ -448,6 +454,14 @@ export function literalDocumentStatementEvidence(clause:string,context:Context,s
   binding=literalDocumentScopeEvidence(clean.slice(0,divider),context,sources);
   if(!binding)return;
   body=clean.slice(divider+1);
+ }else{
+  const conjunction=/\s+and\s+(?=(?:it\s+)?(?:records|shows|documents)\b)/i.exec(clean);
+  if(conjunction){
+   binding=literalDocumentScopeEvidence(clean.slice(0,conjunction.index),context,sources);
+   if(!binding)return;
+   body=clean.slice(conjunction.index+conjunction[0].length);
+   if(!/^it\s/i.test(body))body='It '+body;
+  }
  }
  if(!binding)return;
  const propositions=reportPropositions(body);if(!propositions)return;

@@ -49,6 +49,18 @@ for(const text of ['Noor here.','Noor speaking.','Hi, this is Noor.'])test('A re
  assert.equal(JSON.stringify(turns),original);
 });
 
+for(const join of ['-','–','—'])test('A salutation dash before a spoken identity completes the transfer: '+join,()=>{
+ const latest=buyer(`One moment, Hi${join}Noor speaking.`),turns=[...initial,latest],participant=deriveCallParticipant(turns),request=context(turns);
+ assert.equal(participant.transferPending,false);assert.equal(participant.transfer.status,'completed');assert.equal(participant.speakerName,'noor');
+ assert.equal(currentParticipantPickup(latest,participant).kind,'greeting_only');assert.match(onDemandDecisionRules(request),/ACTUAL PICKUP:/);
+ assert.deepEqual(onDemandSuggestionProblems('Hi Noor, this is Lin from Example Instruments about the short instruments call you agreed to.',request),[]);
+ assert.equal(latest.text,`One moment, Hi${join}Noor speaking.`,'Original speech remains literal');
+ const question=buyer(`One moment, Hi${join}Noor speaking. Does the report cover PX20?`),purchaser=deriveCallParticipant([...initial,question]);
+ assert.equal(currentParticipantPickup(question,purchaser).kind,'substantive');
+ const reported=deriveCallParticipant([...initial,buyer(`One moment, she said Hi${join}Noor speaking.`)]);
+ assert.notEqual(reported.transfer?.status,'completed','A reported identity cannot become a pickup');
+});
+
 test('A routing target alone is not evidence that the person is present',()=>{
  const participant=deriveCallParticipant(initial),request=context(initial);
  assert.equal(participant.requestedConnection.targetName,'Noor Patel');

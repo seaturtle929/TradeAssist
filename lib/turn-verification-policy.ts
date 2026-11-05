@@ -3,7 +3,7 @@ import {clientContextSuggestionProblems,clientContextSafeReply,reviewedClientCon
 import { hasClearConversationRefusal } from './conversation-boundary.ts';
 import {applyCoachingConfiguration,configurationSuggestionProblems,configurationAuthorizesAction,configuredSafeReply} from './coaching-configuration.ts';
 import {literalSpecificationEvidence,specificationNumberEvidence} from './scoped-specification-evidence.ts';
-import {canonicalizeKnownProductIdentifiers,productIdentityReferences} from './product-identity-evidence.ts';
+import {buyerProductIdentifierReferences,canonicalizeKnownProductIdentifiers,productIdentityReferences} from './product-identity-evidence.ts';
 import {availableDocumentActionEvidence} from './document-availability-evidence.ts';
 import {assessDocumentProductCoverage,documentIdentifierReferences,documentIdentifierSource,investigationThenDocumentDelivery,isBoundedEpistemicFactAction,isConversationalAcknowledgment,literalDocumentScopeEvidence,literalDocumentStatementEvidence,requestsDocumentProductCoverage} from './document-product-evidence.ts';
 export type BuyerTurnKind = 'fact_request' | 'sales_move' | 'confirmation';
@@ -733,11 +733,16 @@ export function assessReplyVerification(say: string, context: VerificationPolicy
     if(commercial)add(text,part.start,'supplier_claim',commercial);
     const responseTiming = /\b(?:I|we)(?:['’]ll|\s+(?:will|can|would))\b.{0,85}\b(?:soon|shortly|ASAP|quickly|in\s+a\s+bit|right\s+away|promptly|immediately|within|by\s+(?:\d|tomorrow|today|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)|in\s+\d+\s+(?:hours?|days?)|tomorrow|today)\b/i.exec(text);
     if (responseTiming&&!declinesResponseDeadline(text)) add(text, part.start, 'timing', { supported: timingAgreed(text, context), reason: 'A rep response deadline requires an explicitly agreed specific day/time; document facts do not authorize it.' });
+    const buyerInquiryIds=unresolvedFactCheck(text,context)?buyerProductIdentifierReferences(text,latestBuyerText(context)):[];
     for (const number of text.matchAll(/(?:\$\s*)?\b\d+(?:[.,]\d+)*(?:\s*(?:%|USD|dollars?|tons?|tonnes?|kg|kilograms?|days?|hours?|weeks?|months?|microns?|μm|um|mm))?/gi)) {
       const start = part.start + (number.index || 0), end = start + number[0].length;
       if (companySpans.some(span => span.start <= start && span.end >= end)) continue;
       if(documentIds.some(reference=>reference.source&&reference.start<=start&&reference.end>=end))continue;
       if(productIds.some(reference=>reference.start<=start&&reference.end>=end))continue;
+      // An unresolved inquiry may repeat the buyer's exact unknown identifier.
+      // Its digit is not a measured claim, and this does not establish a
+      // company product, an alias, ownership, or any affirmative fact about it.
+      if(buyerInquiryIds.some(reference=>reference.start<=(number.index||0)&&reference.end>=(number.index||0)+number[0].length))continue;
       if (identities.some(identity => (identity.index || 0) <= start && (identity.index || 0) + identity[0].length >= end)) continue;
       if ([...say.matchAll(FORMULA), ...say.matchAll(EMAIL)].some(identity => (identity.index || 0) <= start && (identity.index || 0) + identity[0].length >= end)) continue;
       if (number[0].trim() === '100%' && /\b(?:yeah|yes|okay|ok|absolutely)[,.\s]+100%/i.test(text)) continue;
