@@ -31,7 +31,7 @@ for(const company of companies){
   'I can verify the coverage and let you know.',
   `Could I check whether the ${report} covers ${product}?`,
   `Hi Priya, I'll confirm whether the ${report} covers ${product} before we send it. Let me check that detail and get back to you.`,
-  `Hello, Morgan, I'll check whether the ${report} covers ${product}, and I will get back to you.`,
+  `Hello, Priya, I'll check whether the ${report} covers ${product}, and I will get back to you.`,
   'Let me check that detail and get back to you.',
   "I'll verify the information and report back with the findings.",
   "Hello Priya. I'll check this detail and let you know.",
@@ -45,7 +45,7 @@ for(const company of companies){
   assert.deepEqual(assessment.unsupportedClaims,[]);
   assert.deepEqual(assessment.pendingClaims,[]);
   assert.equal(assessment.requiresVerification,false);
-  assert.equal(isNonAssertiveReply(say,assessment.claims),true);
+  assert.equal(isNonAssertiveReply(say,assessment.claims,request),true);
   assert.equal(needsFactCheck(say,request),false);
  });
  for(const tail of [
@@ -84,13 +84,13 @@ for(const company of companies){
   const request=context(company),say=`Thanks for your question, Priya. I'll check whether our ${report} covers ${product} ${tail}.`,assessment=assessReplyVerification(say,request);
   assert.deepEqual(assessment.unsupportedClaims,[],say);
   assert.deepEqual(assessment.pendingClaims,[],say);
-  assert.equal(isNonAssertiveReply(say,assessment.claims),true,say);
+  assert.equal(isNonAssertiveReply(say,assessment.claims,request),true,say);
   assert.equal(needsFactCheck(say,request),false,say);
  });
  for(const courtesy of ['Thanks for letting me know.','Priya, thanks for your question.','Thanks for confirming, Priya.','Thank you for sharing that.','Thanks for clarifying—','Got it.','Thanks for keeping us informed.','Thanks for that, Priya.','Thank you for this.',...['this','that','the','your'].flatMap(determiner=>['question','update','clarification','information'].map(noun=>`Thanks for ${determiner} ${noun}, Priya.`))])test(`${company.name}: neutral conversational acknowledgment does not reclassify the next investigation: ${courtesy}`,()=>{
   const request=context(company),say=`${courtesy} I'll check whether the ${report} covers ${product} and get back to you before sending it.`,assessment=assessReplyVerification(say,request);
   assert.deepEqual(assessment.unsupportedClaims,[],say);
-  assert.equal(isNonAssertiveReply(say,assessment.claims),true,say);
+  assert.equal(isNonAssertiveReply(say,assessment.claims,request),true,say);
   assert.equal(needsFactCheck(say,request),false,say);
  });
  for(const comma of ['',','])for(const auxiliary of ['', 'will ', "I'll ", 'we will '])test(`${company.name}: punctuation and repeated subject preserve the same neutral coordinator: ${comma} and ${auxiliary}`,()=>{
@@ -120,7 +120,7 @@ for(const company of companies){
  for(const topic of [product,'the report','coverage','your requirements'])test(`${company.name}: naming a question's topic asserts no answer: ${topic}`,()=>{
   const request=context(company),say=`Thank you for asking about ${topic}. I'll check whether the ${report} covers that product and get back to you with a clear answer.`,assessment=assessReplyVerification(say,request);
   assert.deepEqual(assessment.unsupportedClaims,[],say);
-  assert.equal(isNonAssertiveReply(say,assessment.claims),true,say);
+  assert.equal(isNonAssertiveReply(say,assessment.claims,request),true,say);
   assert.equal(needsFactCheck(say,request),false,say);
  });
  for(const say of [

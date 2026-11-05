@@ -39,4 +39,14 @@ for(const company of [
   assert.equal(isBoundedEpistemicFactAction(say,context),false);
   assert.equal(needsFactCheck(say,context),true);
  });
+ test(`${company.name}: spaced identity retains its owned noun premise`,()=>{
+  for(const spaced of [company.unknown.replace(/(?=\d)/,' '),company.unknown.toLowerCase().replace(/(?=\d)/,' '),company.unknown[0]+company.unknown.slice(1).toLowerCase().replace(/(?=\d)/,' ')]){
+  const input={...context,turns:[{role:'buyer',text:`Does the ${company.report} cover ${spaced}?`}]};
+  for(const owner of ['our','our certified','our standard','our current model']){
+   const say=`I'll check whether the ${company.report} covers ${owner} ${spaced}.`;
+   assert.equal(isBoundedEpistemicFactAction(say,input),false);
+   assert.equal(needsFactCheck(say,input),true);
+  }
+  }
+ });
 }

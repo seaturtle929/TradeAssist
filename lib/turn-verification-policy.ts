@@ -201,12 +201,11 @@ function replyClauses(text: string,context?:VerificationPolicyContext): { text: 
  * earlier calls, unknown intervening sentences or a different company. */
 function replySentences(text:string,context?:VerificationPolicyContext):{text:string;start:number;end:number}[]{
  const original=sentences(text),grouped:{text:string;start:number;end:number}[]=[];
- for(let index=0;index<original.length;index++){
-  const first=original[index],next=original[index+1];
-  const together=next?text.slice(first.start,next.end):'';
-  if(next&&investigationThenDocumentDelivery(together,context)){
-   grouped.push({text:together,start:first.start,end:next.end});index++;
-  }else grouped.push(first);
+ for(const sentence of original){
+  const previous=grouped.at(-1),together=previous?text.slice(previous.start,sentence.end):'';
+  if(previous&&(investigationThenDocumentDelivery(together,context)||isBoundedEpistemicFactAction(together,context))){
+   grouped[grouped.length-1]={text:together,start:previous.start,end:sentence.end};
+  }else grouped.push(sentence);
  }
  return grouped;
 }
@@ -719,7 +718,7 @@ export function assessReplyVerification(say: string, context: VerificationPolicy
   }
   // Preserve a fronted qualifier ("For PX20, we have a test report") before
   // splitting its comma into separate clauses and losing the product scope.
-  for(const sentence of sentences(say)){
+  for(const sentence of replySentences(say,context)){
     const coverage=assessDocumentProductCoverage(sentence.text,context,evidence);
     if(coverage?.verificationBoundary)add(sentence.text,sentence.start,'supplier_claim',coverage);
   }

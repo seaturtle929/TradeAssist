@@ -18,7 +18,7 @@ function fixture(company,linked=false){
   {id:'product',text:`${company.product} is one of our ${company.category} products.`},
   ...linked?[{id:'scope',text:`Approved ${company.report} ${company.id} explicitly covers ${company.name} ${company.product} ${company.category}. It records the inspection of the tested sample; it does not certify application suitability, guaranteed service life, or future batches.`}]:[],
  ];
- return {manufacturer:{id:company.name,name:company.name,products:company.product},sources,coachingRequest:{id:'synthetic',requestedAt:1},turns:[{role:'buyer',text:`Does your ${company.report} cover ${company.product}?`}]};
+ return {manufacturer:{id:company.name,name:company.name,products:company.product},sources,coachingRequest:{id:'synthetic',requestedAt:1},turns:[{role:'buyer',text:'Morgan speaking.'},{role:'buyer',text:`Does your ${company.report} cover ${company.product}?`}]};
 }
 for(const company of companies){
  const {product,report}=company;
@@ -42,10 +42,11 @@ for(const company of companies){
   }
  });
  for(const topic of ['this','that','it'])for(const punctuation of ['.',', Morgan.','—'])test(`${company.name}: neutral deictic courtesy ${topic}${punctuation}`,()=>{
-  const courtesy=`Thanks for asking about ${topic}${punctuation}`;
-  assert.equal(isConversationalAcknowledgment(courtesy.replace(/—$/,'')),true);
+  const courtesy=`Thanks for asking about ${topic}${punctuation}`,base=fixture(company);
+  const input={...base,turns:[{role:'buyer',text:'Morgan speaking.'},...base.turns]};
+  assert.equal(isConversationalAcknowledgment(courtesy.replace(/—$/,''),input),true);
   const say=`${courtesy} I'll check whether the ${report} covers ${product} and let you know.`;
-  assert.equal(needsFactCheck(say,fixture(company)),false);
+  assert.equal(needsFactCheck(say,input),false);
  });
  for(const suffix of [`that ${report} covering ${product}`,`that, which proves coverage`,`that ${report} that covers ${product}`,`that—our ${report} covers ${product}`])test(`${company.name}: courtesy retains attached premise ${suffix}`,()=>{
   const courtesy=`Thanks for asking about ${suffix}.`;
@@ -218,7 +219,7 @@ for(const company of companies){
   assert.equal(needsFactCheck(mixed,{...input,sources:[{id:'restricted',text:`The ${report} requires release approval.`}]}),true,'A neutral recipient never authorizes document release.');
  });
  test(`${company.name}: bare vocatives are neutral only for the actual identified current buyer`,()=>{
-  const base=fixture(company),name=company.product==='PX20'?'Morgan':'Priya';
+  const initial=fixture(company),base={...initial,turns:initial.turns.slice(-1)},name=company.product==='PX20'?'Morgan':'Priya';
   const input={...base,turns:[{role:'buyer',text:`${name} speaking.`},...base.turns]};
   for(const followThrough of ['get back to you before sending it','come back to you on that before sending it','confirm that with you before sending it']){
    const say=`${name}, I'll confirm whether the ${report} covers ${product} and ${followThrough}.`;

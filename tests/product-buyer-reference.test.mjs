@@ -98,3 +98,94 @@ test('Other numeric promises in the same reply retain their checks',()=>{
   assert.ok(result.unsupportedClaims.length,tail);
  }
 });
+
+for(const [company,literal,determiner] of [['Cedar Instruments','RX 73','the'],['Harbor Valve','ZK 81','your']])test('A literal spaced buyer scope target can be checked without turning it into a company fact: '+company,()=>{
+ const input={...context(`Can you confirm whether your inspection report covers ${literal}?`),manufacturer:{id:company,name:company,products:'inspection instruments'}};
+ const say=`I'll check whether that inspection report covers ${determiner} ${literal} and let you know.`;
+ const refs=buyerProductIdentifierReferences(say,input.turns[0].text);
+ assert.equal(refs.length,1);assert.equal(say.slice(refs[0].start,refs[0].end),literal);
+ assert.deepEqual(productIdentityReferences(say,[source]),[]);
+ const result=assessReplyVerification(say,input);
+ assert.equal(result.requiresVerification,false);assert.deepEqual(result.unsupportedClaims,[]);
+ assert.equal(result.locallyVerifiedWholeReply,false);assert.deepEqual(result.localEvidence,[]);
+ assert.equal(result.claims.some(claim=>claim.kind==='product_identity'),false);
+});
+
+test('Spaced buyer references preserve exact spelling and require a scope target in the buyer turn',()=>{
+ const ask='Does the inspection report cover RX 73?';
+ for(const alias of ['RX73','RX-73','RX–73','RX  73','RX\t73','RX\u00a073','rx 73','RX 74','RV 73','RX 730','RX 73A','RX 73-2026','RX 73.5']){
+  assert.deepEqual(buyerProductIdentifierReferences(`I'll check whether the report covers ${alias}.`,ask),[],alias);
+ }
+ assert.deepEqual(buyerProductIdentifierReferences("I'll check whether the report covers RX 73.",'Please CHECK RX 73.'),[]);
+ // The reference extractor does not authorize speech acts. The policy caller
+ // separately requires a bounded epistemic action before exempting its digits.
+ const reverse="I'll check whether RX 73 is covered by the inspection report.";
+ assert.equal(buyerProductIdentifierReferences(reverse,'Is RX 73 covered by your inspection report?').length,1);
+});
+
+test('Spaced ordinary words, quantities, units, standards and document numbers are never product references',()=>{
+ for(const literal of ['73 mm','73 kg','MM 73','KG 73','PSI 73','USD 73','CHECK 73','SEND 73','WITH 73','MODEL 73','GRADE 73','ISO 9001','ASTM 73','Al 2','IR 73']){
+  const document=literal==='IR 73';
+  const ask=document?'Please check inspection report IR 73.':`Does the report cover ${literal}?`;
+  const say=document?"I'll check inspection report IR 73.":`I'll check whether the report covers ${literal}.`;
+  assert.deepEqual(buyerProductIdentifierReferences(say,ask),[],literal);
+ }
+});
+
+test('Spaced references never authorize ownership, coverage assertions, free numbers or extra promises',()=>{
+ const input=context('Does the inspection report cover RX 73?');
+ for(const say of [
+  'The inspection report covers RX 73.',
+  "I'll check whether the report covers RX 73, and it does cover RX 73.",
+  "I'll check whether the report covers our RX 73.",
+  "I'll check whether our certified RX 73 is covered by the inspection report.",
+  "I'll check whether the report covers our standard RX 73.",
+  "I'll check whether the report covers 73.",
+  "I'll check whether the report covers RX 73. We can offer a 12% discount.",
+  "I'll check whether the report covers RX 73. We can ship in 3 days.",
+ ]){
+  const result=assessReplyVerification(say,input);
+  assert.ok(result.requiresVerification||result.unsupportedClaims.length,say);
+ }
+});
+
+test('Spaced references cannot be borrowed from an earlier buyer turn or another company context',()=>{
+ const input=context('Please check the report.');input.turns.unshift({role:'buyer',text:'Does the inspection report cover RX 73?'});
+ assert.ok(assessReplyVerification("I'll check whether the report covers RX 73.",input).unsupportedClaims.some(claim=>claim.kind==='number'));
+ const other=context('Does the inspection report cover ZK 81?');
+ assert.ok(assessReplyVerification("I'll check whether the report covers RX 73.",other).unsupportedClaims.some(claim=>claim.kind==='number'));
+});
+
+for(const literal of ['Rx 73','rx 73','Zk 81','zk 81'])test('ASR casing is preserved exactly in a bounded spaced-reference inquiry: '+literal,()=>{
+ const input=context(`Does the inspection report cover ${literal}?`),say=`I'll check whether the inspection report covers ${literal} and let you know.`;
+ const refs=buyerProductIdentifierReferences(say,input.turns[0].text);
+ assert.equal(refs.length,1);assert.equal(refs[0].text,literal);assert.equal(refs[0].buyerText,literal);
+ const result=assessReplyVerification(say,input);
+ assert.equal(result.requiresVerification,false);assert.deepEqual(result.unsupportedClaims,[]);
+ assert.equal(result.locallyVerifiedWholeReply,false);assert.deepEqual(result.localEvidence,[]);
+ for(const changed of [literal.toUpperCase(),literal.replace(' ','-'),literal.replace(' ','')]){
+  assert.deepEqual(buyerProductIdentifierReferences(`I'll check whether the report covers ${changed}.`,input.turns[0].text),[],changed);
+ }
+});
+
+test('Ordinary case-insensitive words and unit-bearing quantities do not gain the spaced-ID exemption',()=>{
+ for(const literal of ['all 73','Some 73','these 73','Those 73','our 73','your 73','over 73','Under 73','around 73','almost 73','batch 73','lot 73','check 73','Mm 73','kg 73']){
+  const ask=`Does the inspection report cover ${literal} items?`,say=`I'll check whether the inspection report covers ${literal} items.`;
+  assert.deepEqual(buyerProductIdentifierReferences(say,ask),[],literal);
+  assert.ok(assessReplyVerification(say,context(ask)).unsupportedClaims.some(claim=>claim.kind==='number'),literal);
+ }
+ const input=context('Does the report cover Rx 73?');
+ assert.ok(assessReplyVerification("I'll check whether the report covers Rx 73 mm.",input).unsupportedClaims.some(claim=>claim.kind==='number'),'The matched ID span cannot swallow a unit-bearing numeric claim');
+});
+
+test('Mixed-case spaced references do not authorize owned/certified items or mixed factual promises',()=>{
+ const input=context('Does the inspection report cover Rx 73?');
+ for(const say of [
+  "I'll check whether the inspection report covers our standard Rx 73.",
+  "I'll check whether our certified Rx 73 is covered by the inspection report.",
+  'The inspection report covers Rx 73.',
+  "I'll check whether the inspection report covers Rx 73, and it covers Rx 73.",
+  "I'll check whether the inspection report covers Rx 73. We can offer a 12% discount.",
+  "I'll check whether the inspection report covers Rx 73. We can ship in 3 days.",
+ ])assert.ok(assessReplyVerification(say,input).unsupportedClaims.length,say);
+});

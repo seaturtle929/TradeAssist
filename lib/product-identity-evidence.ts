@@ -7,6 +7,10 @@ export type ProductIdentityReference={text:string;start:number;end:number;canoni
 export type BuyerProductIdentifierReference={text:string;start:number;end:number;buyerText:string};
 const dash='\\-\\u2010-\\u2015\\u2212\\uFE63\\uFF0D';
 const tokenPattern=new RegExp(`(?<![a-z0-9_${dash}])[a-z]{1,6}(?:[${dash}])?\\d{1,6}[a-z]?(?![a-z0-9_${dash}]|[.,]\\d)`,'gi');
+// A literal ASR spelling such as "RX 73" is a buyer reference only. Keep this
+// grammar separate from source identities: it must never alias RX73 or RX-73.
+const spacedBuyerPattern=new RegExp(`(?<![A-Za-z0-9_${dash}])[A-Z]{2,6} \\d{1,6}(?![A-Za-z0-9_${dash}]|[.,]\\d)`,'gi');
+const nonProductCode=/^(?:ISO|EN|ASTM|DIN|IEC|UL|USD|EUR|GBP|RMB|CNY|KG|MG|LB|LBS|MM|CM|UM|PSI|BAR|MPA|KPA|HZ|KHZ|KW|MW|ML|AL|SI|FE|TI|NA|CA|MESH|GRADE|MODEL|CHECK|VERIFY|SEND|GIVE|COVER|COVERS|WITH|FROM|TO|FOR|AT|BY|IN|ON|OF|AND|OR|IF|THEN|ONLY|ABOUT|PLEASE|MOQ|ALL|SOME|ANY|EACH|EVERY|THE|THESE|THOSE|OUR|YOUR|THEIR|ITS|THAT|THIS|OVER|UNDER|AROUND|UPTO|NEAR|ALMOST|EXACT|LOT|BATCH|MORE|LESS|FEWER)$/;
 const joinPattern=new RegExp(`[${dash}]`,'g');
 const excluded=/^(?:ISO|EN|ASTM|DIN|IEC|UL)\d|^(?:Al2O3|SiO2|Fe2O3|TiO2|Na2O|CaO|MgO)$/i;
 const key=(text:string)=>text.replace(joinPattern,'').toUpperCase();
@@ -38,15 +42,30 @@ function sourceIdentities(sources:ProductIdentitySource[]):Map<string,string>{
  }
  return known;
 }
+function buyerIdentifierMatches(text:string,requireScopeTarget=false):RegExpMatchArray[]{
+ const spaced=[...text.matchAll(spacedBuyerPattern)].filter(match=>{
+  // Normalize only for this exclusion check. The returned spelling and the
+  // buyer/reply Set comparison below remain exactly case/space sensitive.
+  if(nonProductCode.test(match[0].split(' ')[0].toUpperCase()))return false;
+  if(!requireScopeTarget)return true;
+  const start=match.index||0,before=text.slice(0,start),after=text.slice(start+match[0].length);
+  // Establish the spaced code as the buyer's report-scope target, not an
+  // arbitrary upper-case word next to a quantity. The full reply's epistemic
+  // boundary is separately checked before any digit exemption is applied.
+  return /\b(?:reports?|documents?|specifications?|specs?|data\s*sheets?)\b[^.!?;:]{0,100}\b(?:covers?|appl(?:y|ies)\s+to|pertains?\s+to|relates?\s+to|matches?)\s+(?:(?:the|your|our|that|this|stated|requested|exact|standard|certified|approved|current)\s+)*$/i.test(before)
+   ||/^\s+(?:(?:is|was|would be)\s+)?(?:covered|addressed)\s+by\s+(?:(?:the|your|our|that|this|inspection|material|test|approved)\s+)*\b(?:report|document)\b/i.test(after);
+ });
+ return [...text.matchAll(tokenPattern),...spaced].sort((a,b)=>(a.index||0)-(b.index||0));
+}
 /** Identify only complete identifiers literally repeated from the current
  * buyer's words. Callers may exempt their embedded digits only inside a
  * separately validated, bounded offer to investigate; this helper cannot
  * establish that the company sells the item or that a report covers it.
  * Unknown IDs get no spelling, dash, prefix or numeric correction. */
 export function buyerProductIdentifierReferences(text:string,buyerText:string):BuyerProductIdentifierReference[]{
- const requested=new Set([...buyerText.matchAll(tokenPattern)].filter(match=>!excluded.test(key(match[0]))&&!explicitlyDocumentNumber(buyerText,match.index||0)).map(match=>match[0]));
+ const requested=new Set(buyerIdentifierMatches(buyerText,true).filter(match=>!excluded.test(key(match[0]))&&!explicitlyDocumentNumber(buyerText,match.index||0)).map(match=>match[0]));
  const references:BuyerProductIdentifierReference[]=[];
- for(const match of text.matchAll(tokenPattern)){
+ for(const match of buyerIdentifierMatches(text)){
   const start=match.index||0;
   if(!requested.has(match[0])||explicitlyDocumentNumber(text,start))continue;
   if(presupposesCompanyProductOwnership(text,start))continue;

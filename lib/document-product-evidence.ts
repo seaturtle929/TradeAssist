@@ -102,12 +102,21 @@ function bareDocumentAction(line:string){
 export function requestsDocumentProductCoverage(text:string):boolean {
  return !!documents(text).length&&/\?|\b(?:confirm|whether|if|need to know|tell me)\b/i.test(text)&&(relationWords(text)||/\b(?:report|sheet|certificate)\b.{0,55}\bfor\b/i.test(text));
 }
-const courtesyAction='(?:asking|(?:this|that|the|your) (?:question|update|clarification|information)|this|that|your time|your patience|raising that|checking|pointing that out|bringing that up|letting (?:me|us) know|keeping (?:me|us) informed|(?:sharing|explaining|clarifying|confirming|flagging|mentioning)(?: (?:that|this))?)';
+const courtesyAction='(?:asking|(?:this|that|the|your) (?:question|update|clarification|information)|this|that|your time|your patience|raising that|checking(?: in)?|pointing that out|bringing that up|letting (?:me|us) know|keeping (?:me|us) informed|(?:sharing|explaining|clarifying|confirming|flagging|mentioning)(?: (?:that|this))?)';
 const courtesyStart=new RegExp('^(?:(?:thanks|thank you)(?: for '+courtesyAction+')?|of course|understood|sure|okay|ok|got it|that makes sense|that helps|that[\'’]s helpful|I understand)(.*)$','i');
+function acknowledgmentVocativesKnown(text:string,context?:Context):boolean {
+ const leading=text.match(/^([A-Z][A-Za-z'-]*(?:\s+[A-Z][A-Za-z'-]*){0,2}),\s*(?=(?:thanks|thank you|understood|got it)\b)/)?.[1];
+ const trailing=text.match(/,\s*([A-Z][A-Za-z'-]*(?:\s+[A-Z][A-Za-z'-]*){0,2})[.!]?$/)?.[1];
+ const names=[leading,trailing].filter((name):name is string=>!!name);
+ if(!names.length)return true;
+ const participant=deriveCallParticipant(context?.turns||[]),known=participant.transferPending?undefined:participant.speakerName;
+ return !!known&&names.every(name=>name.toLowerCase()===known.toLowerCase());
+}
 /** Courtesy words describe the interaction, never an answer about the product.
  * Require the complete acknowledgment, including an optional name, so “thanks
  * for confirming the report covers…” cannot hide its factual proposition. */
 export function isConversationalAcknowledgment(text:string,context?:Context):boolean {
+ if(!acknowledgmentVocativesKnown(text.trim(),context))return false;
  const line=text.trim().replace(/[’‘]/g,"'").replace(/^[A-Z][A-Za-z'-]*(?:\s+[A-Z][A-Za-z'-]*){0,2},\s*(?=(?:thanks|thank you|understood|got it)\b)/,'');
  // A bare vocative is neutral only when this person actually identified
  // themselves in the current spoken exchange. An intended transfer target or
@@ -148,7 +157,7 @@ function reportsInvestigationResult(tail:string):boolean {
  if(!remainder)return true;
  return /^(?:that|it)(?: for you)?$/i.test(remainder)
   ||/^with\s+(?:that|it)$/i.test(remainder)
-  ||/^(?:(?:with|on)\s+)?(?:(?:that|this|the|an?)\s+)?(?:(?:clear|specific|detailed|written)\s+)?(?:confirmation|results?|details?|answer|information|update|findings|outcome|clarification)(?: for you)?$/i.test(remainder)
+  ||/^(?:(?:with|on)\s+)?(?:(?:that|this|the|an?)\s+)?(?:(?:clear|specific|detailed|written|exact|precise)\s+)?(?:confirmation|results?|details?|answer|information|update|findings|outcome|clarification)(?: for you)?$/i.test(remainder)
   ||/^on\s+(?:that|this|it|(?:the|its|that)\s+(?:scope|coverage|availability))$/i.test(remainder)
   ||/^what\s+(?:I|we)\s+(?:find(?: out)?|learn|discover)$/i.test(remainder)
   ||/^whether\s+(?:it|that)\s+(?:does|is covered)$/i.test(remainder);
@@ -157,8 +166,11 @@ function reportsInvestigationResult(tail:string):boolean {
  * This is a noun-premise guard, independent of the quantity scanner and buyer
  * spelling. “Our report covers RX73” owns the report, not the queried item. */
 function presupposesOwnedProduct(subject:string):boolean {
- const identifiers=/(?<![a-z0-9_-])[a-z]{1,6}-?\d{1,6}[a-z]?(?![a-z0-9_-]|[.,]\d)/gi;
- for(const identifier of subject.matchAll(identifiers)){
+ const compact=/(?<![a-z0-9_-])[a-z]{1,6}-?\d{1,6}[a-z]?(?![a-z0-9_-]|[.,]\d)/gi;
+ // A literal spaced buyer code is still not evidence that it is ours.
+ // Match literal casing without establishing a product alias or ownership.
+ const spaced=/(?<![a-zA-Z0-9_-])[A-Z]{2,6} \d{1,6}(?![a-zA-Z0-9_-]|[.,]\d)/gi;
+ for(const identifier of [...subject.matchAll(compact),...subject.matchAll(spaced)]){
   const prefix=subject.slice(0,identifier.index),owner=[...prefix.matchAll(/\bour\b/gi)].at(-1);
   if(!owner)continue;
   const relation=prefix.slice((owner.index||0)+owner[0].length);
@@ -170,6 +182,10 @@ function presupposesOwnedProduct(subject:string):boolean {
  }
  return false;
 }
+function investigationAcknowledgment(text:string,context?:Context):boolean {
+ if(!acknowledgmentVocativesKnown(text,context))return false;
+ return isConversationalAcknowledgment(text,context)||/^[Yy]es(?:,\s*[A-Z][A-Za-z'-]*(?:\s+[A-Z][A-Za-z'-]*){0,2})?[.!]$/.test(text);
+}
 /** One shared speech-act boundary for local fact classification and document
  * scope checks. Natural first-person investigation wording asserts no answer;
  * positive tails, commercial actions and timing do not inherit that status. */
@@ -177,6 +193,11 @@ export function isBoundedEpistemicFactAction(text:string,context?:Context):boole
  // A closed courtesy prefix changes neither the action nor its uncertainty.
  // Preserve everything after it so attached factual/timing claims still fail.
  let line=text.trim().replace(/[’‘]/g,"'");
+ // “Sure. I'll check whether…” accepts an investigation, not the unknown
+ // coverage. Only a complete following bounded inquiry can supply that sense;
+ // standalone assent and any attached factual predicate remain checked.
+ const preface=/^([^.!?]+[.!])\s+([\s\S]+)$/.exec(line);
+ if(preface&&investigationAcknowledgment(preface[1],context)&&isBoundedEpistemicFactAction(preface[2],context))return true;
  // An intra-token letter→digit dash is identifier typography, not a clause
  // boundary. This parses the inquiry only; identity/number evidence checks
  // still decide whether the referenced product is actually known.
