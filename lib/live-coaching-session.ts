@@ -1003,7 +1003,7 @@ export class LiveCoachingSession {
       this.repairDemand(buffer,assessment.unsupportedClaims.map(claim=>'Unsupported claim '+JSON.stringify(claim.text)+': '+claim.reason).join('; ')+' Rewrite the full useful move with the supported broad company category or applicable original evidence. Do not delete the subject and leave a vague question or repeat the unsupported predicate.',main.say);return;
     }
     if(!assessment.requiresVerification&&!needsFactCheck(main.say,buffer.work.context)) {
-      const verified:Guidance={...main,backup:"",evidence:assessment.locallyVerifiedWholeReply?assessment.localEvidence.map(({sourceId,quote})=>({sourceId,quote})):[],verified:true,verificationStatus:assessment.claims.length?'verified':'not_required'};
+      const verified:Guidance={...main,backup:"",evidence:assessment.locallyVerifiedWholeReply?assessment.localEvidence.map(({sourceId,quote})=>({sourceId,quote})):[],verified:true,verificationStatus:assessment.locallyVerifiedWholeReply||assessment.claims.some(claim=>claim.kind!=='product_identity')?'verified':'not_required'};
       buffer.checked=verified;buffer.checkedSay=main.say;this.finish(buffer,this.merge(buffer,verified),assessment.locallyVerifiedWholeReply||assessment.classification.kind!=='fact_request');return;
     }
     this.verifyMain(buffer,main);

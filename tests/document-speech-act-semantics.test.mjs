@@ -62,6 +62,8 @@ for(const company of companies){
    'It documents the inspection of the tested sample, but it does not guarantee suitability for your application.',
    'It documents the inspection of tested samples, but it does not guarantee suitability for your application.',
    `Our ${report} covers ${product}, but it does not certify future batches.`,
+   `The ${report} does not certify suitability, but it covers ${product}.`,
+   `The ${report} does not certify suitability and covers ${product}.`,
   ]){
    const result=assessDocumentProductCoverage(say,input,input.sources);
    assert.equal(result?.pending,true,say);
@@ -70,6 +72,54 @@ for(const company of companies){
    assert.equal(literalDocumentScopeEvidence(say,input,input.sources),undefined,'Content and singular→plural scope are not proven by a document link.');
   }
   assert.equal(assessDocumentProductCoverage(`The ${report} does not cover ${product}.`,input,input.sources)?.pending,undefined);
+  assert.equal(assessDocumentProductCoverage(`The ${report} certifies suitability, but it does not cover ${product}.`,input,input.sources)?.pending,undefined);
+  for(const joining of ['and', 'nor', ',']){
+   const negative=`The ${report} does not cover XX10 ${joining} ${product}.`;
+   assert.equal(assessDocumentProductCoverage(`The ${report} covers ${product}.`,input,[{id:'negative',text:negative}])?.pending,undefined,'Shared negation must survive coordinated product nouns.');
+   assert.equal(assessDocumentProductCoverage(negative,input,input.sources)?.pending,undefined,'A positive source cannot prove negative coordinated scope.');
+   assert.equal(literalDocumentScopeEvidence(`The ${report} covers ${product}.`,input,[...input.sources,{id:'negative',text:negative}]),undefined,'Another original’s coordinated exclusion blocks local proof.');
+  }
+  for(const line of [`The ${report} does not cover XX10 but covers ${product}.`,`The ${report} does not cover XX10, but it covers ${product}.`]){
+   assert.equal(literalDocumentScopeEvidence(`The ${report} covers XX10.`,input,[...input.sources,{id:'mixed',text:line}]),undefined);
+  }
+ });
+ for(const condition of ["Once that's confirmed","After it is checked",'When the scope has been verified'])test(`${company.name}: adjacent check and conditional document delivery remain one bounded move: ${condition}`,()=>{
+  const say=`I'll check if the ${report} covers ${product} and let you know. ${condition}, I'll send it over.`;
+  const parsed=investigationThenDocumentDelivery(say);
+  assert.equal(parsed?.document,report);
+  assert.equal(parsed?.deliveryCondition,'check_completion');
+  assert.equal(parsed?.conditionText,condition);
+  const input=fixture(company),assessment=assessReplyVerification(say,input);
+  assert.deepEqual(assessment.unsupportedClaims,[]);
+  assert.deepEqual(assessment.pendingClaims,[]);
+  assert.ok(assessment.supportedClaims.some(claim=>claim.sourceId==='availability'));
+  assert.equal(needsFactCheck(say,input),false);
+  assert.equal(needsFactCheck(`Thanks for that, Morgan. ${say}`,input),false);
+  for(const source of ['The report is unavailable.',`${report}s are available under NDA.`,`${report}s require manager approval.`])assert.equal(needsFactCheck(say,{...input,sources:[{id:'restriction',text:source}]}),true,source);
+  const conditional={...input,turns:[{role:'buyer',text:`Please only send the ${report} if it covers ${product}.`}]};
+  assert.equal(needsFactCheck(say,conditional),true,'Completing an inquiry does not assert its positive result.');
+  const explicit=`I'll check whether the ${report} covers ${product}. If it does, I will email it to you.`;
+  assert.equal(needsFactCheck(explicit,conditional),false,'An explicit positive condition preserves the buyer’s instruction.');
+ });
+ test(`${company.name}: a standalone or interrupted conditional pronoun has no inferred report authority`,()=>{
+  const input=fixture(company);
+  for(const say of [
+   "Once that's confirmed, I'll send it over.",
+   `I'll check whether the ${report} covers ${product}. We also provide free samples. Once that's confirmed, I'll send it over.`,
+   `I'll check whether the ${report} covers ${product}. Once that's confirmed, I'll ship it over.`,
+   `I'll check whether the ${report} covers ${product}. Once that's confirmed, I'll send it tomorrow.`,
+   `I'll check whether the ${report} covers ${product}. Once that's confirmed, I'll approve your discount.`,
+   `I'll check whether the ${report} covers ${product}. Once certification is approved, I'll send it over.`,
+   `I'll check whether the ${report} covers ${product}. Once that's confirmed, I'll send it over and guarantee suitability.`,
+  ])assert.equal(needsFactCheck(say,input),true,say);
+ });
+ test(`${company.name}: result follow-up can concern neutral details without asserting them`,()=>{
+  const input=fixture(company);
+  for(const object of ['the details','that information','the findings','a clear answer']){
+   const say=`Thanks for your question, Morgan. I'll check whether the ${report} covers ${product} and follow up with you on ${object}.`;
+   assert.equal(needsFactCheck(say,input),false,say);
+   assert.equal(needsFactCheck(say.replace(/\.$/,` that prove it covers ${product}.`),input),true,'Neutral nouns cannot hide an asserted answer.');
+  }
  });
  test(`${company.name}: literal support requires the entire same-source coverage proposition`,()=>{
   const input=fixture(company,true);

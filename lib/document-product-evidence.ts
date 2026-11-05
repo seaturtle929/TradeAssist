@@ -134,7 +134,7 @@ function reportsInvestigationResult(tail:string):boolean {
  if(!remainder)return true;
  return /^(?:that|it)(?: for you)?$/i.test(remainder)
   ||/^with\s+(?:that|it)$/i.test(remainder)
-  ||/^(?:with\s+)?(?:(?:that|this|the|an?)\s+)?(?:(?:clear|specific|detailed|written)\s+)?(?:confirmation|results?|details?|answer|information|update|findings|outcome|clarification)(?: for you)?$/i.test(remainder)
+  ||/^(?:(?:with|on)\s+)?(?:(?:that|this|the|an?)\s+)?(?:(?:clear|specific|detailed|written)\s+)?(?:confirmation|results?|details?|answer|information|update|findings|outcome|clarification)(?: for you)?$/i.test(remainder)
   ||/^on\s+(?:that|this|it|(?:the|its|that)\s+(?:scope|coverage|availability))$/i.test(remainder)
   ||/^what\s+(?:I|we)\s+(?:find(?: out)?|learn|discover)$/i.test(remainder)
   ||/^whether\s+(?:it|that)\s+(?:does|is covered)$/i.test(remainder);
@@ -202,18 +202,20 @@ export function isBoundedEpistemicFactAction(text:string):boolean {
  * different actions. The first two assert no coverage. The last still needs
  * availability and company permission; return its explicit referent so the
  * ordinary document-action checks can enforce those independently. */
-export function investigationThenDocumentDelivery(text:string):{investigation:string;document:string;deliveryCondition:'sequence_only'|'stated_condition';conditionText?:string}|undefined {
+export function investigationThenDocumentDelivery(text:string):{investigation:string;document:string;deliveryCondition:'sequence_only'|'stated_condition'|'check_completion';conditionText?:string}|undefined {
  const line=text.trim().replace(/[’‘]/g,"'");
  // A repeated subject is optional in a coordinated action (“I'll check ...
  // and then send it”). Sequence does NOT mean “only if it covers the product”.
  const continuation=/\s*,?\s+(?:and\s+)?then\s+(?:(?:I|we)(?:'ll|\s+(?:will|can|could))\s+)?(?:send|email|share|include|attach)\s+(?:it|that report|the report)(?:\s+(?:over|along|to you|for review))?[.!]?$/i.exec(line)
-  ||/\s*,?\s+and\s+((?:only\s+)?if\s+(?:it|that report|the report)\s+(?:does|covers?\s+(?:it|that product|your product|your mesh|the requirements)|matches?\s+(?:the|your)\s+requirements))\s*,?\s+(?:I|we)(?:'ll|\s+(?:will|can|could))\s+(?:send|email|share|include|attach)\s+(?:it|that report|the report)(?:\s+(?:over|along|to you|for review))?[.!]?$/i.exec(line);
+  ||/(?:\s*,?\s+and\s+|[.!]\s+)((?:only\s+)?if\s+(?:it|that report|the report)\s+(?:does|covers?\s+(?:it|that product|your product|your mesh|the requirements)|matches?\s+(?:the|your)\s+requirements))\s*,?\s+(?:I|we)(?:'ll|\s+(?:will|can|could))\s+(?:send|email|share|include|attach)\s+(?:it|that report|the report)(?:\s+(?:over|along|to you|for review))?[.!]?$/i.exec(line)
+  ||/[.!]\s+((?:once|after|when)\s+(?:that|it|the (?:scope|coverage|answer))(?:(?:'s|\s+is|\s+has been)\s+(?:checked|verified|confirmed)))\s*,\s*(?:I|we)(?:'ll|\s+(?:will|can|could))\s+(?:send|email|share|include|attach)\s+(?:it|that report|the report)(?:\s+(?:over|along|to you|for review))?[.!]?$/i.exec(line);
  if(!continuation)return;
  const investigation=line.slice(0,continuation.index).trim();
  if(!isBoundedEpistemicFactAction(investigation))return;
  const referents=documents(investigation);
  if(referents.length!==1||! /report$/.test(referents[0].kind))return;
- return {investigation,document:referents[0].kind,deliveryCondition:continuation[1]?'stated_condition':'sequence_only',...(continuation[1]?{conditionText:continuation[1]}:{})};
+ const deliveryCondition=continuation[1]?/^(?:once|after|when)\b/i.test(continuation[1])?'check_completion':'stated_condition':'sequence_only';
+ return {investigation,document:referents[0].kind,deliveryCondition,...(continuation[1]?{conditionText:continuation[1]}:{})};
 }
 
 /** Negation of report coverage differs from a limitation on what the report
@@ -221,7 +223,20 @@ export function investigationThenDocumentDelivery(text:string):{investigation:st
  * does not negate the report→product relationship asserted earlier. */
 function coverageNegated(text:string,document?:ReturnType<typeof documents>[number],scope?:Scope):boolean {
  const product=scope&&productPosition(text,scope);
- if(document&&product)return negative.test(text.slice(0,Math.max(document.end,product.end)));
+ if(document&&product){
+  if(product.start<document.end)return negative.test(text.slice(0,Math.max(document.end,product.end)));
+  // In “does not certify suitability, but it covers PX20”, only the latter
+  // predicate establishes scope. Negation in an earlier coordinated predicate
+  // remains part of the content claim, never a negation of this relationship.
+  const scopePrefix=text.slice(document.end,product.start);
+  // A coordinator resets polarity only when it starts a new explicit scope
+  // predicate. In “does not cover PX10 and PX20” the negative verb governs
+  // both product nouns; a comma/nor/list item cannot erase that negation.
+  const newPredicate=/(?:[,;]\s*(?:(?:but|however|and)\s+)?|\b(?:but|however|and)\s+)(?=(?:(?:it|this|that)\s+)?(?:(?:does|do|is|are|doesn't|don't|isn't|aren't)\s+)?(?:(?:not|never)\s+)?(?:(?:explicitly|specifically)\s+)?(?:covers?|appl(?:y|ies|icable)|pertains?|relates?|corresponds?|includes?|contains?|for)\b)/gi;
+  const boundary=[...scopePrefix.matchAll(newPredicate)].at(-1);
+  const predicate=boundary?scopePrefix.slice((boundary.index||0)+boundary[0].length):scopePrefix;
+  return negative.test(predicate)||/\bno\s*$/i.test(text.slice(0,document.start));
+ }
  return /\b(?:does\s+not|doesn't|do\s+not|don't|never|cannot|can't)\s+(?:(?:explicitly|specifically)\s+)?(?:cover|apply|pertain|relate|correspond|include|contain)\b|\b(?:is\s+not|isn't|are\s+not|aren't)\s+(?:for|applicable|specific|relevant|related)\b/i.test(text);
 }
 

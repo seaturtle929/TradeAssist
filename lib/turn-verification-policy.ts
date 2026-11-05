@@ -177,7 +177,7 @@ function sentences(text: string): { text: string; start: number; end: number }[]
 }
 
 function replyClauses(text: string): { text: string; start: number; end: number }[] {
-  return sentences(text).flatMap(sentence => {
+  return replySentences(text).flatMap(sentence => {
     // Preserve a closed check → (possibly result-conditional) document send.
     // Cutting “if it does, I will send it” at the second comma would invent an
     // unfinished coverage assertion; the combined action still gets source
@@ -194,6 +194,21 @@ function replyClauses(text: string): { text: string; start: number; end: number 
     parts.push({ text: sentence.text.slice(offset), start: sentence.start + offset, end: sentence.end });
     return parts.filter(part => part.text.trim());
   });
+}
+
+/** A following pronoun may refer to exactly one preceding bounded report
+ * check. Keep that closed action pair together; never borrow a referent from
+ * earlier calls, unknown intervening sentences or a different company. */
+function replySentences(text:string):{text:string;start:number;end:number}[]{
+ const original=sentences(text),grouped:{text:string;start:number;end:number}[]=[];
+ for(let index=0;index<original.length;index++){
+  const first=original[index],next=original[index+1];
+  const together=next?text.slice(first.start,next.end):'';
+  if(next&&investigationThenDocumentDelivery(together)){
+   grouped.push({text:together,start:first.start,end:next.end});index++;
+  }else grouped.push(first);
+ }
+ return grouped;
 }
 
 function evidenceForNumber(number: string, clause: string, evidence: Evidence[]): Evidence | undefined {
@@ -268,7 +283,7 @@ function conversationalClause(text:string):boolean {
  * normal source check, and hard company/context vetoes always win. */
 export function isNonAssertiveReply(say:string,claims:ReplyFactClaim[]):boolean {
  if(claims.some(claim=>!claim.supported||(claim.kind!=='product_identity'&&(claim.kind!=='supplier_claim'||claim.reason!==AVAILABLE_DOCUMENT_ACTION))))return false;
- const parts=sentences(say);
+ const parts=replySentences(say);
  return !!parts.length&&parts.every(sentence=>unresolvedFactCheck(sentence.text)||replyClauses(sentence.text).every(local=>{
   const part={...local,start:sentence.start+local.start};
   return unresolvedFactCheck(part.text)||conversationalClause(part.text)||claims.some(claim=>claim.start===part.start&&claim.text===part.text&&claim.reason===AVAILABLE_DOCUMENT_ACTION);
@@ -411,7 +426,7 @@ function technicalSupportAssertion(clause:string,context:VerificationPolicyConte
  if(delivery){
   const buyer=latestBuyerText(context).replace(/[’‘]/g,"'");
   const buyerConditionedSend=/\b(?:only\s+(?:send|email|share|forward)\b[^.!?]{0,70}\bif|(?:do not|don't)\s+(?:send|email|share|forward)\b[^.!?]{0,70}\bunless)\b[^.!?]{0,75}\b(?:covers?|matches?|applies?)\b/i.test(buyer);
-  if(buyerConditionedSend&&delivery.deliveryCondition==='sequence_only')return {supported:false,reason:'The buyer made document delivery conditional on the report matching their product. Checking and then sending is only an action sequence; preserve the buyer’s explicit condition instead of promising delivery regardless of the result.'};
+  if(buyerConditionedSend&&delivery.deliveryCondition!=='stated_condition')return {supported:false,reason:'The buyer made document delivery conditional on the report matching their product. Checking and then sending is only an action sequence; preserve the buyer’s explicit condition instead of promising delivery regardless of the result.'};
   // “That report” can carry the one explicit report type in the current
   // buyer's request. Resolve the referent from their words, never from whichever
   // report happens to be available in the catalog or a previous company.

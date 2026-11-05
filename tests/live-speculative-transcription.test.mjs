@@ -163,6 +163,16 @@ test('Closed source proof waits for canonical final, then publishes with its ori
  }finally{t.session.stop();}
 });
 
+test('Recognizing a product name inside an offer to check does not label unknown report coverage as fact-checked',async()=>{
+ const t=fixture();try{
+  t.context.sources=[{id:'product',text:'PX20 is an inspection instrument.'}];
+  await t.speculate('Does the inspection report cover PX20?');t.finish(t.created(),"I'll check whether the inspection report covers PX20 and let you know.");
+  t.final('buyer','Does the inspection report cover PX20?');await sleep(20);
+  assert.equal(t.log.verified.length,0);assert.equal(t.log.shown.length,1);
+  assert.equal(t.log.shown[0].value.verificationStatus,'not_required');assert.deepEqual(t.log.shown[0].value.evidence,[]);
+ }finally{t.session.stop();}
+});
+
 test('A short ASR stability window lets a multi-sentence burst finish before spending the one hidden attempt',async()=>{
  const t=fixture();try{
   t.start('buyer');t.request();t.stop('buyer');t.partial('buyer','Hi, this is Priya.');await sleep(10);
