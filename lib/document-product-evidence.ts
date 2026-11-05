@@ -153,6 +153,23 @@ function reportsInvestigationResult(tail:string):boolean {
   ||/^what\s+(?:I|we)\s+(?:find(?: out)?|learn|discover)$/i.test(remainder)
   ||/^whether\s+(?:it|that)\s+(?:does|is covered)$/i.test(remainder);
 }
+/** Uncertainty about coverage does not make “our certified RX73” uncertain.
+ * This is a noun-premise guard, independent of the quantity scanner and buyer
+ * spelling. “Our report covers RX73” owns the report, not the queried item. */
+function presupposesOwnedProduct(subject:string):boolean {
+ const identifiers=/(?<![a-z0-9_-])[a-z]{1,6}-?\d{1,6}[a-z]?(?![a-z0-9_-]|[.,]\d)/gi;
+ for(const identifier of subject.matchAll(identifiers)){
+  const prefix=subject.slice(0,identifier.index),owner=[...prefix.matchAll(/\bour\b/gi)].at(-1);
+  if(!owner)continue;
+  const relation=prefix.slice((owner.index||0)+owner[0].length);
+  if(/[.!?;:]/.test(relation))continue;
+  const referents=documents(relation),document=referents[0];
+  const reportPredicate=document&&referents.length===1&&/^\s*$/.test(relation.slice(0,document.start))
+   &&/^\s+(?:(?:does|do|explicitly|directly|currently|actually)\s+)*(?:covers?|appl(?:y|ies)\s+to|pertains?\s+to|relates?\s+to|matches?)\s+(?:(?:the|your|that|this|stated|requested|exact)\s+)*$/i.test(relation.slice(document.end));
+  if(!reportPredicate)return true;
+ }
+ return false;
+}
 /** One shared speech-act boundary for local fact classification and document
  * scope checks. Natural first-person investigation wording asserts no answer;
  * positive tails, commercial actions and timing do not inherit that status. */
@@ -190,6 +207,7 @@ export function isBoundedEpistemicFactAction(text:string,context?:Context):boole
  // Only the closed communication/ordering suffix above may consume a comma.
  // Punctuation anywhere in the unresolved predicate remains conservative.
  if(/,/.test(subject))return false;
+ if(presupposesOwnedProduct(subject))return false;
  if(/^(?:whether|if|which|what)\b\s+\S/i.test(subject)){
   // Uncertainty about a predicate does not erase a qualified noun inside it:
   // “what our PX20 report contains” already says that this report exists for
