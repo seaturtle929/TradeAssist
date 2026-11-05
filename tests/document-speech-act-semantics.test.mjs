@@ -168,6 +168,60 @@ for(const company of companies){
    assert.equal(needsFactCheck(say.replace(/\.$/,` that prove it covers ${product}.`),input),true,'Neutral nouns cannot hide an asserted answer.');
   }
  });
+ test(`${company.name}: neutral result recipients can precede or follow the result without asserting coverage`,()=>{
+  const input=fixture(company);
+  for(const action of [
+   'confirm that with you',
+   'confirm it to you',
+   'confirm the details with you',
+   'confirm with you that',
+   'confirm to you the result',
+   'confirm back that with them',
+   'report back with the findings to you',
+  ]){
+   const say=`Thanks for letting me know. I'll check if the ${report} covers ${product} and ${action} before sending it.`;
+   const result=assessReplyVerification(say,input);
+   assert.deepEqual(result.unsupportedClaims,[],say);
+   assert.deepEqual(result.pendingClaims,[],say);
+   assert.equal(needsFactCheck(say,input),false,say);
+  }
+  for(const action of [
+   `confirm that it covers ${product} with you`,
+   `confirm with you that it covers ${product}`,
+   'confirm certification with you',
+   'confirm the approved discount with you',
+   'confirm that with you tomorrow',
+   'confirm that with you and guarantee suitability',
+   'confirm the details that prove coverage with you',
+   'confirm that with you and then ship it',
+  ])assert.equal(needsFactCheck(`I'll check whether the ${report} covers ${product} and ${action}.`,input),true,action);
+  const mixed=`I'll check whether the ${report} covers ${product} and confirm that with you. Once that's confirmed, I'll send it over.`;
+  assert.equal(needsFactCheck(mixed,{...input,sources:[{id:'restricted',text:`The ${report} requires release approval.`}]}),true,'A neutral recipient never authorizes document release.');
+ });
+ test(`${company.name}: bare vocatives are neutral only for the actual identified current buyer`,()=>{
+  const base=fixture(company),name=company.product==='PX20'?'Morgan':'Priya';
+  const input={...base,turns:[{role:'buyer',text:`${name} speaking.`},...base.turns]};
+  for(const followThrough of ['get back to you before sending it','come back to you on that before sending it','confirm that with you before sending it']){
+   const say=`${name}, I'll confirm whether the ${report} covers ${product} and ${followThrough}.`;
+   const assessment=assessReplyVerification(say,input);
+   assert.deepEqual(assessment.unsupportedClaims,[],say);
+   assert.deepEqual(assessment.pendingClaims,[],say);
+   assert.equal(needsFactCheck(say,input),false,say);
+   assert.equal(needsFactCheck(say,base),true,'A suggested or intended name without a current spoken identity is not presumed verified.');
+  }
+  const safe=`${name}, I'll check whether the ${report} covers ${product} and let you know.`;
+  const pendingTransfer={...base,turns:[{role:'buyer',text:`One moment, I'll put you through to ${name}.`} ]};
+  assert.equal(needsFactCheck(safe,pendingTransfer),true,'A transfer target has not picked up.');
+  const newSpeaker={...input,turns:[...input.turns,{role:'buyer',text:"I'll transfer you to Jordan."},{role:'buyer',text:'Jordan speaking.'}]};
+  assert.equal(needsFactCheck(safe,newSpeaker),true,'A former participant does not authorize addressing the new speaker by their name.');
+  for(const prefix of ['Guaranteed','Certified','Approved','UnverifiedPerson'])assert.equal(needsFactCheck(safe.replace(name+',',prefix+','),input),true,prefix);
+  for(const say of [
+   `${name}, the ${report} covers ${product}.`,
+   `${name}, I'll check whether the ${report} covers ${product}, but it is certified.`,
+   `${name}, I'll confirm that the ${report} covers ${product}.`,
+   `${name}, I'll check whether the ${report} covers ${product} and approve your discount.`,
+  ])assert.equal(needsFactCheck(say,input),true,say);
+ });
  test(`${company.name}: literal support requires the entire same-source coverage proposition`,()=>{
   const input=fixture(company,true);
   for(const say of [`The ${report} covers ${product}.`,`Yes, our approved ${report} explicitly covers ${product}.`,`The ${report} ${company.id} covers ${product}.`]){

@@ -1,5 +1,6 @@
 import {canonicalizeKnownProductIdentifiers} from './product-identity-evidence.ts';
 import {availableDocumentActionEvidence} from './document-availability-evidence.ts';
+import {deriveCallParticipant} from './call-participant.ts';
 
 /** Document availability and product coverage are different propositions.
  * A scope claim must have its own original document→product relationship;
@@ -106,8 +107,17 @@ const courtesyStart=new RegExp('^(?:(?:thanks|thank you)(?: for '+courtesyAction
 /** Courtesy words describe the interaction, never an answer about the product.
  * Require the complete acknowledgment, including an optional name, so “thanks
  * for confirming the report covers…” cannot hide its factual proposition. */
-export function isConversationalAcknowledgment(text:string):boolean {
+export function isConversationalAcknowledgment(text:string,context?:Context):boolean {
  const line=text.trim().replace(/[’‘]/g,"'").replace(/^[A-Z][A-Za-z'-]*(?:\s+[A-Z][A-Za-z'-]*){0,2},\s*(?=(?:thanks|thank you|understood|got it)\b)/,'');
+ // A bare vocative is neutral only when this person actually identified
+ // themselves in the current spoken exchange. An intended transfer target or
+ // a capitalized assertion such as “Guaranteed,” cannot supply that evidence.
+ const vocative=line.match(/^([A-Z][A-Za-z'-]*(?:\s+[A-Z][A-Za-z'-]*){0,2})[,!.]?$/)?.[1];
+ if(vocative&&context?.turns?.length){
+  const participant=deriveCallParticipant(context.turns);
+  const known=participant.transferPending?undefined:participant.speakerName;
+  if(known&&vocative.toLowerCase()===known.toLowerCase())return true;
+ }
  // A closed salutation asserts no product fact. Participant and identity
  // validation still decide whether this is the person the rep may address.
  if(/^(?:[Hh]i|[Hh]ello)(?:(?:,\s*|\s+)[A-Z][A-Za-z'-]*(?:\s+[A-Z][A-Za-z'-]*){0,2})?[.!]?$/.test(line))return true;
@@ -130,7 +140,11 @@ function reportsInvestigationResult(tail:string):boolean {
  const action=/^and\s+(?:(?:(?:I|we)(?:'ll|\s+(?:will|can))|will|can)\s+)?(?:(?:get|come) back to (?:you|them)|let (?:you|them|him|her) know|tell (?:you|them|him|her)|report back(?: to (?:you|them))?|follow up(?: with (?:you|them))?|confirm(?: back)?(?: (?:with|to) (?:you|them))?)\b/i.exec(tail);
  if(!action)return false;
  const remainder=tail.slice(action[0].length).trim().replace(/(?:\s*,)?\s*\bbefore\s+(?:(?:sending|emailing)(?:\s+(?:it|them|anything|the documents))?|(?:I|we)\s+(?:send|email)(?:\s+(?:it|them|anything|the documents))?)(?: over)?$/i,'')
-  .replace(/(?:\s*,)?\s*\b(?:once|after|when)\s+(?:(?:I|we)\s+have\s+(?:that|the|an?)\s+(?:answer|information|results?|confirmation)|(?:I|we)(?:'ve| have)\s+(?:checked|verified|confirmed)\s+(?:it|that|the (?:scope|coverage)))$/i,'').trim();
+  .replace(/(?:\s*,)?\s*\b(?:once|after|when)\s+(?:(?:I|we)\s+have\s+(?:that|the|an?)\s+(?:answer|information|results?|confirmation)|(?:I|we)(?:'ve| have)\s+(?:checked|verified|confirmed)\s+(?:it|that|the (?:scope|coverage)))$/i,'')
+  // A recipient can precede or follow the neutral result object: “confirm
+  // with you that” / “confirm that with you”. Remove only a terminal recipient;
+  // the complete remaining object must still be a closed unresolved result.
+  .replace(/\s+(?:for|with|to)\s+(?:you|them|him|her)$/i,'').trim();
  if(!remainder)return true;
  return /^(?:that|it)(?: for you)?$/i.test(remainder)
   ||/^with\s+(?:that|it)$/i.test(remainder)
@@ -142,7 +156,7 @@ function reportsInvestigationResult(tail:string):boolean {
 /** One shared speech-act boundary for local fact classification and document
  * scope checks. Natural first-person investigation wording asserts no answer;
  * positive tails, commercial actions and timing do not inherit that status. */
-export function isBoundedEpistemicFactAction(text:string):boolean {
+export function isBoundedEpistemicFactAction(text:string,context?:Context):boolean {
  // A closed courtesy prefix changes neither the action nor its uncertainty.
  // Preserve everything after it so attached factual/timing claims still fail.
  let line=text.trim().replace(/[’‘]/g,"'");
@@ -150,7 +164,7 @@ export function isBoundedEpistemicFactAction(text:string):boolean {
  // boundary. This parses the inquiry only; identity/number evidence checks
  // still decide whether the referenced product is actually known.
  line=line.replace(/([A-Za-z])[\u2010-\u2015\u2212\uFE63\uFF0D](?=\d)/g,'$1-');
- const courtesyEnd=[...line.matchAll(/[,;:—–-]/g)].filter(match=>isConversationalAcknowledgment(line.slice(0,match.index))).at(-1)?.index;
+ const courtesyEnd=[...line.matchAll(/[,;:—–-]/g)].filter(match=>isConversationalAcknowledgment(line.slice(0,match.index),context)).at(-1)?.index;
  if(courtesyEnd!==undefined)line=line.slice(courtesyEnd+1).trim();
  const investigation=/^(?:(?:I|we)(?:'ll|\s+(?:can|will|would|must))\s+|(?:I|we)\s+(?:need|have) to\s+|let (?:me|us)\s+|(?:can|could|may|should|would)\s+(?:I|we)\s+)(?:(?:definitely|certainly|personally)\s+)?(?:(?:need|have) to\s+)?(?:(?:definitely|certainly|personally)\s+)?(?:check|double[- ]?check|verify|confirm|find out|look into)\s+/i.exec(line);
  const reservation=/^(?:I|we)\s+(?:(?:cannot|can't|do not|don't)\s+(?:confirm|verify|know|say)|(?:have not|haven't)\s+(?:confirmed|verified|established))\s+/i.exec(line);
@@ -202,7 +216,7 @@ export function isBoundedEpistemicFactAction(text:string):boolean {
  * different actions. The first two assert no coverage. The last still needs
  * availability and company permission; return its explicit referent so the
  * ordinary document-action checks can enforce those independently. */
-export function investigationThenDocumentDelivery(text:string):{investigation:string;document:string;deliveryCondition:'sequence_only'|'stated_condition'|'check_completion';conditionText?:string}|undefined {
+export function investigationThenDocumentDelivery(text:string,context?:Context):{investigation:string;document:string;deliveryCondition:'sequence_only'|'stated_condition'|'check_completion';conditionText?:string}|undefined {
  const line=text.trim().replace(/[’‘]/g,"'");
  // A repeated subject is optional in a coordinated action (“I'll check ...
  // and then send it”). Sequence does NOT mean “only if it covers the product”.
@@ -211,7 +225,7 @@ export function investigationThenDocumentDelivery(text:string):{investigation:st
   ||/[.!]\s+((?:once|after|when)\s+(?:that|it|the (?:scope|coverage|answer))(?:(?:'s|\s+is|\s+has been)\s+(?:checked|verified|confirmed)))\s*,\s*(?:I|we)(?:'ll|\s+(?:will|can|could))\s+(?:send|email|share|include|attach)\s+(?:it|that report|the report)(?:\s+(?:over|along|to you|for review))?[.!]?$/i.exec(line);
  if(!continuation)return;
  const investigation=line.slice(0,continuation.index).trim();
- if(!isBoundedEpistemicFactAction(investigation))return;
+ if(!isBoundedEpistemicFactAction(investigation,context))return;
  const referents=documents(investigation);
  if(referents.length!==1||! /report$/.test(referents[0].kind))return;
  const deliveryCondition=continuation[1]?/^(?:once|after|when)\b/i.test(continuation[1])?'check_completion':'stated_condition':'sequence_only';
@@ -284,7 +298,7 @@ export function assessDocumentProductCoverage(clause:string,context:Context,sour
  // Explicit uncertainty is a commitment to investigate, never a positive or
  // negative assertion about report scope. Appended assertions are assessed in
  // their own clause by the normal verification policy.
- if(isBoundedEpistemicFactAction(line)||investigationThenDocumentDelivery(line))return;
+ if(isBoundedEpistemicFactAction(line,context)||investigationThenDocumentDelivery(line,context))return;
  if(/^(?:does|do|is|are|can|could|would|will|which|what|how|whether)\b/i.test(line)&&/\?\s*$/.test(line)&&! /\b(?:our|the)\s+[a-z]+\d+[^?]{0,30}\b(?:reports?|sheets?|certificates?)\b/i.test(line))return;
  const ownDocuments=documents(line),buyerDocuments=documents(buyer);
  const assent=asked&&/^\s*(?:yes|correct|exactly|absolutely|certainly|sure|it does|that does|we do)\b/i.test(line);
