@@ -105,7 +105,9 @@ export function requestsDocumentProductCoverage(text:string):boolean {
 const courtesyAction='(?:asking|(?:this|that|the|your) (?:question|update|clarification|information)|this|that|your time|your patience|raising that|checking(?: in)?|pointing that out|bringing that up|letting (?:me|us) know|keeping (?:me|us) informed|(?:sharing|explaining|clarifying|confirming|flagging|mentioning)(?: (?:that|this))?)';
 const courtesyStart=new RegExp('^(?:(?:thanks|thank you)(?: for '+courtesyAction+')?|of course|understood|sure|okay|ok|got it|that makes sense|that helps|that[\'’]s helpful|I understand)(.*)$','i');
 function acknowledgmentVocativesKnown(text:string,context?:Context):boolean {
- const leading=text.match(/^([A-Z][A-Za-z'-]*(?:\s+[A-Z][A-Za-z'-]*){0,2}),\s*(?=(?:thanks|thank you|understood|got it)\b)/)?.[1];
+ // A salutation is not part of the participant's name. The remaining name
+ // still has to match the actual speaker; “Hi Guaranteed” is not an exemption.
+ const leading=text.match(/^([A-Z][A-Za-z'-]*(?:\s+[A-Z][A-Za-z'-]*){0,2}),\s*(?=(?:thanks|thank you|understood|got it)\b)/)?.[1].replace(/^(?:Hi|Hello)\s+/,'');
  const trailing=text.match(/,\s*([A-Z][A-Za-z'-]*(?:\s+[A-Z][A-Za-z'-]*){0,2})[.!]?$/)?.[1];
  const names=[leading,trailing].filter((name):name is string=>!!name);
  if(!names.length)return true;

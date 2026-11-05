@@ -17,6 +17,20 @@ for(const fixture of [
   assert.equal(needsFactCheck(say,context),false);
   assert.deepEqual(assessReplyVerification(say,context).unsupportedClaims,[]);
  });
+ for(const greeting of ['Hi','Hello'])test(`${name}: salutation plus courtesy binds only the actual participant ${greeting}`,()=>{
+  const courtesy=`${greeting} Morgan, thanks for your question.`;
+  assert.equal(isConversationalAcknowledgment(courtesy,context),true);
+  assert.equal(needsFactCheck(`${courtesy} I'll check whether the ${report} covers ${product}.`,context),false);
+  const supported={...context,sources:[...context.sources,{id:'scope',text:`Our ${report} explicitly covers ${product}.`}]};
+  const factual=`${courtesy} Yes, our ${report} explicitly covers ${product}.`;
+  assert.equal(needsFactCheck(factual,supported),false);
+  assert.equal(needsFactCheck(factual,context),true,'Courtesy does not establish coverage.');
+  for(const label of ['Guaranteed','Certified','Unknown Person']){
+   const unsafe=`${greeting} ${label}, thanks for your question.`;
+   assert.equal(isConversationalAcknowledgment(unsafe,context),false);
+   assert.equal(needsFactCheck(`${unsafe} I'll check whether the ${report} covers ${product}.`,context),true);
+  }
+ });
  for(const result of ['follow up with the exact details','get back to you with a precise answer','confirm the exact findings with you','report back with specific information','let you know the detailed outcome'])test(`${name}: bounded follow-through reports an unknown result ${result}`,()=>{
   const say=`I'll confirm whether the ${report} covers ${product} and ${result}.`;
   assert.equal(isBoundedEpistemicFactAction(say,context),true);
