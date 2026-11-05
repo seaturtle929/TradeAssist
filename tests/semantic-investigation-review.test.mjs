@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {assessReplyVerification} from '../lib/turn-verification-policy.ts';
+import {assessReplyVerification,hasAffirmativeOutgoingDocumentAction,isAwaitingBuyerDocumentReceipt} from '../lib/turn-verification-policy.ts';
 import {checkSuggestion} from '../lib/call-purpose.ts';
 import {mainLineCheckInput} from '../lib/claim-check.ts';
 import {onDemandDecisionRules,onDemandSuggestionProblems} from '../lib/on-demand-coaching.ts';
@@ -22,10 +22,11 @@ for(const company of companies){
   assert.deepEqual(assessment.unsupportedClaims,[]);assert.ok(assessment.pendingClaims.length);assert.ok(assessment.pendingClaims.every(claim=>claim.verificationKind==='speech_act'));assert.equal(assessment.requiresVerification,true);assert.equal(assessment.sanitizedReply,say);
   assert.equal(checkSuggestion({say},context,{factChecked:true}).ok,true,'A successful semantic verdict is not rejected again by the same local grammar.');
   assert.equal(mainLineCheckInput(say,context).references.length,2,'Speech-act uncertainty preserves all original references, including any accompanying fact support.');
+  assert.ok(mainLineCheckInput(say,context).input.pendingClaims.every(claim=>claim.verificationKind==='speech_act'),'The existing checker receives the reason for semantic review, not a mislabeled positive coverage finding.');
   const run=controller(context,say,{verified:true,verificationStatus:'not_required',evidence:[]});
   try{await new Promise(resolve=>setImmediate(resolve));assert.deepEqual(run.shown,[say]);assert.equal(run.verificationCalls,1);assert.equal(run.sent.filter(event=>event.type==='response.create').length,1);assert.equal(run.traces.filter(event=>event.event==='repair_requested').length,0);}finally{run.session.stop();}
  });
- for(const say of [`I'll confirm if the ${company.report} covers ZX72 once we review your drawing, and if it does, I'll send the report as requested.`,`Once we review your drawing and confirm the ${company.report} covers that ZX72 reference, I'll reply with the report as requested.`])test(`${company.name}: an unparsed positive-result condition uses the existing whole-line check: ${say}`,async()=>{
+ for(const say of [`I'll confirm if the ${company.report} covers ZX72 once we review your drawing, and if it does, I'll send the report as requested.`,`Once we review your drawing and confirm the ${company.report} covers that ZX72 reference, I'll reply with the report as requested.`,`We'll confirm whether the ${company.report} covers ZX72 once we review your drawing. If it does, we'll reply with the report as requested.`,`Once we review the drawing and confirm that the ${company.report} covers ZX72, we'll reply with it as you requested. We'll be looking out for your email.`])test(`${company.name}: an unparsed positive-result condition uses the existing whole-line check: ${say}`,async()=>{
   const context=fixture(company);context.turns.at(-1).text="I'll email the drawing. Once you're sure the report matches, reply with it.";
   const assessment=assessReplyVerification(say,context);assert.deepEqual(assessment.unsupportedClaims,[]);assert.ok(assessment.pendingClaims.some(claim=>claim.verificationKind==='speech_act'));assert.equal(assessment.sanitizedReply,say);
   const run=controller(context,say,{verified:true,verificationStatus:'verified',evidence:[{sourceId:'availability',quote:context.sources[0].text}]});
@@ -48,9 +49,18 @@ for(const company of companies){
  test(`${company.name}: a newly stated send restriction needs its own acknowledgment`,()=>{
   const context=fixture(company);context.turns.push({id:'hold',role:'buyer',text:'Actually, do not send anything until my engineer approves the drawing revision.'});context.coachingRequest.listeningSession.currentTurnIds.push('hold');
   assert.match(onDemandDecisionRules(context),/CURRENT BUYER RELEASE RESTRICTION/);
+  assert.deepEqual(mainLineCheckInput(`We'll check whether the ${company.report} covers your reference.`,context).input.buyerReleaseConstraints,{scope:false,approval:true,approver:'engineering',hold:false,unresolved:false});
   assert.ok(onDemandSuggestionProblems(`We'll check whether the ${company.report} covers your reference.`,context).some(reason=>/current restriction/.test(reason)));
   assert.deepEqual(onDemandSuggestionProblems(`We'll check whether the ${company.report} covers your reference and wait for your engineer's approval before sending anything.`,context),[]);
   context.turns.at(-1).text="I can email the drawing. Actually, don't send anything until my engineer approves the drawing revision.";
   assert.deepEqual(onDemandSuggestionProblems("Of course. We'll wait for your engineer's approval before sending anything.",context),[],'The new hold is the one move; the unresolved report question need not be repeated.');
  });
 }
+test('An incoming email noun is not an outgoing delivery predicate',()=>{
+ for(const text of ["We'll be looking out for your email.","We'll be waiting for your drawing.","We'll watch for your reply.","I'll be awaiting your email."]){assert.equal(isAwaitingBuyerDocumentReceipt(text),true,text);assert.equal(hasAffirmativeOutgoingDocumentAction(text),false,text);}
+ for(const text of ["We'll read your email.","We'll review the reply.","I'll not send it.","We will not email the report.","We won't send it.","We will not be sending the report."]){assert.equal(hasAffirmativeOutgoingDocumentAction(text),false,text);}
+ for(const text of ["We'll read your email and send the report.","We'll be waiting for your drawing, and then email the report.","We will not send it, but email the report.","We won't send it, but will reply with the report.","The report will be emailed.","We'll be sending the report.","We'll be emailing the report."]){assert.equal(hasAffirmativeOutgoingDocumentAction(text),true,text);}
+ const context=fixture(companies[0]);context.turns.at(-1).text='Only send the report if it covers the reference. Do not send anything until my engineer approves the drawing.';
+ assert.ok(assessReplyVerification("We'll be sending the report.",context).unsupportedClaims.some(claim=>/withheld permission/.test(claim.reason)));
+ assert.deepEqual(assessReplyVerification("We will not send anything until your engineer approves.",context).unsupportedClaims,[]);
+});

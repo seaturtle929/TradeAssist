@@ -221,6 +221,7 @@ export function hasConditionalReportReplyForSemanticReview(text:string,context?:
  if(postposed){
   const before=line.slice(0,postposed.index),inquiry=/\b(?:whether|if)\b/i.exec(before);
   if(!inquiry||!requestsDocumentProductCoverage(before))return false;
+  if(new Set(documents(before).filter(document=>/report$/.test(document.kind)&&document.kind!=='report').map(document=>document.kind)).size>1)return false;
   if(assessDocumentProductCoverage(before.slice(0,inquiry.index),context||{},context?.sources||[])?.verificationBoundary||presupposesOwnedProduct(before.slice(0,inquiry.index))||presupposesOwnedProduct(before.slice(inquiry.index)))return false;
   return true;
  }

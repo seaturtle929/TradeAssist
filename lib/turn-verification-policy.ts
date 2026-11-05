@@ -185,7 +185,7 @@ function replyClauses(text: string,context?:VerificationPolicyContext): { text: 
     // Cutting “if it does, I will send it” at the second comma would invent an
     // unfinished coverage assertion; the combined action still gets source
     // availability and company-authority checks below.
-    if(investigationThenDocumentDelivery(sentence.text,context)||isBoundedEpistemicFactAction(sentence.text,context)||isBuyerIdentifierClarification(sentence.text,latestBuyerText(context||{})))return [sentence];
+    if(investigationThenDocumentDelivery(sentence.text,context)||isBoundedEpistemicFactAction(sentence.text,context)||hasConditionalReportReplyForSemanticReview(sentence.text,context)||isBuyerIdentifierClarification(sentence.text,latestBuyerText(context||{})))return [sentence];
     const separator = /,\s*(?=but\b)|,\s*(?=(?:and\s+)?(?:can|could|would|may|what|which|how|I|we|our|it|you)\b)|\s+(?=and\s+(?:can|could|would|what|which|how|I|we|our|it|you)\b)/gi;
     const parts: { text: string; start: number; end: number }[] = [];
     let offset = 0;
@@ -206,7 +206,8 @@ function replySentences(text:string,context?:VerificationPolicyContext):{text:st
  const original=sentences(text),grouped:{text:string;start:number;end:number}[]=[];
  for(const sentence of original){
   const previous=grouped.at(-1),together=previous?text.slice(previous.start,sentence.end):'';
-  if(previous&&(investigationThenDocumentDelivery(together,context)||isBoundedEpistemicFactAction(together,context))){
+  const semanticContinuation=previous&&(isBoundedEpistemicFactAction(previous.text,context)||hasFutureReportInquiry(previous.text,context))&&hasConditionalReportReplyForSemanticReview(together,context);
+  if(previous&&(investigationThenDocumentDelivery(together,context)||isBoundedEpistemicFactAction(together,context)||semanticContinuation)){
    grouped[grouped.length-1]={text:together,start:previous.start,end:sentence.end};
   }else grouped.push(sentence);
  }
@@ -506,7 +507,28 @@ export function buyerReleaseState(context:VerificationPolicyContext):BuyerReleas
 /** Awaiting an incoming artifact is not promising an outgoing email. Require
  * the entire closed action so an attached send/claim is checked separately. */
 export function isAwaitingBuyerDocumentReceipt(text:string):boolean {
- return /^(?:I|we)(?:['’]ll|\s+(?:will|can))\s+(?:(?:look out|watch|wait)\s+for|await)\s+(?:your|the)\s+(?:email|e-mail|message|drawing|documents?|reply)(?:\s+(?:from you|when ready))?[.!]?$/i.test(text.trim());
+ return /^(?:I|we)(?:['’]ll|\s+(?:will|can))\s+(?:be\s+)?(?:(?:look(?:ing)? out|watch(?:ing)?|wait(?:ing)?)\s+for|await(?:ing)?)\s+(?:your|the)\s+(?:email|e-mail|message|drawing|documents?|reply)(?:\s+(?:from you|when ready))?[.!]?$/i.test(text.trim());
+}
+/** A future auxiliary does not turn every later email/reply NOUN into a send.
+ * Scan actual outgoing predicates, preserving coordinated affirmative actions
+ * while leaving incoming objects and an explicitly negated send alone. */
+export function hasAffirmativeOutgoingDocumentAction(text:string):boolean {
+ const line=text.replace(/[’‘]/g,"'");
+ for(const future of line.matchAll(/\b(?:I|we)(?:'ll|\s+(?:will|can|would|won't|cannot|can't))\b/gi)){
+  const action=line.slice((future.index||0)+future[0].length).split(/[.!?;]/,1)[0];
+  for(const verb of action.matchAll(/\b(?:send(?:ing)?|email(?:ing)?|shar(?:e|ing)|forward(?:ing)?|includ(?:e|ing)|attach(?:ing)?|reply(?:ing)?|respond(?:ing)?)\b/gi)){
+   const before=action.slice(0,verb.index),coordinator=[...before.matchAll(/\b(?:and|but|then|however)\b/gi)].at(-1);
+   const governing=coordinator?before.slice((coordinator.index||0)+coordinator[0].length):before;
+   if(!coordinator&&/\b(?:won't|cannot|can't)\b/i.test(future[0])||/\b(?:not|never|don't|won't|cannot|can't)\s+(?:\w+\s+)?$/i.test(governing))continue;
+   // A future progressive commits to an action (“will be sending”); a
+   // subordinate gerund in “wait for approval before sending” does not.
+   if(/ing$/i.test(verb[0])&&!/\b(?:be|start|begin|continue)\s+(?:\w+ly\s+)*$/i.test(governing))continue;
+   if(/\b(?:before|until)\s+(?:I|we)\s*$/i.test(governing))continue;
+   if(/^(?:email|reply)$/i.test(verb[0])&&/\b(?:a|an|the|your|our|my|their|his|her|this|that|for|from|by)\s+(?:\w+\s+)?$/i.test(before))continue;
+   return true;
+  }
+ }
+ return /\b(?:report|documents?)\s+will\s+be\s+(?:sent|emailed|shared|forwarded|included|attached)\b/i.test(line);
 }
 function preservesBuyerApproval(say:string,approver:BuyerReleaseState['approver']='buyer'):boolean {
  if(/\b(?:regardless|anyway|without (?:your )?approval|even if you (?:do not|don't) approve)\b/i.test(say))return false;
@@ -768,7 +790,7 @@ export function assessReplyVerification(say: string, context: VerificationPolicy
    // coordinated new rep promise separately (not a whole-reply checkbox).
    // The existing bounded sentence grouper preserves only an adjacent
    // explicit inquiry + "if it does" referent, never a later unrelated send.
-   for(const action of sentence.text.split(/\b(?:and|but|however)\s+(?=(?:I|we)(?:['’]ll|\s+(?:will|can|would))\b)/i))if(!isAwaitingBuyerDocumentReceipt(action)&&/\b(?:I|we)(?:['’]ll|\s+(?:will|can|would))\b[^.!?]{0,180}\b(?:send|email|share|forward|include|attach|reply|respond)\b|\b(?:report|documents?)\s+will\s+be\s+(?:sent|emailed|shared|forwarded|included|attached)\b/i.test(action)){
+   for(const action of sentence.text.split(/\b(?:and|but|however)\s+(?=(?:I|we)(?:['’]ll|\s+(?:will|can|would))\b)/i))if(!isAwaitingBuyerDocumentReceipt(action)&&hasAffirmativeOutgoingDocumentAction(action)){
     const start=sentence.start+sentence.text.indexOf(action);
     if(release.hold)add(action,start,'supplier_claim',{supported:false,reason:'The buyer cancelled or withheld this send and has not released it again. A company document being available does not override that instruction.'});
     if(buyerApproval&&!preservesBuyerApproval(action,release.approver))add(action,start,'supplier_claim',{supported:false,reason:'The buyer withheld permission to send until they approve. Preserve the buyer’s stated approver before every promised document send; confirming report coverage or mentioning approval for a different action does not release the documents.'});
@@ -902,7 +924,7 @@ export function assessReplyVerification(say: string, context: VerificationPolicy
   // Defer ONLY these parser-produced claim spans to the existing semantic
   // verifier. Independent source, numeric, timing and authority vetoes remain.
   for(const claim of claims)if(!claim.supported&&!claim.pending&&claim.kind==='supplier_claim'
-    &&((claim.verificationBoundary==='document_product_scope'||claim.reason.startsWith('An appended positive supplier claim'))&&hasFutureReportInquiry(claim.text,context)
+    &&((claim.verificationBoundary==='document_product_scope'||claim.reason.startsWith('An appended positive supplier claim'))&&(hasFutureReportInquiry(claim.text,context)||hasConditionalReportReplyForSemanticReview(claim.text,context))
      ||claim.reason.startsWith('The buyer made delivery conditional on a positive report match')&&hasConditionalReportReplyForSemanticReview(claim.text,context))){
    claim.pending=true;claim.verificationKind='speech_act';delete claim.verificationBoundary;
    claim.reason='The local grammar cannot establish this future investigation or conditional-action meaning. Check the entire unchanged reply, every attached claim and EVERY outgoing action against the actual buyer’s positive-report-scope condition and any approval/hold; completing a check alone is not a positive coverage result. Do not infer report coverage from availability.';

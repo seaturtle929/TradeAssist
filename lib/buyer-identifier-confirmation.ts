@@ -1,7 +1,7 @@
 import type {CoachingContext} from './call-coaching';
 import {configurationReferences} from './company-configuration.ts';
 import {requestsDocumentProductCoverage} from './document-product-evidence.ts';
-import {buyerProductIdentifierReferences,isBuyerIdentifierClarification,productIdentityReferences} from './product-identity-evidence.ts';
+import {buyerProductIdentifierReferences,buyerSpelledIdentifierClarificationReferences,isBuyerIdentifierClarification,productIdentityReferences} from './product-identity-evidence.ts';
 
 const escaped=(text:string)=>text.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
 const normalize=(text:string)=>text.replace(/[’‘]/g,"'");
@@ -75,7 +75,8 @@ export function buyerIdentifierConfirmationProblems(say:string,context:CoachingC
  // The buyer-reference helper is deliberately narrow (and excludes owned
  // noun phrases). Also inspect source-known codes so a leading clarification
  // question cannot smuggle in a different catalog item in another grammar.
- const mentionedCodes=[...buyerProductIdentifierReferences(say,say),...productIdentityReferences(say,sources)];
+ const spellings=buyerSpelledIdentifierClarificationReferences(say,uncertainty.buyerText);
+ const mentionedCodes=[...buyerProductIdentifierReferences(say,say),...productIdentityReferences(say,sources)].filter(reference=>!spellings.some(spelling=>spelling.start<=reference.start&&spelling.end>=reference.end));
  const guessedCode=mentionedCodes.some(reference=>!uncertainty.buyerText.includes(reference.text));
  return narrowQuestion&&!guessedCode?[]:['The current spoken report request contains a model/part code not established by the supplied company sources: '+uncertainty.identifiers.join(', ')+'. Confirm or ask for the spelling before committing to check that item; do not silently replace it with a similar catalog code, treat it as a confirmed company product, or declare it nonexistent.'];
 }

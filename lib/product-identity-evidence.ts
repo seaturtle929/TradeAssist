@@ -17,6 +17,15 @@ const key=(text:string)=>text.replace(joinPattern,'').toUpperCase();
 const escaped=(text:string)=>text.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
 const phoneticLetters:Record<string,string>={A:'(?:alpha|alfa)',B:'bravo',C:'charlie',D:'delta',E:'echo',F:'foxtrot',G:'golf',H:'hotel',I:'india',J:'(?:juliett|juliet)',K:'kilo',L:'lima',M:'mike',N:'november',O:'oscar',P:'papa',Q:'quebec',R:'romeo',S:'sierra',T:'tango',U:'uniform',V:'victor',W:'whiskey',X:'x[- ]?ray',Y:'yankee',Z:'zulu'};
 const spokenDigits:Record<string,string>={'0':'zero','1':'one','2':'two','3':'three','4':'four','5':'five','6':'six','7':'seven','8':'eight','9':'nine'};
+/** Compose the exact expected characters, allowing spelling choices at each
+ * position. This locates an echo only; it never infers or changes the code. */
+function buyerCodeSpellingPattern(identifier:string):string {
+ const separator=`[\\s,${dash}]+`;
+ return (key(identifier).replace(/\s/g,'').match(/[A-Z]|\d+/g)||[]).map(token=>{
+  if(/^\d+$/.test(token))return '(?:'+token+'|'+[...token].map(digit=>'(?:'+digit+'|'+spokenDigits[digit]+')').join(separator)+')';
+  const phonetic=phoneticLetters[token];return '(?:'+token+'\\s+as\\s+in\\s+'+phonetic+'|'+phonetic+'|'+token+')';
+ }).join(separator);
+}
 const explicitlyDocumentNumber=(text:string,start:number)=>/\b(?:report|certificate|certification|document|record)\s+(?:(?:number|no\.?|id)\s*[:#]?\s*)?$/i.test(text.slice(Math.max(0,start-65),start));
 function presupposesCompanyProductOwnership(text:string,start:number):boolean{
  const prefix=text.slice(0,start),owner=[...prefix.matchAll(/\bour\b/gi)].at(-1);
@@ -94,19 +103,19 @@ export function buyerSpelledIdentifierClarificationReferences(text:string,buyerT
   if(!/\b(?:confirm|repeat|spell)\b[^?]{0,110}\b(?:code|model|part|reference|number)\b|\b(?:was it|is it|did you say)\b/i.test(question))continue;
   references.push({text:match[0],start,end,buyerText:buyer[0]});
  }
- // A phonetic expansion is a clarification only when attached to the exact
- // current buyer reference. Match every letter/digit, not a fuzzy catalog
- // replacement or an unrelated quantity elsewhere in the question.
+ // Literal letters, NATO words, and "letter as in NATO" may be mixed at
+ // each position. Match the complete expected sequence inside a question,
+ // never a fuzzy catalog replacement or an unrelated quantity.
  for(const buyer of requested){
-  const compact=key(buyer[0]).replace(/\s/g,''),tokens=compact.match(/[A-Z]|\d+/g)||[];
-  const phonetic=tokens.map(token=>/^\d+$/.test(token)?'(?:'+token+'|'+[...token].map(digit=>'(?:'+digit+'|'+spokenDigits[digit]+')').join('[\\s-]+')+')':phoneticLetters[token]).join('\\s+');
+  const phonetic=buyerCodeSpellingPattern(buyer[0]);
   if(!phonetic)continue;
   const expansion=new RegExp('\\b'+escaped(buyer[0])+'\\s+as in\\s+('+phonetic+')(?![a-z0-9-])','gi');
-  for(const match of text.matchAll(expansion)){
+  const composition=new RegExp(`(?<![a-z0-9_${dash}])(`+phonetic+`)(?![a-z0-9_${dash}])`,'gi');
+  for(const match of [...text.matchAll(expansion),...text.matchAll(composition)]){
    const start=(match.index||0)+match[0].lastIndexOf(match[1]),end=start+match[1].length,to=text.indexOf('?',end);
    if(to<0||/[.!;]/.test(text.slice(end,to))||presupposesCompanyProductOwnership(text,start))continue;
    const from=Math.max(text.lastIndexOf('.',match.index||0),text.lastIndexOf('!',match.index||0),text.lastIndexOf('?',match.index||0),text.lastIndexOf(';',match.index||0))+1;
-   if(!/\b(?:confirm|repeat|spell|referring to|did you say|was it|is it)\b/i.test(text.slice(from,to+1)))continue;
+   if(!/\b(?:confirm|repeat|spell|spelling|referring to|did you say|was it|is it)\b/i.test(text.slice(from,to+1)))continue;
    references.push({text:match[1],start,end,buyerText:buyer[0]});
   }
  }
