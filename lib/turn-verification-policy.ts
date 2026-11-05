@@ -417,16 +417,50 @@ function paraphraseCandidates(clause:string,evidence:Evidence[],context:Verifica
  }));
 }
 
-/** Offering to explain an actual technical method, or provide a specifically
- * qualified artifact, asserts that support exists even without a number.
- * Ordinary profile/spec sends and questions about needs are not such claims. */
+/** A buyer's delivery condition can survive different word orders. Only a
+ * closed report-scope condition can be satisfied by “if it does”; an unknown
+ * condition remains pending rather than becoming permission to send. */
+export function reportDeliveryCondition(buyerText:string):'scope_required'|'unresolved'|undefined {
+ const text=buyerText.replace(/[’‘]/g,"'");
+ const delivery='(?:send|email|share|forward|sending|emailing|sharing|forwarding)';
+ const patterns=[
+  new RegExp('\\bonly\\s+'+delivery+'\\b[^.!?]*?\\bif\\s+([^.!?]+)','gi'),
+  new RegExp('\\b'+delivery+'\\b[^.!?]*?\\b(?:only\\s+)?(?:if|when)\\s+([^.!?]+)','gi'),
+  new RegExp("\\b(?:do not|don't|never)\\s+"+delivery+'\\b[^.!?]*?\\bunless\\s+([^.!?]+)','gi'),
+  new RegExp('(?:^|[.!?]\\s*)\\s*if\\s+([^,;.!?]+)[,;]\\s*[^.!?]*?\\b'+delivery+'\\b','gi'),
+  new RegExp('(?:^|[.!?]\\s*)\\s*unless\\s+([^,;.!?]+)[,;]\\s*[^.!?]*?\\b(?:do not|don\'t)\\s+'+delivery+'\\b','gi'),
+  new RegExp('([^.!?]*\\b(?:needs?|must|has to|have to|requires?|required)\\b[^.!?]*?)\\bbefore\\b[^.!?]*?\\b'+delivery+'\\b','gi'),
+ ];
+ const conditions=patterns.flatMap(pattern=>[...text.matchAll(pattern)].map(match=>match[1].trim()));
+ if(conditions.length){
+  // Match the condition itself, not an unrelated coverage question elsewhere
+  // in the buyer's turn. Unknown predicates retain semantic checking; neither
+  // an available report nor “once confirmed” establishes the required result.
+  const referent='(?:it|that|this|(?:(?:the|this|that|our|your)\\s+)?(?:(?:material\\s+test|inspection|test|quality)\\s+)?report)';
+  const scoped=new RegExp('^'+referent+'\\s+(?:(?:needs? to|must|has to)\\s+)?(?:covers?|matches?|applies?\\s+to)\\s+(.+)$','i');
+  const nominal=/^(?:we|I)\s+need\s+coverage\s+(?:of|for)\s+(.+?)\s+confirmed$/i;
+  if(conditions.every(condition=>{
+   const object=scoped.exec(condition)?.[1]||nominal.exec(condition)?.[1];
+   return !!object&&!/\b(?:not|never|no|doesn't|don't|isn't|aren't|and|or|unless|if|when|because|since|before|after|once|provided|confirms?|approves?|discount|approval|permission|authorized|certif\w*|guarantee\w*)\b|[;!?]/i.test(object);
+  }))return 'scope_required';
+  return 'unresolved';
+ }
+ // Restrictive wording outside the closed forms above cannot silently become
+ // an unconditional send. Ordinary timing questions or a request to check
+ // before sending contain none of these restriction markers and remain fast.
+ if(new RegExp('\\b'+delivery+'\\b','i').test(text)&&/\b(?:only if|only when|unless|provided that|on condition that|as long as)\b/i.test(text))return 'unresolved';
+}
+
+/** Offering a technical method or qualified artifact asserts support exists.
+ * Document follow-through separately respects buyer and release conditions. */
 function technicalSupportAssertion(clause:string,context:VerificationPolicyContext,evidence:Evidence[]):Pick<ReplyFactClaim,'supported'|'pending'|'candidateSourceIds'|'reason'|'sourceId'|'verificationBoundary'>|undefined {
  if(unresolvedFactCheck(clause))return;
  const delivery=investigationThenDocumentDelivery(clause);
  if(delivery){
   const buyer=latestBuyerText(context).replace(/[’‘]/g,"'");
-  const buyerConditionedSend=/\b(?:only\s+(?:send|email|share|forward)\b[^.!?]{0,70}\bif|(?:do not|don't)\s+(?:send|email|share|forward)\b[^.!?]{0,70}\bunless)\b[^.!?]{0,75}\b(?:covers?|matches?|applies?)\b/i.test(buyer);
-  if(buyerConditionedSend&&delivery.deliveryCondition!=='stated_condition')return {supported:false,reason:'The buyer made document delivery conditional on the report matching their product. Checking and then sending is only an action sequence; preserve the buyer’s explicit condition instead of promising delivery regardless of the result.'};
+  const buyerCondition=reportDeliveryCondition(buyer);
+  if(buyerCondition==='scope_required'&&delivery.deliveryCondition!=='stated_condition')return {supported:false,reason:'The buyer made document delivery conditional on the report matching their product. Checking and then sending is only an action sequence; preserve the buyer’s explicit condition instead of promising delivery regardless of the result.'};
+  if(buyerCondition==='unresolved')return {supported:false,pending:true,reason:'The buyer placed a condition on document delivery that is not established by merely completing the report check. Verify that this proposed send preserves the actual condition; document availability does not satisfy it.'};
   // “That report” can carry the one explicit report type in the current
   // buyer's request. Resolve the referent from their words, never from whichever
   // report happens to be available in the catalog or a previous company.

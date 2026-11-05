@@ -4,7 +4,7 @@ import {
  assessDocumentProductCoverage, investigationThenDocumentDelivery,
  isConversationalAcknowledgment, literalDocumentScopeEvidence,
 } from '../lib/document-product-evidence.ts';
-import {assessReplyVerification} from '../lib/turn-verification-policy.ts';
+import {assessReplyVerification,reportDeliveryCondition} from '../lib/turn-verification-policy.ts';
 import {needsFactCheck} from '../lib/call-coaching.ts';
 
 // Authored synthetic fixtures, independent of customer records and audio QA.
@@ -112,6 +112,53 @@ for(const company of companies){
    `I'll check whether the ${report} covers ${product}. Once certification is approved, I'll send it over.`,
    `I'll check whether the ${report} covers ${product}. Once that's confirmed, I'll send it over and guarantee suitability.`,
   ])assert.equal(needsFactCheck(say,input),true,say);
+ });
+ test(`${company.name}: buyer scope conditions are preserved across equivalent word orders`,()=>{
+  const base=fixture(company),sequence=`I'll check whether the ${report} covers ${product}, then send it.`,completion=`I'll check whether the ${report} covers ${product}. Once that's confirmed, I'll send it over.`,conditional=`I'll check whether the ${report} covers ${product}. If it does, I'll send it along.`;
+  for(const buyer of [
+   `Only send the ${report} if it covers ${product}.`,
+   `Please send the ${report} only if it covers ${product}.`,
+   `Please send the ${report} if it covers ${product}. Otherwise do not send it.`,
+   `Please send the ${report} only when it covers ${product}.`,
+   `Don't email the ${report} unless it applies to ${product}.`,
+   `If the ${report} covers ${product}, you can send it. Otherwise do not send it.`,
+   `Unless the ${report} covers ${product}, do not send it.`,
+   `The ${report} needs to cover ${product} before you send it.`,
+   `We need coverage of ${product} confirmed before sending the ${report}.`,
+  ]){
+   const input={...base,turns:[{role:'buyer',text:buyer}]};
+   assert.equal(reportDeliveryCondition(buyer),'scope_required',buyer);
+   for(const say of [sequence,completion]){
+    assert.equal(needsFactCheck(say,input),true,buyer+' → '+say);
+    assert.ok(assessReplyVerification(say,input).unsupportedClaims.some(claim=>/buyer.*conditional/i.test(claim.reason)));
+   }
+   assert.equal(needsFactCheck(conditional,input),false,buyer);
+   assert.equal(needsFactCheck(conditional,{...input,sources:[{id:'restricted',text:`The ${report} requires release approval.`}]}),true,'Preserving the buyer’s condition does not grant company approval.');
+  }
+  for(const buyer of [
+   `When can you send the ${report}?`,
+   `Please check whether the ${report} covers ${product} before you send it.`,
+   `Before you send the ${report}, check whether it covers ${product}.`,
+   `If we need anything else, I will ask. Please send the ${report}.`,
+  ]){
+   assert.equal(reportDeliveryCondition(buyer),undefined,buyer);
+   assert.equal(needsFactCheck(sequence,{...base,turns:[{role:'buyer',text:buyer}]}),false,buyer);
+  }
+  for(const buyer of [
+   `Only send the ${report} if my engineer requests it.`,
+   `Only send the ${report} if my engineer confirms it covers ${product}.`,
+   `Only send the ${report} if Dana approves its coverage of ${product}.`,
+   `Send the ${report} provided that legal authorizes release.`,
+   `The ${report} must be certified before you send it.`,
+   `Does the ${report} cover ${product}? Send it only if my engineer agrees.`,
+   `Only send the ${report} if it covers ${product}. Only send it if my engineer agrees.`,
+   `If the ${report} does not cover ${product}, do not send it.`,
+  ]){
+   assert.equal(reportDeliveryCondition(buyer),'unresolved',buyer);
+   const input={...base,turns:[{role:'buyer',text:buyer}]},assessment=assessReplyVerification(conditional,input);
+   assert.ok(assessment.pendingClaims.length,buyer);
+   assert.equal(needsFactCheck(conditional,input),true,'A report-scope condition cannot replace a different or unresolved buyer restriction.');
+  }
  });
  test(`${company.name}: result follow-up can concern neutral details without asserting them`,()=>{
   const input=fixture(company);
