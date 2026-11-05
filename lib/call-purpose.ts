@@ -1,4 +1,5 @@
 import {onDemandSuggestionProblems} from './on-demand-coaching.ts';
+import {buyerSpelledIdentifierClarificationReferences} from './product-identity-evidence.ts';
 import {clientContextNeedsInterpretation,clientContextSuggestionProblems,clientContextSafeReply,reviewedClientContext} from './client-coaching-context.ts';
 import {applyCoachingConfiguration,configurationNeedsInterpretation,configurationSuggestionProblems,configuredSafeReply} from './coaching-configuration.ts';
 import {generationFoundationFor} from './generation-foundation.ts';
@@ -415,7 +416,7 @@ export function checkSuggestion(guidance:Partial<Guidance>,context:PurposeContex
   const sourceText=(context.sources||[]).map(source=>source.text).join(" "),buyerText=(context.turns||[]).filter(turn=>turn.role!=="you").map(turn=>turn.text).join(" ");
   const authorizedContext=[context.manufacturer?.name,callContext.background,callContext.knownFacts,buyerText].join(" ");
   const numericValues=(value:string)=>new Set((value.match(/\b\d+(?:[.,]\d+)?/g)||[]).map(number=>String(Number(number.replace(/,/g,"")))));
-  const timeSpans=[...agreedResponseTimeSpans(say,context),...declinedNumericCommitmentSpans(say)];
+  const timeSpans=[...agreedResponseTimeSpans(say,context),...declinedNumericCommitmentSpans(say),...buyerSpelledIdentifierClarificationReferences(say,latest)];
   const sourceNumbers=numericValues(sourceText),contextNumbers=numericValues(authorizedContext),numbers:string[]=[...say.matchAll(/\b\d+(?:[.,]\d+)?(?:%|\b)/g)].filter(match=>!timeSpans.some(span=>match.index>=span.start&&match.index+match[0].length<=span.end)).map(match=>match[0]);
   const numericKey=(value:string)=>String(Number(value.replace(/[,%]/g,"")));
   if(/^(?:okay|ok|yeah)[^.!?]{0,25}100%[.!]/i.test(say)){const index=numbers.indexOf("100%");if(index>=0)numbers.splice(index,1);}

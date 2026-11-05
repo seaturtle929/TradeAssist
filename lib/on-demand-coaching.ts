@@ -7,8 +7,11 @@ import {emailEvidenceFor} from './buyer-facts.ts';
 import {coachingConversationAtRequest,coachingTranscriptState} from './coaching-context-snapshot.ts';
 import {representativeIdentityFor,representativeIdentityRules,representativeIdentityProblems} from './representative-identity.ts';
 import {configurationReferences} from './company-configuration.ts';
-import {documentCoverageQuestionEvidence} from './document-product-evidence.ts';
+import {documentCoverageQuestionEvidence,hasFutureReportInquiry,investigationThenDocumentDelivery,requestsDocumentProductCoverage} from './document-product-evidence.ts';
 import {buyerIdentifierConfirmation,buyerIdentifierConfirmationProblems} from './buyer-identifier-confirmation.ts';
+import {buyerReleaseState,isAwaitingBuyerDocumentReceipt,reportDeliveryCondition} from './turn-verification-policy.ts';
+import {availableDocumentActionEvidence} from './document-availability-evidence.ts';
+import {hasAffirmativeOutgoingDocumentAction} from './document-action-syntax.ts';
 
 /** The button/shortcut is the generation event. Speech is context, never a
  * request; partial speech stays separate so it cannot become an agreement. */
@@ -51,6 +54,7 @@ export function onDemandTaskContext(context:CoachingContext&{goal?:unknown}) {
   representativeIdentity:representativeIdentityFor(context)||{status:'unknown',personalNameMustBeOmitted:true},
   dialedRoute:callRouteAtRequest(context),
   buyerDeferral:deriveBuyerDeferral(turns),
+  pendingReportCoverageHandoff:pendingReportCoverageHandoff(context),
   finalizedTranscript:turns.map(turn=>({id:turn.id,role:turn.role,text:turn.text,...turn.at!==undefined?{at:turn.at}:{},...currentIds?{listeningScope:currentIds.has(turn.id||'')?'current_session':'earlier_session_history'}:{}})),
   partialSpeech:(context.coachingRequest?.partials||[]).map(part=>({...part,incomplete:true})),
   pendingSpeech:context.coachingRequest?.pendingSpeech||[],
@@ -121,17 +125,55 @@ function completedConversationalMove(context:CoachingContext){
  return {kind:goodbye?'polite_close':'acknowledge_spoken_next_step',turnId:buyer.id,quote:buyer.text,priorSpokenCommitment:priorAction?{turnId:prior.id,quote:prior.text}:undefined,alreadyAcknowledged:turns.length>buyerIndex+1,scope:'Prior speech establishes what was promised, never product truth, document availability, fulfilled delivery or commercial authority.'};
 }
 
-/** A positive buyer-owned send and email preference is a next step, not a
- * supplier document offer or a reason to repeat the previous discovery. */
+/** A buyer's document offer is a useful next step even without an explicit
+ * deferral. It establishes neither receipt nor supplier/document coverage. */
 function buyerDocumentHandoff(context:CoachingContext){
  if(['partial','pending'].includes(coachingTranscriptState(context)))return;
  const latest=reliableTurns(context).at(-1);if(latest?.role!=='buyer')return;
  const line=latest.text.replace(/[’‘]/g,"'");
  const send=/\b(?:I|we)(?:'ll| will| can)\s+(?:email|e-mail|send|forward|share)\b/i.test(line);
  const document=/\b(?:drawing|drawings|document|documents|specification|specifications|requirements|file|files)\b/i.test(line);
- const email=/\b(?:email|e-mail)\b/i.test(line),deferral=/\b(?:when|once|after)\b.{0,40}\b(?:ready|finished|complete)|\b(?:prefer|rather|leave the technical|our engineer)\b/i.test(line);
- if(!send||!document||!email||!deferral||/\b(?:not|never|can't|cannot|won't)\b.{0,25}\b(?:send|email|share)\b/i.test(line))return;
+ if(!send||!document||/\b(?:not|never|can't|cannot|won't)\b.{0,25}\b(?:send|email|share)\b/i.test(line))return;
  return {turnId:latest.id,quote:latest.text};
+}
+
+/** Clarifying a reference and offering its drawing does not answer the report
+ * question that prompted the clarification. Derive this from recent actual
+ * current-call speech, never a prepared summary or a suggested-but-unsaid line. */
+function pendingReportCoverageHandoff(context:CoachingContext){
+ const handoff=buyerDocumentHandoff(context);if(!handoff)return;
+ const turns=reliableTurns(context),latest=turns.at(-1);if(!latest||context.coachingRequest?.listeningSession&&!context.coachingRequest.listeningSession.currentTurnIds.includes(latest.id||''))return;
+ const index=turns.findLastIndex((turn,position)=>position<turns.length-1&&position>=turns.length-9&&turn.role==='buyer'&&requestsDocumentProductCoverage(turn.text));
+ if(index<0)return;const question=turns[index],after=turns.slice(index+1);
+ if(after.some(turn=>turn.role==='buyer'&&/\b(?:forget|ignore|never mind|don't need|do not need)\b[^.!?]{0,35}\b(?:report|question|that)\b/i.test(turn.text)))return;
+ const answered=after.some(turn=>turn.role==='you'&&!/\?|\b(?:check|whether|if|need to|have to|not sure|unconfirmed|verify|find out)\b/i.test(turn.text)&&(/\b(?:material test|inspection|test|quality)?\s*report\s+(?:(?:does not|doesn't|does)\s+)?(?:covers?|applies? to|matches?)\b/i.test(turn.text)||/^\s*(?:yes|no)[,. ]+(?:it|that)\s+(?:does|doesn't|does not)\b/i.test(turn.text)));
+ if(answered)return;
+ const before=deriveCallParticipant(turns.slice(0,index+1)),now=deriveCallParticipant(turns);
+ if(before.speakerName&&now.speakerName&&before.speakerName!==now.speakerName)return;
+ return {questionTurnId:question.id,question:question.text,currentOffer:handoff,scope:'The report-to-reference coverage answer remains open; code confirmation and an offered drawing are inputs to that check, not an answer or product-suitability proof.'};
+}
+function currentDocumentReleaseRestriction(context:CoachingContext){
+ if(['partial','pending'].includes(coachingTranscriptState(context)))return;
+ const latest=currentReliableTurns(context).at(-1);if(latest?.role!=='buyer')return;
+ const release=buyerReleaseState(context);
+ if(!(release.approval||release.hold||release.unresolved)||! /\b(?:send|email|share|reply|documents?|report)\b/i.test(latest.text)||! /\b(?:don't|do not|not|never|until|before|only|wait|hold)\b/i.test(latest.text))return;
+ return {turnId:latest.id,quote:latest.text,...release};
+}
+
+/** An explicit buyer-chosen conditional reply is more specific than a vague
+ * follow-up. Require a currently available report and no intervening release
+ * gate before asking generation to acknowledge that outgoing action. */
+function conditionalReportReply(context:CoachingContext){
+ if(['partial','pending'].includes(coachingTranscriptState(context)))return;
+ const latest=currentReliableTurns(context).at(-1);if(latest?.role!=='buyer'||reportDeliveryCondition(latest.text)!=='scope_required')return;
+ if(!/\b(?:reply|respond|send|email|share)\s+(?:with\s+)?(?:it|(?:the|that)\s+(?:(?:material test|inspection|test|quality)\s+)?report)(?:\s+(?:to me|back to me|over))?\s*[,!. ]*(?:okay|ok|please)?[.!?]*$/i.test(latest.text))return;
+ const release=buyerReleaseState(context);if(release.approval||release.hold||release.unresolved)return;
+ const reference=[...(context.turns||[])].reverse().find(turn=>turn.role==='buyer'&&/\b(?:(?:material\s+)?test|inspection|quality)\s+report\b/i.test(turn.text));
+ const documents=[...new Set((reference?.text.match(/\b(?:(?:material\s+)?test|inspection|quality)\s+report\b/gi)||[]).map(value=>value.toLowerCase()))];
+ if(documents.length!==1)return;
+ const originals=context.companyConfiguration?configurationReferences(context.companyConfiguration.snapshot):context.sources||[];
+ const source=availableDocumentActionEvidence(documents[0],originals);if(!source)return;
+ return {turnId:latest.id,buyerRequest:latest.text,document:documents[0],availability:{sourceId:source.id,quote:source.text},releaseCondition:'A confirmed positive report-to-buyer-reference match, not simply finishing a check or matching a drawing to specifications.'};
 }
 
 function newContactPickup(context:CoachingContext){
@@ -190,8 +232,14 @@ export function onDemandDecisionRules(context:CoachingContext):string {
  if((transcriptState==='pending'||transcriptState==='partial')&&uncertainRecognition(context))rules.push('AUDIO RECOGNITION UNCERTAIN: The recognizer marked these words unreliable, rather than merely unfinished. Give a brief natural request to repeat or clarify who is speaking. A narrow repeat/identity question is allowed; no discovery question or transfer pitch. Do not greet an uncertain name as confirmed, assume the selected contact answered, or infer missing quantities, negation or agreements. Keep any known contact name only as a question, never an asserted pickup. Ordinary factual and company-boundary checks still apply.');
  else if(transcriptState==='pending'||transcriptState==='partial')rules.push('Speech has been captured at this request and is unfinished. Keep SAY to a brief listening acknowledgment or invitation to continue, with no question. Do not restate the previous discovery question, guess the unfinished topic, complete the fragment, or infer the missing name, quantity, price, negation or agreement. MOVE should say to listen. The next intentional request can act on the completed statement. Do not substitute an empty-call opener merely because transcription has not finalized.');
  if(pickup?.kind==='substantive')rules.push('ACTUAL PICKUP WITH CURRENT SUBSTANTIVE TURN: The named person also asked a question, made a request or supplied substantive information. Address that content first using the complete current turn and approved evidence. Add only brief verified rep/company identity if useful. Do not substitute a greeting-only opener, category pitch, role check or new discovery question. A missing report-to-product link still requires checking that specific coverage; no greeting exemption authorizes it. Current turn is in coachingTask.finalizedTranscript.');
- if(pickup?.kind==='greeting_only')rules.push('ACTUAL PICKUP: The current named person just joined, including a pickup after reception in the same transcript item. The rep introduction to reception did not reach this person. Begin with the verified rep and supplied company; omit an unknown personal name. Use one or two short sentences for identity plus the supplied purpose or call agreement, then stop and give this person the turn. Do not append a generic question about needs, priorities or evaluation criteria. Prefer the applicable reviewed request or outstanding commitment in the referenced standing; preserve its send, receipt and review status. Otherwise use the current reviewed preparation. Use the broad category only when it helps explain that reason, never as a compulsory pitch. Do not list model codes, grades or numeric specifications in this greeting-only move. Do not ask about application, specifications, requirements, evaluation criteria, priorities, important factors or current supplier yet. Never invent an email inquiry or prior conversation; a stage objective is not a buyer agreement. Do not stack another routing request. Purpose references: '+JSON.stringify(pickup.purposeReferences));
- if(handoff)rules.push('BUYER-OWNED DOCUMENT HANDOFF: The latest finalized buyer statement offers to email the document and defers details or prefers email. Acknowledge their offered next step and respect the email route. Explain what the buyer gains from it: where approved specifications are available, offer to compare the incoming requirements with those specs and report whether a match is supported. This is a conditional rep follow-through action, not a promise of fit, technical results or timing. If evidence is missing, offer to verify the gap. Close naturally without another discovery or scheduling question. Remember the buyer’s offered send and any actual rep commitment separately; suggested wording is not a spoken promise. Do not repeat the earlier discovery question or ask technical details that the document will supply. Keep readiness and timing exactly conditional; no promised date or follow-up deadline unless agreed. Evidence: '+JSON.stringify(handoff));
+ if(pickup?.kind==='greeting_only')rules.push('ACTUAL PICKUP: The current named person just joined, including a pickup after reception in the same transcript item. The rep introduction to reception did not reach this person. Begin with the verified rep and the supplied company name; a short name actually used in the rep’s earlier introduction is acceptable only when grounded in that same company. Do not invent an alias; omit an unknown personal name. Use one or two short sentences for identity plus the supplied purpose or call agreement, then stop and give this person the turn. Do not append a generic question about needs, priorities or evaluation criteria. Prefer the applicable reviewed request or outstanding commitment in the referenced standing; preserve its send, receipt and review status. Otherwise use the current reviewed preparation. Use the broad category only when it helps explain that reason, never as a compulsory pitch. Do not list model codes, grades or numeric specifications in this greeting-only move. Do not ask about application, specifications, requirements, evaluation criteria, priorities, important factors or current supplier yet. Never invent an email inquiry or prior conversation; a stage objective is not a buyer agreement. Do not stack another routing request. Purpose references: '+JSON.stringify(pickup.purposeReferences));
+ const releaseRestriction=currentDocumentReleaseRestriction(context);
+ const pendingCoverage=pendingReportCoverageHandoff(context);
+ if(releaseRestriction)rules.push('CURRENT BUYER RELEASE RESTRICTION: The current buyer has explicitly withheld sending or required approval. Acknowledge that restriction, including the stated approver, instead of replying only that you will check the report. A brief hold-only acknowledgment is a completed useful move and outranks the prior drawing/report topic; the unanswered coverage question stays pending, not resolved. Do not force a send commitment or a second move. You may still accept/review the incoming drawing and investigate unknown coverage, but make clear you will wait or hold sending until the actual restriction is released. Checking coverage is not permission to send. Current actual buyer condition: '+JSON.stringify(releaseRestriction));
+ else if(pendingCoverage)rules.push('BUYER-OWNED DOCUMENT HANDOFF — UNANSWERED REPORT COVERAGE FIRST: The buyer has clarified their reference and offered a drawing to resolve the earlier report-scope question. That question is STILL OPEN. Accept the drawing and explicitly say you will check WHETHER the named report covers that reference once you review it. This specific pending question outranks a generic product-fit/specification comparison or stage checklist. Do not substitute “see whether we have a match”, “align with our mesh”, or a catalog/grade list: drawing fit and report coverage are different decisions. Do not add a permission/discovery question after the buyer already offered the useful next step. The drawing is offered, not received; keep report coverage unknown, timing open and source/authority checks intact. Actual same-call state: '+JSON.stringify(pendingCoverage));
+ else if(handoff)rules.push('BUYER-OWNED DOCUMENT HANDOFF: The latest finalized buyer statement offers to send a document. Acknowledge that useful next step and respect any stated route, readiness, review condition or approval gate. An offered drawing is not a received drawing. Do not replace a condition requiring a positive coverage match with merely completing a check, and do not promise to send regardless of the result. Explain what the buyer gains from it: where approved specifications are available, offer to compare the incoming requirements with those specs and report whether a match is supported. This is a conditional rep follow-through action, not a promise of fit, technical results or timing. If evidence is missing, offer to verify the gap. Close naturally without another discovery or scheduling question. Remember the buyer’s offered send and any actual rep commitment separately; suggested wording is not a spoken promise. Do not repeat the earlier discovery question or ask technical details that the document will supply. Keep readiness and timing exactly conditional; no promised date or follow-up deadline unless agreed. Evidence: '+JSON.stringify(handoff));
+ const conditionalReply=conditionalReportReply(context);
+ if(conditionalReply)rules.push('CURRENT CONDITIONAL REPORT REPLY: The buyer has chosen to send their drawing/reference and receive the requested available report only if its coverage is confirmed. Explicitly agree to that useful action: name the report and say you will reply/send it ONLY IF the report itself covers their reference after checking. Preserve this as a future positive report-scope condition, not an assertion that coverage is already known. A drawing/specification match is a different question and cannot substitute for confirmed report coverage. Merely “confirm whether” describes completing a check and does not guarantee a positive result; do not promise to send regardless of that result. A vague “I will follow up” loses the buyer’s requested document action. Keep the incoming drawing as pending, with timing open and no extra question. This current next step outranks a general stage question or generic follow-up template. Availability evidence and actual request: '+JSON.stringify(conditionalReply));
  if(documentAddition)rules.push('REQUESTED DOCUMENT ADDITION: The buyer has asked for a specific document with an existing response. Confirm that requested follow-through concisely when original approved knowledge establishes availability; a specific acknowledgment of the requested action is a complete useful move. A reminder such as “make sure it is in the email” may refer to the rep’s actual earlier promise; do not restart discovery or restate a long explanation after the rep already acknowledged it. Do not append “anything else”, a needs question, or permission to do the same thing they just requested. This takes precedence over an illustrative stage question or discovery checklist. If the same statement asks a genuinely new question, answer that too without reopening deferred topics. Availability supports sending the existing document only, not a claim about its contents, certification, results, suitability, or a new deadline. Confirm the action without a speed promise: never add “right away”, “shortly”, “soon”, “quickly”, “ASAP”, or similar timing language. Only restate a specific deadline when the buyer actually agreed to that day/time. If availability or authority is missing, offer to check that specific gap; never promise an unestablished document. An added or changed document is a new request: do not implicitly approve it with “sure”, “both”, “those documents” or “everything requested” merely because an earlier report was available. Missing evidence means unconfirmed, not unavailable. Keep the spoken line short and literal; rationale belongs only in optional metadata. Current request and original availability evidence: '+JSON.stringify(documentAddition));
  if(routing)rules.push('Compose the actual SAY as a brief commercial purpose using the broad category, followed by a courteous connection request if needed. Product model codes are excluded from this routing answer. Do not turn the purpose into a product list or ask the receptionist buyer-level needs. The purpose is exploratory: do not assert suitability, typical applications or benefits from the prospect industry. Apply these constraints to SAY itself, not only to MOVE.');
  if(returning){
@@ -217,6 +265,30 @@ export function onDemandDecisionRules(context:CoachingContext):string {
  if(completedMove)rules.push('COMPLETED CONVERSATIONAL MOVE — applies in every stage, including Discovery: The current buyer is confirming a supported follow-through, reminding the rep about it, or closing politely. A brief confirmation, acknowledgment or goodbye is sufficient. If the rep has already said the promise and acknowledged the reminder, give a natural short close or leave room for the buyer; do not repeat the whole explanation, restart needs/specification discovery, ask for more information, or invent another next step. There is no minimum word count and no required question. Preserve the actual commitment as pending, with no invented send completion or new timing. These conversational facts do not establish product claims or expand authority; all usual evidence checks still apply. Current evidence: '+JSON.stringify(completedMove));
  return rules.length?'\nCURRENT ACTION CONSTRAINTS:\n'+rules.join('\n'):'';
 }
+function suppliedCompanyIntroduction(say:string,company:string,turns:{role:string;text:string}[]):boolean {
+ if(say.toLowerCase().includes(company.toLowerCase()))return true;
+ const words=company.trim().split(/\s+/),escape=(text:string)=>text.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+ // A rep may use a spoken short name. Accept only an actual earlier
+ // introduction whose name is a prefix of the supplied company, never an
+ // inferred alias, a contact name, or another company from the transcript.
+ for(let count=1;count<words.length;count++){
+  const short=words.slice(0,count).join(' ');if(short.length<3||/^(?:the|our|your|a|an)$/i.test(short))continue;
+  const introduced=new RegExp('\\b(?:from|with|at)\\s+'+escape(short)+'(?=$|[,.!?;]|\\s+(?:and|we)\\b)','i');
+  if(introduced.test(say)&&turns.some(turn=>turn.role==='you'&&introduced.test(turn.text)))return true;
+ }
+ return false;
+}
+
+function pickupDiscoveryRequest(say:string):boolean {
+ const topic=/\b(?:specifications?|specs?|sizes?|grades?|currently using|current supplier|requirements?|performance|volumes?|needs?|priorit(?:y|ies)|criteria|factors?|matters?|important)\b/i;
+ return say.split(/(?<=[.!?;])\s+|[—–]/).some(line=>topic.test(line)&&(
+  /^\s*(?:(?:so|and|then)[, ]+)?(?:what|which|how)\b/i.test(line)
+  ||/\b(?:can|could|would|will) you (?:tell|share|explain|describe)\b/i.test(line)
+  ||/^(?:\s*please\s+)?\s*(?:tell (?:me|us)|share|describe|explain)\b/i.test(line)
+  ||/\b(?:I|we)(?:['’]d| would) (?:like|love) to (?:understand|know|hear)\b/i.test(line)
+ ));
+}
+
 export function onDemandSuggestionProblems(say:string,context:CoachingContext):string[] {
  if(!context.coachingRequest)return [];
  const turns=reliableTurns(context),participant=deriveCallParticipant(turns),latest=[...turns].reverse().find(t=>t.role==='buyer')?.text.replace(/[’‘]/g,"'")||'';
@@ -233,19 +305,34 @@ export function onDemandSuggestionProblems(say:string,context:CoachingContext):s
  }
  const returning=returningIntroductionStanding(context);
  const pickup=newContactPickup(context),handoff=buyerDocumentHandoff(context),documentAddition=requestedDocumentAddition(context),transcriptState=coachingTranscriptState(context);
+ const releaseRestriction=currentDocumentReleaseRestriction(context);
+ const pendingCoverage=pendingReportCoverageHandoff(context);
+ if(pendingCoverage&&!releaseRestriction&&(!/\breports?\b/i.test(say)||! /\b(?:check|verify|confirm|find out|look into|let you know)\b/i.test(say))&&!hasFutureReportInquiry(say,context))problems.push('The buyer offered the drawing to answer the still-open report-coverage question. Explicitly acknowledge checking that report’s coverage for their reference; a generic drawing/specification fit discussion loses the unanswered question.');
+ if(releaseRestriction){
+  const line=say.replace(/[’‘]/g,"'");
+  const acknowledgesHold=/\b(?:wait|hold|won't\s+(?:send|email|share)|will not\s+(?:send|email|share)|not\s+(?:send|email|share|sending|emailing|sharing))\b/i.test(line);
+  const acknowledgesApproval=/\b(?:approval|approv\w*|sign[- ]?off)\b/i.test(line)&&(!releaseRestriction.approval||releaseRestriction.approver==='buyer'||new RegExp('\\b(?:'+(releaseRestriction.approver==='manager'?'manager':'engineer|engineering')+')\\b','i').test(line));
+  if(!acknowledgesHold||releaseRestriction.approval&&!acknowledgesApproval)problems.push('Acknowledge the buyer’s current restriction on sending and the stated approver. A promise to check coverage alone misses the changed request; do not imply that a coverage match releases this hold.');
+ }
+ const conditionalReply=conditionalReportReply(context);
+ const repDocumentReply=conditionalReply&&say.split(/(?<=[.!?;])\s+/).some(part=>!isAwaitingBuyerDocumentReceipt(part)&&(!!investigationThenDocumentDelivery(part,context)||hasAffirmativeOutgoingDocumentAction(part)));
+ if(conditionalReply&&(!/\breport\b/i.test(say)||!repDocumentReply))problems.push('The buyer requested the available '+conditionalReply.document+' as a reply only if its coverage matches. Explicitly acknowledge that conditional document reply; a vague follow-up or check alone loses the agreed action. Preserve the positive report-scope condition and any later release gate.');
  if((transcriptState==='partial'||transcriptState==='pending')&&!audioClarification(say,context)&&(say.includes('?')||/\b(?:can|could|would) you (?:tell|share|explain)|\bwhat(?:'s| is| are)\b/i.test(say)))problems.push('The buyer statement is unfinished at this request. Give a brief listening cue with no question; do not repeat discovery from an older turn.');
  if(pickup?.kind==='greeting_only'){
   const company=context.manufacturer?.name;
-  if(company&&!say.toLowerCase().includes(company.toLowerCase()))problems.push('The new contact just picked up. Introduce the supplied company before discovery; the introduction to reception did not reach this person.');
+  if(company&&!suppliedCompanyIntroduction(say,company,turns))problems.push('The new contact just picked up. Introduce the supplied company before discovery; the introduction to reception did not reach this person.');
   if(pickup.inquiry&&!pickup.purposeReferences.reviewedFollowThrough&&!/\b(?:e-?mail(?:ed|ing)?|inquiry|enquiry)\b/i.test(say))problems.push('Explain the reviewed email inquiry as the reason for this first conversation with the contact.');
-  if(/\b(?:what|which|how|tell me|share)\b.{0,100}\b(?:specifications?|specs?|sizes?|grades?|currently using|current supplier|requirements?|performance|volumes?|needs?|priorit(?:y|ies)|criteria|factors?|matters?|important)\b/i.test(say))problems.push('Let the newly reached contact respond to the introduction and reason for calling before asking detailed discovery.');
+  if(pickupDiscoveryRequest(say))problems.push('Let the newly reached contact respond to the introduction and reason for calling before asking detailed discovery.');
  }
- if(handoff){
+ if(handoff&&!releaseRestriction){
   // “Check how it lines up with our specs” describes the agreed comparison;
   // an embedded question word alone does not ask the buyer for more discovery.
   const asksForMore=/\?|(?:^|[.!;:,]\s*)\s*(?:what|which|how)\b(?!\s+(?:we|I)\b)|\b(?:tell (?:me|us)|(?:can|could|would) you (?:tell|share|explain|describe)|(?:I|we)(?:['’]d| would) like to know)\b/i.test(say);
   if(asksForMore)problems.push('The buyer offered the drawing by email and deferred technical details. Acknowledge the chosen next step and the conditional comparison or verification it enables, then close politely instead of repeating discovery.');
-  if(!/\b(?:email|e-mail|send|drawing|document)\b/i.test(say))problems.push('Acknowledge the buyer’s offered document/email next step rather than the prior discovery topic.');
+  // A specific conditional report reply acknowledges the chosen handoff even
+  // without repeating the word “drawing”. Its action/condition and ordinary
+  // factual checks remain independent; a vague follow-up does not qualify.
+  if(!/\b(?:email|e-mail|send|drawing|document)\b/i.test(say)&&!(conditionalReply&&repDocumentReply))problems.push('Acknowledge the buyer’s offered document/email next step rather than the prior discovery topic.');
  }
  if(documentAddition?.acknowledgmentComplete&&(/\?|\b(?:tell (?:me|us)|(?:can|could|would) you (?:tell|share|explain)|anything else)\b/i.test(say)))problems.push('The buyer already requested an available document with the response. Keep the specific document acknowledgment and remove the extra question; no new discovery, permission check, or “anything else” is needed. Availability does not support claims about document contents or a response deadline.');
  if(documentAddition?.unestablishedDocuments.length){

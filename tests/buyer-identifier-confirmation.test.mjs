@@ -66,6 +66,24 @@ test('Restarting listening in the same call retains an actual earlier code confi
  assert.deepEqual(buyerIdentifierConfirmationProblems("I'll check whether the inspection report covers RX73.",context),[]);
 });
 
+test('A phonetic spelling answer remains confirmed when the report question returns',()=>{
+ for(const answer of [
+  'Yes, R as in Romeo X as in X-ray seven three. That is the reference on our drawing; I can email it.',
+  'Correct, R-X-seven-three. It is our drawing reference.',
+ ]){
+  const context=make('QV80','RX73');
+  context.turns=[{id:'rep',role:'you',text:'Could you confirm the model code?'},{id:'spelling',role:'buyer',text:answer},...context.turns];
+  assert.equal(buyerIdentifierConfirmation(context),undefined,answer);
+  const assertion=assessReplyVerification('The report covers RX73.',context);
+  assert.ok(assertion.requiresVerification||assertion.unsupportedClaims.length,'A buyer spelling establishes identity, not report coverage.');
+ }
+ for(const answer of ['Yes, Q-V-eight-zero.','No, not R-X-seven-three.','Yes, my name is Ray, spelled R-A-Y.']){
+  const context=make('QV80','RX73');
+  context.turns=[{id:'rep',role:'you',text:'Could you confirm the model code?'},{id:'spelling',role:'buyer',text:answer},...context.turns];
+  assert.deepEqual(buyerIdentifierConfirmation(context)?.identifiers,['RX73'],answer);
+ }
+});
+
 test('An old unconfirmed request or buyer memory is not a spelling confirmation',()=>{
  const context=make('QV80','RX73');
  context.turns=[{id:'old-request',role:'buyer',text:'Does the inspection report cover RX73?'},...context.turns];

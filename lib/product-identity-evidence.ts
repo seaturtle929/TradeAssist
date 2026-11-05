@@ -14,6 +14,18 @@ const nonProductCode=/^(?:ISO|EN|ASTM|DIN|IEC|UL|USD|EUR|GBP|RMB|CNY|KG|MG|LB|LB
 const joinPattern=new RegExp(`[${dash}]`,'g');
 const excluded=/^(?:ISO|EN|ASTM|DIN|IEC|UL)\d|^(?:Al2O3|SiO2|Fe2O3|TiO2|Na2O|CaO|MgO)$/i;
 const key=(text:string)=>text.replace(joinPattern,'').toUpperCase();
+const escaped=(text:string)=>text.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+const phoneticLetters:Record<string,string>={A:'(?:alpha|alfa)',B:'bravo',C:'charlie',D:'delta',E:'echo',F:'foxtrot',G:'golf',H:'hotel',I:'india',J:'(?:juliett|juliet)',K:'kilo',L:'lima',M:'mike',N:'november',O:'oscar',P:'papa',Q:'quebec',R:'romeo',S:'sierra',T:'tango',U:'uniform',V:'victor',W:'whiskey',X:'x[- ]?ray',Y:'yankee',Z:'zulu'};
+const spokenDigits:Record<string,string>={'0':'zero','1':'one','2':'two','3':'three','4':'four','5':'five','6':'six','7':'seven','8':'eight','9':'nine'};
+/** Compose the exact expected characters, allowing spelling choices at each
+ * position. This locates an echo only; it never infers or changes the code. */
+function buyerCodeSpellingPattern(identifier:string):string {
+ const separator=`[\\s,${dash}]+`;
+ return (key(identifier).replace(/\s/g,'').match(/[A-Z]|\d+/g)||[]).map(token=>{
+  if(/^\d+$/.test(token))return '(?:'+token+'|'+[...token].map(digit=>'(?:'+digit+'|'+spokenDigits[digit]+')').join(separator)+')';
+  const phonetic=phoneticLetters[token];return '(?:'+token+'\\s+as\\s+in\\s+'+phonetic+'|'+phonetic+'|'+token+')';
+ }).join(separator);
+}
 const explicitlyDocumentNumber=(text:string,start:number)=>/\b(?:report|certificate|certification|document|record)\s+(?:(?:number|no\.?|id)\s*[:#]?\s*)?$/i.test(text.slice(Math.max(0,start-65),start));
 function presupposesCompanyProductOwnership(text:string,start:number):boolean{
  const prefix=text.slice(0,start),owner=[...prefix.matchAll(/\bour\b/gi)].at(-1);
@@ -72,6 +84,62 @@ export function buyerProductIdentifierReferences(text:string,buyerText:string):B
   references.push({text:match[0],start,end:start+match[0].length,buyerText:match[0]});
  }
  return references;
+}
+/** A letter-by-letter echo inside a model-code question names the buyer's
+ * reference; its separated digits are not quantities. This never changes the
+ * transcript, proves company ownership, or creates a source/product alias. */
+export function buyerSpelledIdentifierClarificationReferences(text:string,buyerText:string):BuyerProductIdentifierReference[]{
+ const requested=buyerIdentifierMatches(buyerText,true).filter(match=>!excluded.test(key(match[0]))&&!explicitlyDocumentNumber(buyerText,match.index||0));
+ const pattern=new RegExp(`(?<![a-z0-9_${dash}])[a-z](?:[${dash}][a-z0-9]){1,15}(?![a-z0-9_${dash}])`,'gi');
+ const references:BuyerProductIdentifierReference[]=[];
+ for(const match of text.matchAll(pattern)){
+  if(!/\d/.test(match[0]))continue;
+  const start=match.index||0,end=start+match[0].length;
+  const buyer=requested.find(item=>key(item[0]).replace(/\s/g,'')===key(match[0]));
+  if(!buyer||presupposesCompanyProductOwnership(text,start))continue;
+  const from=Math.max(text.lastIndexOf('.',start),text.lastIndexOf('!',start),text.lastIndexOf('?',start),text.lastIndexOf(';',start))+1,to=text.indexOf('?',end);
+  if(to<0||/[.!;]/.test(text.slice(end,to)))continue;
+  const question=text.slice(from,to+1);
+  if(!/\b(?:confirm|repeat|spell)\b[^?]{0,110}\b(?:code|model|part|reference|number)\b|\b(?:was it|is it|did you say)\b/i.test(question))continue;
+  references.push({text:match[0],start,end,buyerText:buyer[0]});
+ }
+ // Literal letters, NATO words, and "letter as in NATO" may be mixed at
+ // each position. Match the complete expected sequence inside a question,
+ // never a fuzzy catalog replacement or an unrelated quantity.
+ for(const buyer of requested){
+  const phonetic=buyerCodeSpellingPattern(buyer[0]);
+  if(!phonetic)continue;
+  const expansion=new RegExp('\\b'+escaped(buyer[0])+'\\s+as in\\s+('+phonetic+')(?![a-z0-9-])','gi');
+  const composition=new RegExp(`(?<![a-z0-9_${dash}])(`+phonetic+`)(?![a-z0-9_${dash}])`,'gi');
+  for(const match of [...text.matchAll(expansion),...text.matchAll(composition)]){
+   const start=(match.index||0)+match[0].lastIndexOf(match[1]),end=start+match[1].length,to=text.indexOf('?',end);
+   if(to<0||/[.!;]/.test(text.slice(end,to))||presupposesCompanyProductOwnership(text,start))continue;
+   const from=Math.max(text.lastIndexOf('.',match.index||0),text.lastIndexOf('!',match.index||0),text.lastIndexOf('?',match.index||0),text.lastIndexOf(';',match.index||0))+1;
+   if(!/\b(?:confirm|repeat|spell|spelling|referring to|did you say|was it|is it)\b/i.test(text.slice(from,to+1)))continue;
+   references.push({text:match[1],start,end,buyerText:buyer[0]});
+  }
+ }
+ return references.filter((reference,index,all)=>all.findIndex(other=>other.start===reference.start&&other.end===reference.end&&other.buyerText===reference.buyerText)===index).sort((one,two)=>one.start-two.start);
+}
+/** Closed neutral wording for the whole clarification, including an optional
+ * “just to be sure”. Extra factual or commercial tails keep normal checks. */
+export function isBuyerIdentifierClarification(text:string,buyerText:string):boolean {
+ if(!/^\s*(?:(?:sure|okay|ok)[, ]+)?(?:(?:just to be sure|just to confirm)[, ]+)?(?:can|could|would|was|is|did|are)\b/i.test(text)||! /\?\s*$/.test(text))return false;
+ const references=[...buyerProductIdentifierReferences(text,buyerText),...buyerSpelledIdentifierClarificationReferences(text,buyerText)].sort((one,two)=>one.start-two.start);
+ if(!references.length&&!buyerProductIdentifierReferences(buyerText,buyerText).length)return false;
+ // This tail only promises to check the reference accurately. It asserts no
+ // ownership, report coverage, result, timing or company capability. Inspect
+ // the whole remainder below; an appended claim cannot inherit its status.
+ let remainder=text.replace(/[’‘]/g,"'").replace(/,?\s+so\s+(?:I|we)\s+(?:can\s+)?check\s+(?:that|it)(?:\s+(?:accurately|correctly))?(?:\s+for you)?\?\s*$/i,'?')
+  .replace(/,?\s+so\s+(?:I|we)\s+(?:can\s+)?check\s+the right\s+(?:report|reference|code|material|product|item|model)\?\s*$/i,'?')
+  .replace(/,?\s+so\s+(?:I|we)\s+(?:can\s+)?(?:be sure|make sure)\s+(?:we(?:'re| are)|I(?:'m| am))\s+checking\s+(?:coverage\s+for\s+)?the right\s+(?:material|product|item|model|code|reference)\?\s*$/i,'?');
+ for(const reference of [...references].reverse())remainder=remainder.slice(0,reference.start)+' '+remainder.slice(reference.end);
+ if(!/^[A-Za-z\s,?—–-]+$/.test(remainder))return false;
+ const allowed=new Set('sure okay ok just to be can could would was is did are you please confirm clarify repeat spell spelling say referring as in the exact model product part code reference number your engineer team mentioned for of material me it that this again or any other details'.split(' '));
+ return /\b(?:confirm|repeat|spell|spelling|was it|is it|did you say|are you referring to)\b/i.test(remainder)&&(remainder.toLowerCase().match(/[a-z]+/g)||[]).every(word=>allowed.has(word));
+}
+export function isBuyerIdentifierSpellingClarification(text:string,buyerText:string):boolean {
+ return buyerSpelledIdentifierClarificationReferences(text,buyerText).length>0&&isBuyerIdentifierClarification(text,buyerText);
 }
 export function productIdentityReferences(text:string,sources:ProductIdentitySource[]):ProductIdentityReference[]{
  const known=sourceIdentities(sources),references:ProductIdentityReference[]=[];

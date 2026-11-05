@@ -174,6 +174,28 @@ test('A first-person pickup cannot append generic priorities discovery to an int
  assert.match(onDemandDecisionRules(request),/then stop and give this person the turn/);
 });
 
+test('An embedded need reference in the pickup purpose is not a discovery question',()=>{
+ const request=context([...initial,buyer('Noor here.')]);
+ for(const purpose of [
+  'You asked about our specifications; we can go over what you need to evaluate.',
+  'I am following up on the documents you requested for your review.',
+  'You wanted to understand how the specification sheets are organized.',
+ ])assert.deepEqual(onDemandSuggestionProblems('Hi Noor, this is Lin from Example Instruments. '+purpose,request),[],purpose);
+ for(const ask of ['Tell me what your team needs.','Could you share your requirements?','I would love to understand your current needs.']){
+  assert.ok(onDemandSuggestionProblems('Hi Noor, this is Lin from Example Instruments. '+ask,request).some(reason=>/before asking detailed discovery/.test(reason)),ask);
+ }
+ assert.match(onDemandDecisionRules(request),/supplied company name/);
+});
+
+test('A supplied company’s actually spoken short name can introduce the rep after a transfer',()=>{
+ const turns=[...initial];turns[1]={...turns[1],text:'Hi, I am Lin from Example.'};turns.push(buyer('Noor here.'));
+ const request=context(turns);
+ assert.deepEqual(onDemandSuggestionProblems('Hi Noor, this is Lin from Example. I am following up on the agreed instruments call.',request),[]);
+ for(const company of ['Unknown','Instruments','Noor'])assert.ok(onDemandSuggestionProblems(`Hi Noor, this is Lin from ${company}.`,request).some(reason=>/Introduce the supplied company/.test(reason)),company);
+ const noAlias=context([...initial,buyer('Noor here.')]);
+ assert.ok(onDemandSuggestionProblems('Hi Noor, this is Lin from Example.',noAlias).some(reason=>/Introduce the supplied company/.test(reason)),'Do not infer an unprovided short name from an arbitrary first word.');
+});
+
 test('A current pickup question keeps its own action instead of greeting-only projection',()=>{
  const request={...context([...initial,buyer('Noor here. Can you confirm whether the report covers PX20?')]),clientContext:undefined};
  const purpose=getPurposeContext(request),projected=projectOnDemandImmediateAction(request,purpose),foundation=foundationLayerFor(request);
