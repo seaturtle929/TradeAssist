@@ -1,3 +1,6 @@
+import {canonicalizeKnownProductIdentifiers} from './product-identity-evidence.ts';
+import {availableDocumentActionEvidence} from './document-availability-evidence.ts';
+
 /** Document availability and product coverage are different propositions.
  * A scope claim must have its own original document→product relationship;
  * co-occurrence in a catalog, buyer request or extracted summary is not one. */
@@ -13,6 +16,7 @@ const relationship=/\b(?:covers?|covering|appl(?:y|ies|icable)|pertain(?:s|ing)?
 const stale=/\b(?:superseded|archived|obsolete|draft|outdated|historical|expired|not current|unapproved|not approved|for reference only)\b/i;
 const uncertainty=/\b(?:unknown|unconfirmed|unverified|may|might|could|unless|except|subject to|only when|only if|requires? approval|approval required)\b/i;
 const negative=/\b(?:not|no|never|doesn't|does not|isn't|is not|aren't|are not|excluding|except)\b/i;
+const productNounTail=/^(?:products?|models?|grades?|mesh|valves?|irrigation valves?|woven mesh|stainless steel mesh|woven stainless[- ]steel mesh)$/i;
 const parts=(text:string)=>text.split(/\n+|(?<=[.!?;])\s+/).filter(Boolean);
 
 function documents(text:string){return [...text.matchAll(documentPattern)].map(match=>({text:match[0],start:match.index||0,end:(match.index||0)+match[0].length,kind:norm(match[0]).replace(/\breports\b/g,'report').replace(/\bsheets\b/g,'sheet').replace(/\bcertificates\b/g,'certificate').replace(/\bcertifications\b/g,'certification').replace(/\bspec sheet\b/g,'specification sheet')}));}
@@ -113,7 +117,8 @@ export function isConversationalAcknowledgment(text:string):boolean {
  // its answer. Keep complete noun labels only: modifiers, relative clauses and
  // a qualified “[product] report” still go through ordinary claim checks.
  if(/^about\s+/i.test(tail)&&/^(?:thanks|thank you) for asking\b/i.test(line)){
-  const topic=tail.replace(/^about\s+/i,'').replace(/[.!]+$/,'').trim();
+  const topic=tail.replace(/^about\s+/i,'').replace(/,\s*[A-Z][A-Za-z'-]*(?:\s+[A-Z][A-Za-z'-]*){0,2}[.!]?$/,'').replace(/[.!]+$/,'').trim();
+  if(/^(?:this|that|it)$/i.test(topic))return true;
   if(/^(?:(?:the|that|this|your)\s+)?(?:[A-Z]{1,6}\d{1,6}[A-Z0-9-]*|product|mesh|grade|requirements?|specifications?|scope|coverage|availability|certification|price|pricing|(?:material test|inspection|test) report|report)$/i.test(topic))return true;
  }
  return /^[,.!]*$/.test(tail)||/^,\s*[A-Z][A-Za-z'-]*(?:\s+[A-Z][A-Za-z'-]*){0,2}[.!]?$/.test(tail);
@@ -141,6 +146,10 @@ export function isBoundedEpistemicFactAction(text:string):boolean {
  // A closed courtesy prefix changes neither the action nor its uncertainty.
  // Preserve everything after it so attached factual/timing claims still fail.
  let line=text.trim().replace(/[’‘]/g,"'");
+ // An intra-token letter→digit dash is identifier typography, not a clause
+ // boundary. This parses the inquiry only; identity/number evidence checks
+ // still decide whether the referenced product is actually known.
+ line=line.replace(/([A-Za-z])[\u2010-\u2015\u2212\uFE63\uFF0D](?=\d)/g,'$1-');
  const courtesyEnd=[...line.matchAll(/[,;:—–-]/g)].filter(match=>isConversationalAcknowledgment(line.slice(0,match.index))).at(-1)?.index;
  if(courtesyEnd!==undefined)line=line.slice(courtesyEnd+1).trim();
  const investigation=/^(?:(?:I|we)(?:'ll|\s+(?:can|will|would|must))\s+|(?:I|we)\s+(?:need|have) to\s+|let (?:me|us)\s+|(?:can|could|may|should|would)\s+(?:I|we)\s+)(?:(?:definitely|certainly|personally)\s+)?(?:(?:need|have) to\s+)?(?:(?:definitely|certainly|personally)\s+)?(?:check|double[- ]?check|verify|confirm|find out|look into)\s+/i.exec(line);
@@ -193,23 +202,70 @@ export function isBoundedEpistemicFactAction(text:string):boolean {
  * different actions. The first two assert no coverage. The last still needs
  * availability and company permission; return its explicit referent so the
  * ordinary document-action checks can enforce those independently. */
-export function investigationThenDocumentDelivery(text:string):{investigation:string;document:string}|undefined {
+export function investigationThenDocumentDelivery(text:string):{investigation:string;document:string;deliveryCondition:'sequence_only'|'stated_condition';conditionText?:string}|undefined {
  const line=text.trim().replace(/[’‘]/g,"'");
- const continuation=/\s*,?\s+(?:and\s+)?then\s+(?:I|we)(?:'ll|\s+(?:will|can|could))\s+(?:send|email|share|include|attach)\s+(?:it|that report|the report)(?:\s+(?:over|to you|for review))?[.!]?$/i.exec(line);
+ // A repeated subject is optional in a coordinated action (“I'll check ...
+ // and then send it”). Sequence does NOT mean “only if it covers the product”.
+ const continuation=/\s*,?\s+(?:and\s+)?then\s+(?:(?:I|we)(?:'ll|\s+(?:will|can|could))\s+)?(?:send|email|share|include|attach)\s+(?:it|that report|the report)(?:\s+(?:over|along|to you|for review))?[.!]?$/i.exec(line)
+  ||/\s*,?\s+and\s+((?:only\s+)?if\s+(?:it|that report|the report)\s+(?:does|covers?\s+(?:it|that product|your product|your mesh|the requirements)|matches?\s+(?:the|your)\s+requirements))\s*,?\s+(?:I|we)(?:'ll|\s+(?:will|can|could))\s+(?:send|email|share|include|attach)\s+(?:it|that report|the report)(?:\s+(?:over|along|to you|for review))?[.!]?$/i.exec(line);
  if(!continuation)return;
  const investigation=line.slice(0,continuation.index).trim();
  if(!isBoundedEpistemicFactAction(investigation))return;
  const referents=documents(investigation);
  if(referents.length!==1||! /report$/.test(referents[0].kind))return;
- return {investigation,document:referents[0].kind};
+ return {investigation,document:referents[0].kind,deliveryCondition:continuation[1]?'stated_condition':'sequence_only',...(continuation[1]?{conditionText:continuation[1]}:{})};
+}
+
+/** Negation of report coverage differs from a limitation on what the report
+ * proves. “It records the tested sample, but does not certify suitability”
+ * does not negate the report→product relationship asserted earlier. */
+function coverageNegated(text:string,document?:ReturnType<typeof documents>[number],scope?:Scope):boolean {
+ const product=scope&&productPosition(text,scope);
+ if(document&&product)return negative.test(text.slice(0,Math.max(document.end,product.end)));
+ return /\b(?:does\s+not|doesn't|do\s+not|don't|never|cannot|can't)\s+(?:(?:explicitly|specifically)\s+)?(?:cover|apply|pertain|relate|correspond|include|contain)\b|\b(?:is\s+not|isn't|are\s+not|aren't)\s+(?:for|applicable|specific|relevant|related)\b/i.test(text);
+}
+
+/** A single affirmative excerpt is insufficient when another original source
+ * limits/denies the same relationship or names a different report. Resolve
+ * explicit IDs, but leave generic conflicting or ambiguous references pending. */
+function competingScopeEvidence(kind:string,product:string,identifier:string|undefined,sources:DocumentProductSource[]):boolean {
+ const reportIds=new Set<string>(),target=norm(product);
+ for(const source of sources){
+  let priorDocument=false,priorProduct=false,priorOtherIdentifier=false;
+  for(const raw of parts(canonicalizeKnownProductIdentifiers(source.text,sources))){
+   const found=documents(raw).filter(document=>sameDocument(kind,document.kind));
+   const ids=documentIdentifierReferences(raw).filter(document=>sameDocument(kind,document.kind));
+   const products=scopes(raw),hasProduct=products.some(scope=>scope.key===target);
+   const otherIdentifier=!!identifier&&!!ids.length&&ids.every(reference=>reference.identifier!==identifier);
+   const followsDocument=!found.length&&/^\s*(?:it|this|that)\b/i.test(raw)&&priorDocument;
+   const applies=(found.length>0||followsDocument)&&!otherIdentifier&&!(followsDocument&&priorOtherIdentifier)
+    &&(hasProduct||!products.length&&(priorProduct||found.length>0));
+   if(applies){
+    if(hasProduct)for(const reference of ids)reportIds.add(reference.identifier);
+    const scopePredicate=relationWords(raw)||/\b(?:excludes?|omits?|scope|coverage)\b/i.test(raw);
+    if(scopePredicate&&(coverageNegated(raw)||uncertainty.test(raw)||/\b(?:only|limited|excluding|excludes?|omits?|restriction|restricted)\b/i.test(raw)))return true;
+    if(scopePredicate&&hasProduct){
+     const position=productPosition(raw,{key:target,labels:[target]});
+     const remainder=position?raw.slice(position.end).replace(/[.!]$/,'').trim():'';
+     // A second scope statement with an unexplained qualifier must not be
+     // ignored merely because an unrestricted positive statement also exists.
+     if(remainder&&!productNounTail.test(remainder))return true;
+    }
+   }
+   if(found.length){priorDocument=true;priorOtherIdentifier=otherIdentifier;if(products.length)priorProduct=hasProduct;}
+  }
+ }
+ return !identifier&&reportIds.size>1;
 }
 
 /** Return a hard veto for absent linkage. A present relationship remains a
  * candidate for normal semantic checking: scope alone never proves results,
  * suitability, certification, or any other contents of the report. */
 export function assessDocumentProductCoverage(clause:string,context:Context,sources:DocumentProductSource[]):{supported:false;pending?:true;candidateSourceIds?:string[];reason:string;verificationBoundary?:'document_product_scope'}|undefined {
+ sources=sources.map(source=>({...source,text:canonicalizeKnownProductIdentifiers(source.text,sources)}));
+ context={...context,buyerText:canonicalizeKnownProductIdentifiers(latestBuyer(context),sources)};
  const buyer=latestBuyer(context),asked=requestsDocumentProductCoverage(buyer);
- const line=clause.trim().replace(/[’‘]/g,"'");
+ const line=canonicalizeKnownProductIdentifiers(clause,sources).trim().replace(/[’‘]/g,"'");
  // Explicit uncertainty is a commitment to investigate, never a positive or
  // negative assertion about report scope. Appended assertions are assessed in
  // their own clause by the normal verification policy.
@@ -220,7 +276,7 @@ export function assessDocumentProductCoverage(clause:string,context:Context,sour
  // “I'll confirm it covers ...” asserts a positive answer, unlike the
  // bounded “confirm whether ...” action handled above. The current question
  // supplies its document referent, never the missing coverage relationship.
- const documentPronoun=asked&&!ownDocuments.length&&/^\s*(?:(?:I|we)(?:'ll|\s+(?:will|can|would))\s+(?:confirm|verify)\s+(?:that\s+)?)?(?:it|this|that)\b/i.test(line)&&relationWords(line);
+ const documentPronoun=asked&&!ownDocuments.length&&/^\s*(?:(?:I|we)(?:'ll|\s+(?:will|can|would))\s+(?:confirm|verify)\s+(?:that\s+)?)?(?:it|this|that)\b/i.test(line)&&(relationWords(line)||/^\s*(?:it|this|that)\s+(?:documents?|records?|details?|describes?|reports?)\b/i.test(line));
  const explicitRelation=!!ownDocuments.length&&(relationWords(line)||/\b(?:report|sheet|certificate)\b.{0,65}\b(?:for|of)\s+(?:(?:our|your|that|this|the|exact)\s+)*(?:product|grade|mesh|material)\b/i.test(line));
  const qualified=ownDocuments.some(document=>scopes(line).some(scope=>linked(line,document,scope)));
  // Follow a document subject with a product-specific predicate even when its
@@ -250,8 +306,8 @@ export function assessDocumentProductCoverage(clause:string,context:Context,sour
  const originals=sources.filter(source=>source.original!==false&&source.complete!==false&&!stale.test((source.title||'')+' '+source.text));
  const map=aliases(originals);
  const matching=pairs.map(({scope,document})=>originals.filter(source=>!uncertainty.test(source.text)&&parts(source.text).some(sentence=>{
-   if(negative.test(sentence)!==negative.test(line))return false;
-   return documents(sentence).some(original=>sameDocument(document.kind,original.kind)&&scopes(sentence).some(product=>equivalent(scope,product,map)&&linked(sentence,original,product)));
+   const claimNegative=coverageNegated(line,ownDocuments.includes(document)?document:undefined,scope);
+   return documents(sentence).some(original=>sameDocument(document.kind,original.kind)&&scopes(sentence).some(product=>equivalent(scope,product,map)&&linked(sentence,original,product)&&coverageNegated(sentence,original,product)===claimNegative));
   })));
  if(matching.every(matches=>matches.length)){
   // The qualified noun is grounded. Let the existing document-availability
@@ -261,6 +317,62 @@ export function assessDocumentProductCoverage(clause:string,context:Context,sour
   return {supported:false,pending:true,candidateSourceIds:[...new Set(matching.flatMap(matches=>matches.map(source=>source.id)))],reason:'Original evidence links this specific document type to this product; normal verification must still establish the claimed scope, conditions and contents.'};
  }
  return {supported:false,verificationBoundary:'document_product_scope',reason:'This document-to-product coverage is not established by original Company Knowledge. Document availability and separate product specifications do not link that specific report to that specific product. Confirm the coverage gap without asserting it, including in a paraphrase.'};
+}
+
+/** Prove one closed, literal coverage predicate. This deliberately does not
+ * prove a report's contents, certification, sample population or suitability.
+ * Those remain semantic questions even when the document/product link exists.
+ * A complete original source travels with the result through its source ID. */
+export function literalDocumentScopeEvidence(clause:string,context:Context,sources:DocumentProductSource[]):{sourceId:string;reason:string;quote:string;evidence?:{sourceId:string;quote:string;reason:string}[]}|undefined {
+ const originals=sources.filter(source=>source.original!==false&&source.complete!==false&&!stale.test((source.title||'')+' '+source.text));
+ const normalized=canonicalizeKnownProductIdentifiers(clause,originals).trim().replace(/[’‘]/g,"'").replace(/[.!]$/,'');
+ const line=normalized.replace(/^(?:yes|correct)[,\s]+/i,'');
+ const doc=documents(line);if(doc.length!==1)return;
+ const document=doc[0],before=line.slice(0,document.start),after=line.slice(document.end);
+ if(/\b(?:reports|sheets|certificates|certifications)\b/i.test(document.text))return;
+ const possession=/^\s*(?:we|our company)\s+(?:have|has)\s+(?:(?:an?|the|our|approved)\s+)*$/i.test(before);
+ if(!possession&&!/^\s*(?:(?:our|the|this|that|an?|approved)\s+)*$/i.test(before))return;
+ const predicate=/^\s*(?:([A-Z][A-Z0-9]*(?:[-/][A-Z0-9]+)+)\s+)?(?:(?:that|which)\s+)?(?:(?:does|do)\s+)?(?:(?:explicitly|specifically)\s+)?covers?\s+(?:(?:our|the|this|that|product|grade|model)\s+)*([A-Z]{1,6}\d{1,6}[A-Z0-9-]*)(?:\s+([a-z][a-z -]*))?$/i.exec(after);
+ if(!predicate)return;
+ if(possession&&!/\b(?:that|which)\b/i.test(after))return;
+ if(!possession&&/\b(?:that|which)\b/i.test(after))return;
+ const availability=possession?availableDocumentActionEvidence(document.kind,originals,true):undefined;
+ if(possession&&!availability)return;
+ const [,identifier,product,description='']=predicate;
+ if(competingScopeEvidence(document.kind,product,identifier,originals))return;
+ // Only a product noun already stated with the source's scoped product may
+ // be elided/repeated. Adjectives, extra predicates and new scope stay pending.
+ if(description&&!productNounTail.test(description))return;
+ const assessment=assessDocumentProductCoverage(line,context,originals);
+ if(!assessment?.pending)return;
+ const candidates=new Set(assessment.candidateSourceIds||[]);
+ for(const source of originals.filter(item=>candidates.has(item.id))){
+  if(uncertainty.test(source.text))continue;
+  const sourceText=canonicalizeKnownProductIdentifiers(source.text,originals);
+  // A positive headline plus an explicit coverage exclusion is not a closed
+  // unrestricted scope proof. Negative certification/performance limitations
+  // remain separate predicates and do not create this contradiction.
+  if(parts(sourceText).some(sentence=>coverageNegated(sentence)&&(!scopes(sentence).length||scopes(sentence).some(scope=>scope.key===norm(product)))))continue;
+  for(const sentence of parts(sourceText))for(const sourceDocument of documents(sentence)){
+   if(!sameDocument(document.kind,sourceDocument.kind))continue;
+   if(/\bapproved\b/i.test(before)&&!/^\s*(?:(?:the|our|an?)\s+)?approved\s*$/i.test(sentence.slice(0,sourceDocument.start)))continue;
+   const scope:Scope={key:norm(product),labels:[norm(product)]};
+   const position=productPosition(sentence,scope);if(!position||position.start<=sourceDocument.end)continue;
+   const relation=sentence.slice(sourceDocument.end,position.start);
+   const link=/^\s*(?:([A-Z][A-Z0-9]*(?:[-/][A-Z0-9]+)+)\s+)?(?:(?:does|do)\s+)?(?:(?:explicitly|specifically)\s+)?covers?\s+((?:[A-Za-z'-]+\s+)*)$/i.exec(relation);
+   if(!link||identifier&&link[1]!==identifier||coverageNegated(sentence,sourceDocument,scope))continue;
+   if(link[2].trim().split(/\s+/).filter(Boolean).some(word=>! /^(?:our|the|this|that|product|grade|model)$/.test(word)&&! /^[A-Z][A-Za-z'-]*$/.test(word)))continue;
+   const suffix=sentence.slice(position.end).replace(/[.!]$/,'').trim();
+   // No extrapolation from “covers PX20 only if…”, a sample restriction or
+   // an attached claim. A following source sentence remains available to the
+   // semantic checker whenever the reply makes any additional content claim.
+   if(suffix&&!productNounTail.test(suffix))continue;
+   const described=norm(description).replace(/s$/,''),sourced=norm(suffix).replace(/s$/,'');
+   if(description&&described!==sourced&&!sourced.endsWith(' '+described)&&!/^(?:product|model|grade)$/i.test(description))continue;
+   const proof={sourceId:source.id,quote:source.text,reason:'The clause’s coverage predicate is the original source’s explicit same-document, same-product relation; no contents, result, certification or wider sample scope is asserted.'};
+   return {...proof,...availability?{evidence:[proof,{sourceId:availability.id,quote:availability.text,reason:'A complete current original source explicitly establishes availability of this document type, with no applicable release or approval restriction.'}]}:{}};
+  }
+ }
 }
 
 /** A compact evidence decision next to the live output rules. It carries the

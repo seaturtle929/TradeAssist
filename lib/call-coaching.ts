@@ -256,7 +256,7 @@ export function needsFactCheck(say:string,backupOrContext:string|CoachingContext
     // intentional request. Unknown predicates retain normal verification.
     // In particular, a courtesy/name must not make “check whether [report]
     // covers [product]” pay for an unrelated document-content model request.
-    if(context.coachingRequest)return !(isNonAssertiveReply(say,primary.claims)&&!primary.requiresVerification&&(!backup.trim()||secondary&&!secondary.requiresVerification&&isNonAssertiveReply(backup,secondary.claims)));
+    if(context.coachingRequest)return !((primary.locallyVerifiedWholeReply||isNonAssertiveReply(say,primary.claims))&&!primary.requiresVerification&&(!backup.trim()||secondary&&!secondary.requiresVerification&&(secondary.locallyVerifiedWholeReply||isNonAssertiveReply(backup,secondary.claims))));
   }
   if(!backup.trim()&&isWrittenQuoteConfirmation(say,context))return false;
   if(!backup.trim() && isDocumentDelivery(say))return false;

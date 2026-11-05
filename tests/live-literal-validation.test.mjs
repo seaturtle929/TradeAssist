@@ -30,5 +30,12 @@ test('Rejected live candidate is traced and repaired, never silently replaced by
   const rejected=traces.find(event=>event.event==='repair_requested');assert.ok(rejected);
   assert.match(JSON.stringify(rejected),/discount/);
   assert.equal(traces.filter(event=>event.event==='published').length,0);
+  assert.ok(sent.some(event=>event.type==='response.cancel'&&event.response_id==='candidate'));
+  assert.equal(sent.filter(event=>event.type==='response.create').length,1,'Repair waits for cancellation acknowledgment');
+  session.handle({type:'response.done',response:{id:'candidate',status:'cancelled'}});
+  assert.equal(sent.filter(event=>event.type==='response.create').length,2,'Repair starts without draining rejected metadata');
+  assert.equal(session.works.values().next().value.phaseClock.snapshot().providerCompleteMs,undefined,'The rejected attempt cancellation is not completion of its repair');
+  session.handle({type:'response.output_text.delta',response_id:'candidate',delta:'WHY: old metadata\n'});
+  assert.equal(shown.length,0);
  }finally{session.stop();}
 });

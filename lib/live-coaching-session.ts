@@ -677,7 +677,7 @@ export class LiveCoachingSession {
       const buffer=this.responses.get(responseId);
       this.coordinator.responseDone(responseId);
       if(!buffer || !this.current(buffer.work))return;
-      const work=buffer.work;if(!buffer.providerDoneRecorded){buffer.providerDoneRecorded=true;work.phaseClock.providerComplete();}
+      const work=buffer.work;if((buffer.attempt??0)===work.repairCount&&!buffer.providerDoneRecorded){buffer.providerDoneRecorded=true;work.phaseClock.providerComplete();}
       if(work.awaitingTranscript){work.deferredResponse=event;return;}
       this.trace(work,'candidate',{rawText:buffer.text||JSON.stringify(response.output||[]),status:response.status,attempt:buffer.attempt??0});
       if((buffer.attempt??0)!==work.repairCount){if(work.repairPending)this.coordinator.continueResponse(work.ticket);return;}
@@ -921,7 +921,7 @@ export class LiveCoachingSession {
     if(assessment.classification.kind==='fact_request')return value;
     const say=assessment.sanitizedReply||'I understand.';
     if(say!==value.say)work.contextReplacement??={originalSay:work.lastDisplayedSay||value.say,reason:'Removed unsupported claim spans while preserving the sales move: '+assessment.unsupportedClaims.map(claim=>claim.reason).join('; '),originalWasDisplayed:!!work.lastDisplayedSay};
-    return {...value,say,backup:'',...assessment.pendingClaims.length?{}:{caution:'',missing:[],evidence:[]},verified:value.verified===true,verificationStatus:value.verificationStatus};
+    return {...value,say,backup:'',...assessment.pendingClaims.length?{}:{caution:'',missing:[],evidence:assessment.locallyVerifiedWholeReply?assessment.localEvidence.map(({sourceId,quote})=>({sourceId,quote})):[]},verified:value.verified===true,verificationStatus:value.verificationStatus};
   }
   private completedSay(buffer:ResponseBuffer,complete=false):Guidance|null {
     const completed=completedLiveReply(buffer.text,buffer.work.context,complete);
@@ -1003,8 +1003,8 @@ export class LiveCoachingSession {
       this.repairDemand(buffer,assessment.unsupportedClaims.map(claim=>'Unsupported claim '+JSON.stringify(claim.text)+': '+claim.reason).join('; ')+' Rewrite the full useful move with the supported broad company category or applicable original evidence. Do not delete the subject and leave a vague question or repeat the unsupported predicate.',main.say);return;
     }
     if(!assessment.requiresVerification&&!needsFactCheck(main.say,buffer.work.context)) {
-      const verified:Guidance={...main,backup:"",evidence:[],verified:true,verificationStatus:assessment.claims.length?'verified':'not_required'};
-      buffer.checked=verified;buffer.checkedSay=main.say;this.finish(buffer,this.merge(buffer,verified),assessment.classification.kind!=='fact_request');return;
+      const verified:Guidance={...main,backup:"",evidence:assessment.locallyVerifiedWholeReply?assessment.localEvidence.map(({sourceId,quote})=>({sourceId,quote})):[],verified:true,verificationStatus:assessment.claims.length?'verified':'not_required'};
+      buffer.checked=verified;buffer.checkedSay=main.say;this.finish(buffer,this.merge(buffer,verified),assessment.locallyVerifiedWholeReply||assessment.classification.kind!=='fact_request');return;
     }
     this.verifyMain(buffer,main);
   }
@@ -1092,9 +1092,11 @@ export class LiveCoachingSession {
     if(work.timer)clearTimeout(work.timer);work.timer=undefined;
     this.options.onChecking(false);this.options.onThinking(true);
     // Reuse this ticket and its frozen context on the same Realtime connection.
-    // If the rejected response is still emitting metadata, response.done drains
-    // the queued repair; subsequent speech has no role in this decision.
-    if(!this.coordinator.continueResponse(work.ticket))work.timer=setTimeout(()=>{if(this.current(work)&&work.repairPending)this.rejectDemand(work,'The rejected response did not release its slot for the source-safe rewrite.');},this.options.fallbackAfterMs??8000);
+    // Cancel optional metadata from the rejected draft rather than waiting for
+    // it to finish. The coordinator retains the slot until cancel acknowledgment
+    // (or its bounded timeout), then starts exactly one repair of this snapshot.
+    work.timer=setTimeout(()=>{if(this.current(work)&&work.repairPending)this.rejectDemand(work,'The rejected response did not release its slot for the source-safe rewrite.');},this.options.fallbackAfterMs??8000);
+    if(!this.coordinator.replaceResponse(work.ticket))this.rejectDemand(work,'The source-safe rewrite no longer owns this request.');
   }
   private rejectDemand(work:Work,reason:string) {
     if(!this.current(work)||work.answered)return;

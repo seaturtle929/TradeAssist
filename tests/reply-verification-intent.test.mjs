@@ -183,11 +183,12 @@ for(const company of companies){
   assert.equal(isNonAssertiveReply(say,assessment.claims),false,say);
   assert.equal(needsFactCheck(say,request),true,say);
  });
- test(`${company.name}: a specific approved link retains the factual verification path`,()=>{
+ test(`${company.name}: a complete literal scope claim can be proven from its approved link`,()=>{
   const request=context(company,true),say=`The ${report} covers ${product}.`,assessment=assessReplyVerification(say,request);
   assert.equal(assessment.unsupportedClaims.length,0);
-  assert.ok(assessment.pendingClaims.some(claim=>claim.candidateSourceIds?.includes('scope')));
-  assert.equal(needsFactCheck(say,request),true);
+  assert.ok(assessment.localEvidence.some(item=>item.sourceId==='scope'));
+  assert.equal(assessment.locallyVerifiedWholeReply,true);
+  assert.equal(needsFactCheck(say,request),false);
   assert.equal(isNonAssertiveReply(say,assessment.claims),false);
  });
  test(`${company.name}: a named report identifier and company label preserve the original scope link and limitations`,()=>{
@@ -196,14 +197,14 @@ for(const company of companies){
   request.sources.push(source);
   const assessment=assessReplyVerification(say,request);
   assert.equal(assessment.unsupportedClaims.length,0);
-  assert.ok(assessment.pendingClaims.some(claim=>claim.candidateSourceIds?.includes(source.id)));
-  assert.equal(needsFactCheck(say,request),true);
+  assert.ok(assessment.localEvidence.some(item=>item.sourceId===source.id));
+  assert.equal(needsFactCheck(say,request),false);
   const namedSay=`Our ${report} IR-${product}-2026 does cover ${product}.`;
   const namedAssessment=assessReplyVerification(namedSay,request);
   assert.deepEqual(namedAssessment.unsupportedClaims,[],namedSay);
-  assert.ok(namedAssessment.pendingClaims.some(claim=>claim.candidateSourceIds?.includes(source.id)));
+  assert.ok(namedAssessment.localEvidence.some(item=>item.sourceId===source.id));
   assert.ok(namedAssessment.supportedClaims.some(claim=>claim.text===`IR-${product}-2026`&&claim.sourceId===source.id));
-  assert.equal(needsFactCheck(namedSay,request),true,'Recognizing an identifier never verifies the scope/content assertion.');
+  assert.equal(needsFactCheck(namedSay,request),false,'The full closed scope assertion is proven; recognizing only the identifier would not suffice.');
   for(const unknown of [namedSay.replace('-2026','-2027'),namedSay.replace(`IR-${product}-2026`,`IR-ZZ99-2026`)])assert.ok(assessReplyVerification(unknown,request).unsupportedClaims.some(claim=>/document identifier/.test(claim.reason)),unknown);
   const promised=`The ${report} covers ${product} and guarantees your product performance.`;
   assert.equal(needsFactCheck(promised,request),true);

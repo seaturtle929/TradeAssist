@@ -87,6 +87,15 @@ export class LiveTurnCoordinator {
     if(!this.isCurrent(ticket) || this.server || this.continuation || this.answeredRevision===ticket.revision)return false;
     this.processing=ticket;this.continuation=ticket;this.drain();return true;
   }
+  /** A rejected spoken candidate does not need the rest of its metadata.
+   * Keep the same snapshot, but wait for cancellation acknowledgment before
+   * dispatching its one repair on the single-response Realtime connection. */
+  replaceResponse(ticket:LiveReplyTicket):boolean {
+    if(!this.isCurrent(ticket) || this.continuation || this.answeredRevision===ticket.revision)return false;
+    this.processing=ticket;this.continuation=ticket;
+    if(this.server)this.cancel(this.server,true);
+    this.drain();return true;
+  }
   deferPublish(ticket:LiveReplyTicket,publish:()=>void):boolean {
     if(!this.isCurrent(ticket))return false;
     publish();return true;
@@ -119,11 +128,11 @@ export class LiveTurnCoordinator {
       responseActive:!!(this.server || this.processing || this.continuation),serverBusy:!!this.server,
       pendingBuyer:this.latest && this.answeredRevision!==this.latest.revision ? this.latest.turn.id : null};
   }
-  private cancel(slot:ServerSlot):void {
+  private cancel(slot:ServerSlot,replaceCurrent=false):void {
     this.options.onCancel(slot.id);
-    if(this.server!==slot || this.isCurrent(slot.ticket) || slot.cancelTimer)return;
+    if(this.server!==slot || (!replaceCurrent&&this.isCurrent(slot.ticket)) || slot.cancelTimer)return;
     slot.cancelTimer=setTimeout(()=>{
-      if(this.server!==slot || this.isCurrent(slot.ticket))return;
+      if(this.server!==slot || (!replaceCurrent&&this.isCurrent(slot.ticket)))return;
       this.server=null;slot.cancelTimer=undefined;this.drain();
     },this.options.cancelAckTimeoutMs??300);
   }

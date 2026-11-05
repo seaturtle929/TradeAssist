@@ -145,10 +145,21 @@ test('An uncertain/failed final and explicit cancel never publish the hidden com
 
 test('A factual candidate cannot start its external verifier until its canonical final is accepted',async()=>{
  const t=fixture();try{
-  t.context.sources=[{id:'coverage',title:'Approved inspection report',text:'The inspection report covers PX20.'}];
-  await t.speculate('Does the inspection report cover PX20?');t.finish(t.created(),'The inspection report covers PX20.');assert.equal(t.log.verified.length,0);assert.equal(t.log.shown.length,0);
+  t.context.sources=[{id:'coverage',title:'Approved inspection report',text:'The inspection report covers PX20. It records inspection of the tested sample.'}];
+  await t.speculate('Does the inspection report cover PX20?');t.finish(t.created(),'The inspection report covers PX20. It documents inspection of the tested sample.');assert.equal(t.log.verified.length,0);assert.equal(t.log.shown.length,0);
   t.final('buyer','Does the inspection report cover PX20?');await sleep(20);
   assert.equal(t.creates().length,1);assert.equal(t.log.verified.length,1);assert.equal(t.log.verified[0].turns[0].text,'Does the inspection report cover PX20?');assert.equal(t.log.shown.length,1);
+ }finally{t.session.stop();}
+});
+
+test('Closed source proof waits for canonical final, then publishes with its original citation and no redundant model verification',async()=>{
+ const t=fixture();try{
+  const source={id:'coverage',title:'Approved inspection report',text:'The inspection report covers PX20.'};t.context.sources=[source];
+  await t.speculate('Does the inspection report cover PX20?');t.finish(t.created(),source.text);
+  assert.equal(t.log.verified.length,0);assert.equal(t.log.shown.length,0);
+  t.final('buyer','Does the inspection report cover PX20?');await sleep(20);
+  assert.equal(t.creates().length,1);assert.equal(t.log.verified.length,0);assert.equal(t.log.shown.length,1);
+  assert.equal(t.log.shown[0].value.verificationStatus,'verified');assert.deepEqual(t.log.shown[0].value.evidence,[{sourceId:source.id,quote:source.text}]);
  }finally{t.session.stop();}
 });
 
