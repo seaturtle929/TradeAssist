@@ -1,7 +1,7 @@
 import type {CoachingContext} from './call-coaching';
 import {configurationReferences} from './company-configuration.ts';
 import {requestsDocumentProductCoverage} from './document-product-evidence.ts';
-import {buyerProductIdentifierReferences,productIdentityReferences} from './product-identity-evidence.ts';
+import {buyerProductIdentifierReferences,isBuyerIdentifierClarification,productIdentityReferences} from './product-identity-evidence.ts';
 
 const escaped=(text:string)=>text.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
 const normalize=(text:string)=>text.replace(/[’‘]/g,"'");
@@ -70,7 +70,7 @@ export function buyerIdentifierConfirmation(context:CoachingContext):{identifier
 
 export function buyerIdentifierConfirmationProblems(say:string,context:CoachingContext):string[]{
  const uncertainty=buyerIdentifierConfirmation(context);if(!uncertainty)return [];
- const narrowQuestion=say.includes('?')&&(confirmationQuestion(say)||/\b(?:did you say|was (?:that|it))\b/i.test(say)||/\bspell\b/i.test(say)&&uncertainty.identifiers.some(identifier=>say.includes(identifier)));
+ const narrowQuestion=say.includes('?')&&(confirmationQuestion(say)||/\b(?:did you say|was (?:that|it))\b/i.test(say)||/\bspell\b/i.test(say)&&uncertainty.identifiers.some(identifier=>say.includes(identifier))||say.split(/(?<=[.!])\s+/).some(part=>isBuyerIdentifierClarification(part,uncertainty.buyerText)));
  const sources=context.companyConfiguration?configurationReferences(context.companyConfiguration.snapshot):context.sources||[];
  // The buyer-reference helper is deliberately narrow (and excludes owned
  // noun phrases). Also inspect source-known codes so a leading clarification

@@ -894,7 +894,7 @@ export function assessReplyVerification(say: string, context: VerificationPolicy
       .replace(/\s+([,.!?])/g, '$1').trim();
     if (sanitizedReply) sanitizedReply = sanitizedReply[0].toUpperCase() + sanitizedReply.slice(1);
   }
-  const assertedRemainder=replyClauses(say,context).filter(part=>!unresolvedFactCheck(part.text,context)).map(part=>part.text).join(' ');
+  const assertedRemainder=replyClauses(say,context).filter(part=>!unresolvedFactCheck(part.text,context)&&!conversationalClause(part.text,context)).map(part=>part.text).join(' ');
   const checkAndExistingDocuments=isBoundedFactCheckReply(say,claims,context)&&claims.every(claim=>claim.supported&&(claim.kind==='product_identity'||claim.kind==='supplier_claim'&&claim.reason===AVAILABLE_DOCUMENT_ACTION));
   return { classification, claims, unsupportedClaims, supportedClaims, pendingClaims, locallyVerifiedWholeReply, localEvidence, requiresVerification: !locallyVerifiedWholeReply&&(pendingClaims.length>0 || (classification.kind === 'fact_request' ? !checkAndExistingDocuments&&(claims.length > 0 || /\b(?:yes|correct|we\s+do|we\s+can|it\s+is|we\s+offer|we\s+supply)\b/i.test(assertedRemainder)) : unsupportedClaims.length > 0)), sanitizedReply, changed: sanitizedReply !== say };
 }

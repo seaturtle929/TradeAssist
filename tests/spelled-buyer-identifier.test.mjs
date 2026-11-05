@@ -33,10 +33,14 @@ test('A spelled assertion, unknown ownership, report identifier or old buyer cod
  for(const [say,buyer] of [['Our Z-X-7-2 is available.',input.turns[0].text],['Could you confirm our Z-X-7-2?',input.turns[0].text],['Does the report cover Z-X-7-2?','Can you check report ID ZX72?'],['Was it Z-X-7-2?','Please check the report.']])assert.deepEqual(buyerSpelledIdentifierClarificationReferences(say,buyer),[],say);
 });
 
-for(const identifier of ['ZX72','Z-X-7-2'])test('One intentional live request publishes the complete code clarification with a bounded first-person tail: '+identifier,()=>{
- const say=`Thanks for letting me know. Could you confirm the exact code or spelling for ${identifier}, so I can check that accurately for you?`;
+for(const say of [
+ 'Thanks for letting me know. Could you confirm the exact code or spelling for ZX72, so I can check that accurately for you?',
+ 'Thanks for letting me know. Could you confirm the exact code or spelling for Z-X-7-2, so I can check that accurately for you?',
+ 'Thanks for that question. Could you confirm the exact spelling or any other details for ZX72, so I can be sure we’re checking coverage for the right material?',
+ 'Could you confirm the spelling of ZX72 so we can check the right material?',
+])test('One intentional live request publishes a complete reference clarification with a bounded purpose: '+say,()=>{
  const context=structuredClone(input),sent=[],shown=[],traces=[];let verificationCalls=0;
- assert.equal(isBuyerIdentifierClarification(say.split('. ')[1],context.turns[0].text),true);
+ assert.equal(isBuyerIdentifierClarification(say.split('. ').at(-1),context.turns[0].text),true);
  assert.equal(needsFactCheck(say,context),false);assert.equal(checkSuggestion({say},context).ok,true);
  const session=new LiveCoachingSession({snapshot:()=>context,latestContext:()=>context,send:event=>sent.push(event),onGuidance:(guidance,id,_at,complete)=>shown.push({say:guidance.say,id,complete}),onRequestTrace:event=>traces.push(event),verify:async()=>{verificationCalls++;assert.fail('A pure identifier clarification is not a coverage claim');},fallback:async()=>assert.fail('Unexpected fallback'),onBuyerTurn:()=>{},onSupersede:()=>{},onPendingTurn:()=>{},onThinking:()=>{},onChecking:()=>{},onBuyerPartial:()=>{},onBuyerSpeech:()=>{},onBuyerPending:()=>{},onUsage:()=>{},onWarning:()=>{},onError:message=>assert.fail(message),fallbackAfterMs:10000});
  try{

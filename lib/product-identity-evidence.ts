@@ -102,11 +102,12 @@ export function isBuyerIdentifierClarification(text:string,buyerText:string):boo
  // This tail only promises to check the reference accurately. It asserts no
  // ownership, report coverage, result, timing or company capability. Inspect
  // the whole remainder below; an appended claim cannot inherit its status.
- let remainder=text.replace(/,?\s+so\s+(?:I|we)\s+(?:can\s+)?check\s+(?:that|it)(?:\s+(?:accurately|correctly))?(?:\s+for you)?\?\s*$/i,'?')
-  .replace(/,?\s+so\s+(?:I|we)\s+(?:can\s+)?check\s+the right\s+(?:report|reference|code)\?\s*$/i,'?');
+ let remainder=text.replace(/[’‘]/g,"'").replace(/,?\s+so\s+(?:I|we)\s+(?:can\s+)?check\s+(?:that|it)(?:\s+(?:accurately|correctly))?(?:\s+for you)?\?\s*$/i,'?')
+  .replace(/,?\s+so\s+(?:I|we)\s+(?:can\s+)?check\s+the right\s+(?:report|reference|code|material|product|item|model)\?\s*$/i,'?')
+  .replace(/,?\s+so\s+(?:I|we)\s+(?:can\s+)?(?:be sure|make sure)\s+(?:we(?:'re| are)|I(?:'m| am))\s+checking\s+(?:coverage\s+for\s+)?the right\s+(?:material|product|item|model|code|reference)\?\s*$/i,'?');
  for(const reference of [...references].reverse())remainder=remainder.slice(0,reference.start)+' '+remainder.slice(reference.end);
  if(!/^[A-Za-z\s,?—–-]+$/.test(remainder))return false;
- const allowed=new Set('just to be sure can could would was is did you please confirm repeat spell spelling say the exact model product part code reference number your engineer team mentioned for material me it that this again or'.split(' '));
+ const allowed=new Set('just to be sure can could would was is did you please confirm clarify repeat spell spelling say the exact model product part code reference number your engineer team mentioned for of material me it that this again or any other details'.split(' '));
  return /\b(?:confirm|repeat|spell|spelling|was it|is it|did you say)\b/i.test(remainder)&&(remainder.toLowerCase().match(/[a-z]+/g)||[]).every(word=>allowed.has(word));
 }
 export function isBuyerIdentifierSpellingClarification(text:string,buyerText:string):boolean {
