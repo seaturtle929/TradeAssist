@@ -361,13 +361,15 @@ export function literalDocumentScopeEvidence(clause:string,context:Context,sourc
  if(/\b(?:reports|sheets|certificates|certifications)\b/i.test(document.text))return;
  const possession=/^\s*(?:we|our company)\s+(?:have|has)\s+(?:(?:an?|the|our|approved)\s+)*$/i.test(before);
  if(!possession&&!/^\s*(?:(?:our|the|this|that|an?|approved)\s+)*$/i.test(before))return;
- const predicate=/^\s*(?:([A-Z][A-Z0-9]*(?:[-/][A-Z0-9]+)+)\s+)?(?:(?:that|which)\s+)?(?:(?:does|do)\s+)?(?:(?:explicitly|specifically)\s+)?covers?\s+(?:(?:our|the|this|that|product|grade|model)\s+)*([A-Z]{1,6}\d{1,6}[A-Z0-9-]*)(?:\s+([a-z][a-z -]*))?$/i.exec(after);
+ const predicate=/^\s*(?:([A-Z][A-Z0-9]*(?:[-/][A-Z0-9]+)+)\s+)?(?:(?:that|which)\s+)?(?:(?:does|do)\s+)?(?:(?:explicitly|specifically)\s+)?covers?\s+((?:[A-Za-z'-]+\s+)*)([A-Z]{1,6}\d{1,6}[A-Z0-9-]*)(?:\s+([a-z][a-z -]*))?$/i.exec(after);
  if(!predicate)return;
  if(possession&&!/\b(?:that|which)\b/i.test(after))return;
  if(!possession&&/\b(?:that|which)\b/i.test(after))return;
  const availability=possession?availableDocumentActionEvidence(document.kind,originals,true):undefined;
  if(possession&&!availability)return;
- const [,identifier,product,description='']=predicate;
+ const [,identifier,productPrefix,product,description='']=predicate;
+ const claimPrefix=productPrefix.trim().split(/\s+/).filter(Boolean).filter(word=>!/^(?:our|the|this|that|product|grade|model)$/i.test(word));
+ if(claimPrefix.some(word=>! /^[A-Z][A-Za-z'-]*$/.test(word)))return;
  if(competingScopeEvidence(document.kind,product,identifier,originals))return;
  // Only a product noun already stated with the source's scoped product may
  // be elided/repeated. Adjectives, extra predicates and new scope stay pending.
@@ -390,7 +392,10 @@ export function literalDocumentScopeEvidence(clause:string,context:Context,sourc
    const relation=sentence.slice(sourceDocument.end,position.start);
    const link=/^\s*(?:([A-Z][A-Z0-9]*(?:[-/][A-Z0-9]+)+)\s+)?(?:(?:does|do)\s+)?(?:(?:explicitly|specifically)\s+)?covers?\s+((?:[A-Za-z'-]+\s+)*)$/i.exec(relation);
    if(!link||identifier&&link[1]!==identifier||coverageNegated(sentence,sourceDocument,scope))continue;
-   if(link[2].trim().split(/\s+/).filter(Boolean).some(word=>! /^(?:our|the|this|that|product|grade|model)$/.test(word)&&! /^[A-Z][A-Za-z'-]*$/.test(word)))continue;
+   const sourcePrefix=link[2].trim().split(/\s+/).filter(Boolean);
+   if(sourcePrefix.some(word=>! /^(?:our|the|this|that|product|grade|model)$/.test(word)&&! /^[A-Z][A-Za-z'-]*$/.test(word)))continue;
+   const sourceName=sourcePrefix.filter(word=>!/^(?:our|the|this|that|product|grade|model)$/i.test(word));
+   if(claimPrefix.length&&norm(claimPrefix.join(' '))!==norm(sourceName.join(' ')))continue;
    const suffix=sentence.slice(position.end).replace(/[.!]$/,'').trim();
    // No extrapolation from “covers PX20 only if…”, a sample restriction or
    // an attached claim. A following source sentence remains available to the
@@ -402,6 +407,63 @@ export function literalDocumentScopeEvidence(clause:string,context:Context,sourc
    return {...proof,...availability?{evidence:[proof,{sourceId:availability.id,quote:availability.text,reason:'A complete current original source explicitly establishes availability of this document type, with no applicable release or approval restriction.'}]}:{}};
   }
  }
+}
+
+type DocumentStatementProof=NonNullable<ReturnType<typeof literalDocumentScopeEvidence>>;
+type ReportProposition={kind:'content';object:string}|{kind:'exclusion';objects:string[]};
+function reportPropositions(text:string):ReportProposition[]|undefined {
+ const line=text.trim().replace(/[’‘]/g,"'").replace(/[.!]$/,'');
+ const clauses=line.split(/\s*(?:;|,?\s+but\s+|,?\s+though\s+)\s*/i),result:ReportProposition[]=[];
+ for(let index=0;index<clauses.length;index++){
+  const clause=clauses[index].trim();
+  const content=/^it\s+(?:records|shows|documents)\s+the\s+([a-z]+(?:[ -][a-z]+){0,4}\s+of the tested sample)$/i.exec(clause);
+  if(content){
+   // The object must be repeated intact, including its singular sample scope.
+   // No conjunction/qualifier may smuggle a second proposition into a noun.
+   if(/\b(?:and|or|but|only|all|every|not|no|if|unless|guaranteed|certified)\b/i.test(content[1]))return;
+   result.push({kind:'content',object:content[1].toLowerCase()});continue;
+  }
+  const exclusion=new RegExp('^'+(index?'(?:it\\s+)?':'it\\s+')+"(?:does not|doesn't)\\s+certify\\s+(.+)$",'i').exec(clause);
+  if(!exclusion)return;
+  const objects=exclusion[1].toLowerCase().split(/\s*(?:,\s*(?:or|and)?|\s+(?:or|and)\s+)\s*/).filter(Boolean);
+  if(!objects.length||objects.some(object=>! /^[a-z]+(?:[ -][a-z]+){0,3}$/.test(object)||/\b(?:not|no|if|unless|only|all|every|because|but|so|when|which|that)\b/.test(object)))return;
+  result.push({kind:'exclusion',objects});
+ }
+ return result.length?result:undefined;
+}
+
+/** The same explicit report remains the referent only across adjacent, proven
+ * report sentences. The entire original must have a closed scope headline and
+ * directly attached content/limitations; a retrieved fragment is not proof.
+ * Unknown wording, approval, broader sample populations and guarantee claims
+ * continue to the normal semantic verifier. */
+export function literalDocumentStatementEvidence(clause:string,context:Context,sources:DocumentProductSource[],previous?:DocumentStatementProof):DocumentStatementProof|undefined {
+ const clean=clause.trim().replace(/[’‘]/g,"'");
+ const direct=literalDocumentScopeEvidence(clean,context,sources);
+ if(direct)return direct;
+ let binding=previous,body=clean;
+ // An em dash joining two complete propositions is not a product-ID dash.
+ const divider=clean.indexOf('—');
+ if(divider>=0){
+  binding=literalDocumentScopeEvidence(clean.slice(0,divider),context,sources);
+  if(!binding)return;
+  body=clean.slice(divider+1);
+ }
+ if(!binding)return;
+ const propositions=reportPropositions(body);if(!propositions)return;
+ const source=sources.find(item=>item.id===binding!.sourceId&&item.original!==false&&item.complete!==false&&!stale.test((item.title||'')+' '+item.text));
+ if(!source)return;
+ const sourceParts=parts(source.text);
+ if(sourceParts.length<2||!literalDocumentScopeEvidence(sourceParts[0],context,sources))return;
+ const sourceDocument=documents(sourceParts[0]);if(sourceDocument.length!==1)return;
+ // A second original about this document may qualify/contradict its contents.
+ // A plain availability list is not a second content assertion; everything
+ // else remains a semantic question instead of picking a convenient source.
+ if(sources.some(item=>item.id!==source.id&&item.original!==false&&documents(item.text).some(doc=>sameDocument(sourceDocument[0].kind,doc.kind)||sameDocument(doc.kind,sourceDocument[0].kind))&&!parts(item.text).every(sentence=>availableDocumentActionEvidence(sourceDocument[0].kind,[{...item,text:sentence}],true))))return;
+ const sourcePropositions=reportPropositions(sourceParts.slice(1).join(' '));
+ if(!sourcePropositions)return;
+ if(!propositions.every(proposition=>sourcePropositions.some(original=>proposition.kind==='content'?original.kind==='content'&&original.object===proposition.object:original.kind==='exclusion'&&proposition.objects.every(object=>original.objects.includes(object)))))return;
+ return {...binding,reason:'Every report-content predicate and negative certification limitation repeats a closed proposition from the same complete original report source, preserving singular tested-sample scope.'};
 }
 
 /** A compact evidence decision next to the live output rules. It carries the

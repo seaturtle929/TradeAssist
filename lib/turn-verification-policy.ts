@@ -5,7 +5,7 @@ import {applyCoachingConfiguration,configurationSuggestionProblems,configuration
 import {literalSpecificationEvidence,specificationNumberEvidence} from './scoped-specification-evidence.ts';
 import {canonicalizeKnownProductIdentifiers,productIdentityReferences} from './product-identity-evidence.ts';
 import {availableDocumentActionEvidence} from './document-availability-evidence.ts';
-import {assessDocumentProductCoverage,documentIdentifierReferences,documentIdentifierSource,investigationThenDocumentDelivery,isBoundedEpistemicFactAction,isConversationalAcknowledgment,literalDocumentScopeEvidence,requestsDocumentProductCoverage} from './document-product-evidence.ts';
+import {assessDocumentProductCoverage,documentIdentifierReferences,documentIdentifierSource,investigationThenDocumentDelivery,isBoundedEpistemicFactAction,isConversationalAcknowledgment,literalDocumentScopeEvidence,literalDocumentStatementEvidence,requestsDocumentProductCoverage} from './document-product-evidence.ts';
 export type BuyerTurnKind = 'fact_request' | 'sales_move' | 'confirmation';
 export type VerificationPolicyContext = {
   coachingRequest?:{id:string;requestedAt:number};
@@ -773,8 +773,29 @@ export function assessReplyVerification(say: string, context: VerificationPolicy
   // original source. Never override a hard conflict or infer an extra predicate
   // from a correct number/product name elsewhere in the reply.
   const localEvidence:{sourceId:string;quote:string;claim:string}[]=[];
+  const addLocalEvidence=(item:typeof localEvidence[number])=>{
+    const key=(quote:string)=>quote.trim().replace(/\s+/g,' ');
+    const existing=localEvidence.find(entry=>entry.sourceId===item.sourceId&&key(entry.quote)===key(item.quote));
+    if(!existing)localEvidence.push(item);
+    else if(!existing.claim.includes(item.claim))existing.claim+='\n'+item.claim;
+  };
   const parts=replyClauses(say,context);
   const provenParts=new Set<number>();
+  let previousDocument:ReturnType<typeof literalDocumentStatementEvidence>;
+  for(const sentence of sentences(say)){
+    const proof=literalDocumentStatementEvidence(sentence.text,context,evidence.filter(item=>item.original!==false),previousDocument);
+    previousDocument=proof;
+    if(!proof)continue;
+    for(const part of parts.filter(part=>part.start>=sentence.start&&part.end<=sentence.end))provenParts.add(part.start);
+    for(const entry of proof.evidence||[proof])addLocalEvidence({sourceId:entry.sourceId,quote:entry.quote,claim:sentence.text.trim()});
+    // A discourse “Yes,” belongs to its actual report sentence. Do not leave
+    // it pending separately after proving every predicate in that sentence.
+    // Hard conflicts, authorization failures and unknown adjoining sentences
+    // remain untouched and prevent whole-reply proof below.
+    for(const claim of claims)if(claim.pending&&claim.start>=sentence.start&&claim.end<=sentence.end){
+      claim.supported=true;claim.pending=false;claim.sourceId=proof.sourceId;delete claim.candidateSourceIds;claim.reason=proof.reason;
+    }
+  }
   for(const part of parts){
     const specification=literalSpecificationEvidence(part.text,evidence.filter(item=>item.original!==false));
     const document=literalDocumentScopeEvidence(part.text,context,evidence.filter(item=>item.original!==false));
@@ -782,7 +803,7 @@ export function assessReplyVerification(say: string, context: VerificationPolicy
     if(!sourceId)continue;
     provenParts.add(part.start);
     const proofSources=document?.evidence||[{sourceId,quote:evidence.find(item=>item.original!==false&&item.id===sourceId)!.text}];
-    for(const proof of proofSources)localEvidence.push({sourceId:proof.sourceId,quote:proof.quote,claim:part.text.trim()});
+    for(const proof of proofSources)addLocalEvidence({sourceId:proof.sourceId,quote:proof.quote,claim:part.text.trim()});
     for(const claim of claims)if(claim.pending&&claim.start===part.start&&claim.end===part.end){
       claim.supported=true;claim.pending=false;claim.sourceId=sourceId;delete claim.candidateSourceIds;
       claim.reason=specification?'The entire literal specification assertion is entailed by this current original source.':document!.reason;

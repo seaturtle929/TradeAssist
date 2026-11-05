@@ -84,9 +84,11 @@ test('Rep speech changes relevant context and invalidates a hidden candidate',as
 });
 
 test('Missing final is bounded and never promotes the provisional complete-looking words',async()=>{
- const t=fixture({queuedTranscriptionTimeoutMs:80});try{
-  await t.speculate('Thank you, goodbye.');const old=t.created();t.finish(old,'Thank you, goodbye.');await sleep(90);
-  assert.equal(t.log.shown.length,0);assert.equal(t.creates().length,2);assert.equal(t.log.traces.findLast(event=>event.event==='queue_released').reason,'transcription_timeout');
+ const t=fixture({queuedTranscriptionTimeoutMs:80,transcriptionTimeoutMs:130});try{
+  await t.speculate('Thank you, goodbye.');const old=t.created();t.finish(old,'Thank you, goodbye.');await sleep(110);
+  assert.equal(t.log.shown.length,0);assert.equal(t.creates().length,1);assert.equal(t.log.traces.filter(event=>event.event==='queue_released').length,0);
+  assert.equal(t.log.traces.findLast(event=>event.event==='queue_wait_timeout').status,'waiting_for_final');
+  assert.match(t.log.statuses.at(-1).message,/could not finish transcribing/);
   assert.equal(t.context.turns.length,0);assert.equal(t.log.traces.filter(event=>event.event==='speculation_discarded').length,1);
  }finally{t.session.stop();}
 });

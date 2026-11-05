@@ -83,7 +83,13 @@ test('An interrupted request keeps bounded missing-final handling, explicit Sugg
    t.buyer('first','Please send the information.');t.request();const first=t.created();t.start('continued');t.cancelled(first);t.partial('continued','Actually, before');
    if(action==='cancel'){assert.equal(t.session.cancelQueuedRequest(),true);t.end('continued','Actually, before you send it, let me approve it.');await sleep(45);assert.equal(t.creates().length,1);}
    else if(action==='suggest_now'){t.session.suggestNow();assert.equal(t.creates().length,2);assert.equal(t.log.traces.filter(event=>event.event==='queue_released').at(-1).reason,'suggest_now');}
-   else{t.session.handle({type:'input_audio_buffer.speech_stopped',item_id:'continued'});await sleep(45);assert.equal(t.creates().length,2);assert.equal(t.log.traces.filter(event=>event.event==='queue_released').at(-1).reason,'transcription_timeout');assert.equal(t.log.warnings.length,1);}
+   else{
+    t.session.handle({type:'input_audio_buffer.speech_stopped',item_id:'continued'});await sleep(45);
+    assert.equal(t.creates().length,1,'The timeout cannot generate from an incomplete continued turn');
+    assert.equal(t.log.traces.findLast(event=>event.event==='queue_wait_timeout').status,'waiting_for_final');
+    t.end('continued','Actually, before you send it, let me approve it.');await sleep(5);
+    assert.equal(t.creates().length,2,'The completed turn recovers under the same original click');
+   }
   }finally{t.session.stop();}
  }
 });
