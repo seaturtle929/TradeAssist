@@ -95,12 +95,22 @@ export function buyerSpelledIdentifierClarificationReferences(text:string,buyerT
 }
 /** Closed neutral wording for the whole clarification, including an optional
  * “just to be sure”. Extra factual or commercial tails keep normal checks. */
-export function isBuyerIdentifierSpellingClarification(text:string,buyerText:string):boolean {
- const references=buyerSpelledIdentifierClarificationReferences(text,buyerText);if(!references.length||!/^\s*(?:just to be sure[, ]+)?(?:can|could|would|was|is|did)\b/i.test(text)||! /\?\s*$/.test(text))return false;
- let remainder=text;for(const reference of [...references].reverse())remainder=remainder.slice(0,reference.start)+' '+remainder.slice(reference.end);
+export function isBuyerIdentifierClarification(text:string,buyerText:string):boolean {
+ if(!/^\s*(?:just to be sure[, ]+)?(?:can|could|would|was|is|did)\b/i.test(text)||! /\?\s*$/.test(text))return false;
+ const references=[...buyerProductIdentifierReferences(text,buyerText),...buyerSpelledIdentifierClarificationReferences(text,buyerText)].sort((one,two)=>one.start-two.start);
+ if(!references.length&&!buyerProductIdentifierReferences(buyerText,buyerText).length)return false;
+ // This tail only promises to check the reference accurately. It asserts no
+ // ownership, report coverage, result, timing or company capability. Inspect
+ // the whole remainder below; an appended claim cannot inherit its status.
+ let remainder=text.replace(/,?\s+so\s+(?:I|we)\s+(?:can\s+)?check\s+(?:that|it)(?:\s+(?:accurately|correctly))?(?:\s+for you)?\?\s*$/i,'?')
+  .replace(/,?\s+so\s+(?:I|we)\s+(?:can\s+)?check\s+the right\s+(?:report|reference|code)\?\s*$/i,'?');
+ for(const reference of [...references].reverse())remainder=remainder.slice(0,reference.start)+' '+remainder.slice(reference.end);
  if(!/^[A-Za-z\s,?—–-]+$/.test(remainder))return false;
- const allowed=new Set('just to be sure can could would was is did you please confirm repeat spell say the exact model product part code reference number your engineer team mentioned for material me it that this again'.split(' '));
- return (remainder.toLowerCase().match(/[a-z]+/g)||[]).every(word=>allowed.has(word));
+ const allowed=new Set('just to be sure can could would was is did you please confirm repeat spell spelling say the exact model product part code reference number your engineer team mentioned for material me it that this again or'.split(' '));
+ return /\b(?:confirm|repeat|spell|spelling|was it|is it|did you say)\b/i.test(remainder)&&(remainder.toLowerCase().match(/[a-z]+/g)||[]).every(word=>allowed.has(word));
+}
+export function isBuyerIdentifierSpellingClarification(text:string,buyerText:string):boolean {
+ return buyerSpelledIdentifierClarificationReferences(text,buyerText).length>0&&isBuyerIdentifierClarification(text,buyerText);
 }
 export function productIdentityReferences(text:string,sources:ProductIdentitySource[]):ProductIdentityReference[]{
  const known=sourceIdentities(sources),references:ProductIdentityReference[]=[];

@@ -3,7 +3,7 @@ import {clientContextSuggestionProblems,clientContextSafeReply,reviewedClientCon
 import { hasClearConversationRefusal } from './conversation-boundary.ts';
 import {applyCoachingConfiguration,configurationSuggestionProblems,configurationAuthorizesAction,configuredSafeReply} from './coaching-configuration.ts';
 import {literalSpecificationEvidence,specificationNumberEvidence} from './scoped-specification-evidence.ts';
-import {buyerProductIdentifierReferences,buyerSpelledIdentifierClarificationReferences,isBuyerIdentifierSpellingClarification,canonicalizeKnownProductIdentifiers,productIdentityReferences} from './product-identity-evidence.ts';
+import {buyerProductIdentifierReferences,buyerSpelledIdentifierClarificationReferences,isBuyerIdentifierClarification,canonicalizeKnownProductIdentifiers,productIdentityReferences} from './product-identity-evidence.ts';
 import {availableDocumentActionEvidence} from './document-availability-evidence.ts';
 import {assessDocumentProductCoverage,documentIdentifierReferences,documentIdentifierSource,investigationThenDocumentDelivery,isBoundedEpistemicFactAction,isConversationalAcknowledgment,literalDocumentScopeEvidence,literalDocumentStatementEvidence,requestsDocumentProductCoverage} from './document-product-evidence.ts';
 export type BuyerTurnKind = 'fact_request' | 'sales_move' | 'confirmation';
@@ -182,7 +182,7 @@ function replyClauses(text: string,context?:VerificationPolicyContext): { text: 
     // Cutting “if it does, I will send it” at the second comma would invent an
     // unfinished coverage assertion; the combined action still gets source
     // availability and company-authority checks below.
-    if(investigationThenDocumentDelivery(sentence.text,context)||isBoundedEpistemicFactAction(sentence.text,context)||isBuyerIdentifierSpellingClarification(sentence.text,latestBuyerText(context||{})))return [sentence];
+    if(investigationThenDocumentDelivery(sentence.text,context)||isBoundedEpistemicFactAction(sentence.text,context)||isBuyerIdentifierClarification(sentence.text,latestBuyerText(context||{})))return [sentence];
     const separator = /,\s*(?=but\b)|,\s*(?=(?:and\s+)?(?:can|could|would|may|what|which|how|I|we|our|it|you)\b)|\s+(?=and\s+(?:can|could|would|what|which|how|I|we|our|it|you)\b)/gi;
     const parts: { text: string; start: number; end: number }[] = [];
     let offset = 0;
@@ -265,7 +265,7 @@ function unresolvedFactCheck(clause:string,context?:VerificationPolicyContext):b
 function conversationalClause(text:string,context?:VerificationPolicyContext):boolean {
  const line=text.trim().replace(/[’‘]/g,"'");
  if(isConversationalAcknowledgment(line,context))return true;
- if(isBuyerIdentifierSpellingClarification(line,latestBuyerText(context||{})))return true;
+ if(isBuyerIdentifierClarification(line,latestBuyerText(context||{})))return true;
  if(/^(?:please\s+)?(?:go ahead and\s+)?(?:email|send)\s+(?:over\s+)?(?:the|that|your)\s+drawing(?:\s+over)?[.!]?$/i.test(line))return true;
  if(/^(?:(?:and\s+)?(?:I|we)(?:'ll| will| can)\s+)?wait\s+for\s+your\s+approval\s+before\s+(?:sending|emailing|sharing)\s+(?:anything|it|the report)[.!]?$/i.test(line))return true;
  if(/^(?:(?:once|after|when|if)\s+(?:I|we)\s+(?:(?:verify|confirm) (?:that|its availability|it is available)|know for sure)|(?:I|we)(?:'ll| will)\s+(?:follow up(?: and let you know)?|let you know|report back|confirm(?: that for you)?(?: before (?:sending|emailing) (?:it|them|anything|the documents))?))[,.!]?$/i.test(line))return true;
