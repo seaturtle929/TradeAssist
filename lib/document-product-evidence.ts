@@ -1,4 +1,4 @@
-import {buyerConversationIdentifierReferences,buyerProductIdentifierReferences,canonicalizeKnownProductIdentifiers,isBuyerIdentifierClarification} from './product-identity-evidence.ts';
+import {buyerConversationIdentifierReferences,buyerProductIdentifierReferences,canonicalizeKnownProductIdentifiers,isBuyerIdentifierClarification,productIdentityReferences} from './product-identity-evidence.ts';
 import {availableDocumentActionEvidence} from './document-availability-evidence.ts';
 import {deriveCallParticipant} from './call-participant.ts';
 import {affirmativeOutgoingDocumentActions} from './document-action-syntax.ts';
@@ -135,8 +135,8 @@ function bareDocumentAction(line:string){
 export function requestsDocumentProductCoverage(text:string):boolean {
  return !!documents(text).length&&/\?|\b(?:confirm|whether|if|need to know|tell me)\b/i.test(text)&&(relationWords(text)||/\b(?:report|sheet|certificate)\b.{0,55}\bfor\b/i.test(text));
 }
-const courtesyAction='(?:asking|(?:this|that|the|your) (?:question|update|clarification|information|offer)|this|that|your time|your patience|raising that|checking(?: in)?|pointing that out|bringing that up|letting (?:me|us) know|keeping (?:me|us) informed|(?:sharing|explaining|clarifying|confirming|flagging|mentioning)(?: (?:that|this))?)';
-const courtesyStart=new RegExp('^(?:(?:thanks|thank you)(?: for '+courtesyAction+')?|of course|understood|sure|okay|ok|got it|that makes sense|that helps|that[\'’]s helpful|I understand)(.*)$','i');
+const courtesyAction='(?:asking|(?:this|that|the|your) (?:question|update|clarification|information|offer)|this|that|your time|your patience|raising that|checking(?: in)?|pointing that out|bringing that up|letting (?:me|us) know|keeping (?:me|us) informed|(?:sending|emailing|forwarding) (?:that|this|it|(?:the|your) drawing)|(?:sharing|explaining|clarifying|confirming|flagging|mentioning)(?: (?:that|this))?)';
+const courtesyStart=new RegExp('^(?:(?:thanks|thank you)(?: for '+courtesyAction+')?|of course|understood|sure|okay|ok|got it|that makes sense|that helps|that (?:would|will) help|that[\'’]s helpful|I understand)(.*)$','i');
 function acknowledgmentVocativesKnown(text:string,context?:Context):boolean {
  // A salutation is not part of the participant's name. The remaining name
  // still has to match the actual speaker; “Hi Guaranteed” is not an exemption.
@@ -167,6 +167,7 @@ export function isConversationalAcknowledgment(text:string,context?:Context):boo
  if(/^(?:[Hh]i|[Hh]ello)(?:(?:,\s*|\s+)[A-Z][A-Za-z'-]*(?:\s+[A-Z][A-Za-z'-]*){0,2})?[.!]?$/.test(line))return true;
  const courtesy=courtesyStart.exec(line);if(!courtesy)return false;
  const tail=courtesy[1].trim();
+ if(/^(?:thanks|thank you)[, ]+that (?:would|will) help[.!]?$/i.test(line))return true;
  // A topic label after “asking about” names the subject of the question, not
  // its answer. Keep complete noun labels only: modifiers, relative clauses and
  // a qualified “[product] report” still go through ordinary claim checks.
@@ -271,7 +272,7 @@ function investigationAcknowledgment(text:string,context?:Context):boolean {
  * to the ordinary inquiry/delivery parser. A named comparison artifact still
  * needs availability; a drawing reference must come from this conversation. */
 function afterDrawingReview(text:string,context?:Context):string|undefined {
- const review=/^(?:once|after|when)\s+(?:I|we)(?:'ve| have)?\s+(?:review(?:ed)?|check(?:ed)?|seen)\s+(?:it|(?:the|that|your)\s+drawing)(?:\s+(?:with|against)\s+([^,;.!?]+))?\s*,\s*(.+)$/i.exec(text);
+ const review=/^(?:once|after|when)\s+(?:I|we)(?:'ve| have)?\s+(?:review(?:ed)?|check(?:ed)?|seen|receiv(?:e|ed))\s+(?:it|(?:the|that|your)\s+drawing)(?:\s+(?:with|against)\s+([^,;.!?]+))?\s*,\s*(.+)$/i.exec(text);
  if(!review)return;
  if(review[1]){
   const target=review[1],reference=target.replace(/^(?:(?:that|the|your)\s+)?/i,'').replace(/\s+reference$/i,'');
@@ -299,7 +300,7 @@ export function isBoundedEpistemicFactAction(text:string,context?:Context):boole
  // Reviewing the incoming artifact is a prerequisite, not a positive answer
  // about it. Remove only this closed review action and check the ENTIRE
  // following uncertainty action normally, including any attached claims.
- const reviewPrerequisite=afterDrawingReview(line,context);
+ const reviewPrerequisite=afterDrawingReview(line.replace(/^and\s+/i,''),context);
  if(reviewPrerequisite)return isBoundedEpistemicFactAction(reviewPrerequisite,context);
  // An unresolved spelling prerequisite does not claim report coverage.
  // Only strip this closed prerequisite; the complete following action still
@@ -316,14 +317,16 @@ export function isBoundedEpistemicFactAction(text:string,context?:Context):boole
  // not evidence of report coverage. Strip only these closed handoff/review
  // forms, then apply the ordinary whole-predicate uncertainty check below.
  const original=line;
- line=line.replace(/^\s*(?:and\s+)?(?:if you\s+(?:can\s+)?(?:send|email)\s+(?:over\s+)?(?:that|the|your)\s+drawing(?:\s+over)?\s*,\s*|please\s+(?:go ahead and\s+)?(?:send|email)\s+(?:over\s+)?(?:that|the|your)\s+drawing(?:\s+over)?\s*,\s*(?:and\s+)?(?:then\s+)?)/i,'').replace(/^and\s+(?=(?:I|we)\b)/i,'');
+ line=line.replace(/^\s*(?:and\s+)?(?:if you\s+(?:can\s+)?(?:send|email)\s+(?:over\s+)?(?:that|the|your)\s+drawing(?:\s+over)?\s*,\s*|(?:yes,?\s+)?please\s+(?:(?:go ahead and|do)\s+)?(?:send|email)\s+(?:over\s+)?(?:that|the|your)\s+drawing(?:\s+over)?\s*,\s*(?:and\s+)?(?:then\s+)?)/i,'').replace(/^and\s+(?=(?:I|we)\b)/i,'');
  line=line.replace(/\s+once\s+(?:I|we)\s+(?:review|check|see)\s+(?:it|that|the drawing|your drawing)[.!]?$/i,'');
  const comparison=/^((?:I|we)(?:'ll| will| can))\s+(?:line it up with|check it against|compare it with|compare it against)\s+our\s+(?:available\s+)?(?:specs|specifications)\s+and\s+(.+)$/i.exec(line);
  if(comparison){
   if(!availableDocumentActionEvidence('specification',context?.sources||[]))return false;
   line=comparison[1]+' '+comparison[2];
  }
- line=line.replace(/^((?:I|we)(?:'ll| will| can))\s+(?:review|check)\s+(?:it|(?:your|the|that)\s+drawing)\s+and\s+(?=(?:check|confirm|verify|let you know)\b)/i,'$1 ');
+ const prepared=/^((?:I|we)(?:'ll| will| can))\s+(?:review|check|compare)\s+(?:it|(?:your|the|that)\s+drawing)(?:\s+(?:when|once|after)\s+it\s+(?:arrives|comes in))?(?:\s+(?:with|against)\s+our\s+(?:available\s+)?(specs|specifications))?\s+and\s+(.+)$/i.exec(line);
+ if(prepared&&(!prepared[2]||availableDocumentActionEvidence('specification',context?.sources||[])))line=prepared[1]+' '+prepared[3];
+ line=line.replace(/^((?:I|we)(?:'ll| will| can))\s+(?:get back to you on|let you know)\s+(whether|if)\s+/i,'$1 check $2 ');
  // Checking a report “to confirm whether it covers X” leaves the answer
  // open. Bind “it” to that single report, and parse every remaining word;
  // a qualified report noun, extra claim or outgoing action cannot disappear.
@@ -360,6 +363,10 @@ export function isBoundedEpistemicFactAction(text:string,context?:Context):boole
  const next=subject.search(/\s+\b(?:and|plus|also)\b\s+/i);
  if(next>=0){
   const tail=subject.slice(next).trim();
+  // Two uncertainty predicates do not assert either answer. Validate each
+  // independently so a hidden qualified noun or added claim cannot borrow
+  // the first question's uncertainty.
+  if(/^and\s+(?:whether|if)\b/i.test(tail))return isBoundedEpistemicFactAction('I will check '+subject.slice(0,next),context)&&isBoundedEpistemicFactAction('I will check '+tail.replace(/^and\s+/i,''),context);
   // Follow-through may report the result; it cannot predetermine the answer,
   // authorize a concession, promise shipment or attach an unagreed deadline.
   if(!reportsInvestigationResult(tail))return false;
@@ -405,15 +412,16 @@ export function isBoundedEpistemicFactAction(text:string,context?:Context):boole
  * different actions. The first two assert no coverage. The last still needs
  * availability and company permission; return its explicit referent so the
  * ordinary document-action checks can enforce those independently. */
-export function investigationThenDocumentDelivery(text:string,context?:Context):{investigation:string;document:string;deliveryCondition:'sequence_only'|'stated_condition'|'check_completion';conditionText?:string}|undefined {
+type ParsedDocumentDelivery={investigation:string;document:string;deliveryCondition:'sequence_only'|'stated_condition'|'check_completion'|'alternative_condition';conditionText?:string};
+function parseInvestigationThenDocumentDelivery(text:string,context?:Context):ParsedDocumentDelivery|undefined {
  // Preserve a whole fronted condition when the clause extractor ends it at
  // a semicolon. Never strip an internal separator or its adjoining claims.
  let line=text.trim().replace(/[’‘]/g,"'").replace(/;$/,'.');
  const reviewPrerequisite=afterDrawingReview(line,context);
- if(reviewPrerequisite)return investigationThenDocumentDelivery(reviewPrerequisite,context);
- if(/\s+as you (?:requested|asked)[.!]?$/i.test(line)){
+ if(reviewPrerequisite)return parseInvestigationThenDocumentDelivery(reviewPrerequisite,context);
+ if(/\s+as(?: you)? (?:requested|asked)[.!]?$/i.test(line)){
   const requested=[context?.buyerText||'',...(context?.turns||[]).filter(turn=>turn.role==='buyer'||turn.role==='customer').map(turn=>turn.text)].some(turn=>/\breport\b/i.test(turn)&&/\b(?:send|email|share|forward|reply|respond|include|attach)\b/i.test(turn));
-  if(!requested)return;line=line.replace(/\s+as you (?:requested|asked)(?=[.!]?$)/i,'');
+  if(!requested)return;line=line.replace(/\s+as(?: you)? (?:requested|asked)(?=[.!]?$)/i,'');
  }
  const actor="(?:I|we)(?:'ll|\\s+(?:will|can|could))\\s+";
  // A reply coordinated with sending the same artifact is one conditional
@@ -446,10 +454,13 @@ export function investigationThenDocumentDelivery(text:string,context?:Context):
    if(/\b(?:does|matches?)$/i.test(predicate)?!!prior:isBoundedEpistemicFactAction('I will check whether '+predicate,context))return {investigation:'',document:document.kind,deliveryCondition:'stated_condition',conditionText:direct[1]};
   }
  }
- const fronted=new RegExp('^(?:once|after|when|'+positiveConnector+')\\s+(.+?),\\s*'+actor+delivery+'[.!]?$','i').exec(line);
+ // A fronted check and a result condition on sending are independent
+ // prerequisites. Completing a WHETHER check alone is not a positive match;
+ // an explicit “send it IF it does” still supplies that positive condition.
+ const fronted=new RegExp('^(?:once|after|when|'+positiveConnector+')\\s+(.+?),\\s*'+actor+delivery+'(?:\\s+('+positiveCondition+'))?[.!]?$','i').exec(line);
  if(fronted){
   let condition=fronted[1].trim();
-  condition=condition.replace(/^(?:I|we)(?:'ve| have)?\s+(?:reviewed|seen|checked)\s+(?:that|the|your)\s+drawing\s+and\s+/i,'');
+  condition=condition.replace(/^(?:I|we)(?:'ve| have)?\s+(?:review(?:ed)?|seen|check(?:ed)?)\s+(?:that|the|your)\s+drawing\s+and\s+/i,'');
   const inquiry=/^(?:(?:I|we)(?:'ve| have)?\s+)?(?:check(?:ed)?|verif(?:y|ied)|confirm(?:ed)?)\s+(?:(whether|if|that)\s+)?(.+)$/i.exec(condition);
   let predicate=inquiry?inquiry[2]:condition;
   // A singular “it” can carry the one report in this same-call inquiry.
@@ -463,14 +474,20 @@ export function investigationThenDocumentDelivery(text:string,context?:Context):
   const positive=!!closedReportScopePredicate(predicate)||/^(?:(?:the|that|this|our|your)\s+)?(?:(?:material test|inspection|test)\s+)?report\s+(?:covers?|matches?|includes?|appl(?:y|ies)\s+to)\s+[^,;.!?]+$/i.test(predicate)
    ||/^(?:(?:the|that|this)\s+)?(?:(?:material test|inspection|test)\s+)?report\s+coverage\s+(?:for|of)\s+[^,;.!?]+$/i.test(predicate);
   const inquiryPredicate=predicate.replace(/^((?:(?:the|that|this)\s+)?(?:(?:material test|inspection|test)\s+)?report)\s+coverage\s+(?:for|of)\s+/i,'$1 covers ');
-  if(positive&&referents.length===1&&!/\b(?:and|but|however|not|never|no|certif\w*|guarantee\w*|discount|approval|price|ship\w*|deliver\w*)\b/i.test(predicate)&&isBoundedEpistemicFactAction('I will check whether '+inquiryPredicate,context))return {investigation:'I will check whether '+inquiryPredicate,document:referents[0].kind,deliveryCondition:inquiry&&/^(?:if|whether)$/i.test(inquiry[1]||'')?'check_completion':'stated_condition',conditionText:fronted[1]};
+  if(positive&&referents.length===1&&!/\b(?:and|but|however|not|never|no|certif\w*|guarantee\w*|discount|approval|price|ship\w*|deliver\w*)\b/i.test(predicate)&&isBoundedEpistemicFactAction('I will check whether '+inquiryPredicate,context)){
+   if(fronted[2]){
+    const result=fronted[2].replace(new RegExp('^(?:only\\s+)?'+positiveConnector+'\\s+','i'),'').replace(/^(?:it|that report|the report)\b/i,'the '+referents[0].kind);
+    if(!/\bdoes$/i.test(result)&&!isBoundedEpistemicFactAction('I will check whether '+result,context))return;
+   }
+   return {investigation:'I will check whether '+inquiryPredicate,document:referents[0].kind,deliveryCondition:fronted[2]?'stated_condition':inquiry&&/^(?:if|whether)$/i.test(inquiry[1]||'')?'check_completion':'stated_condition',conditionText:fronted[2]||fronted[1]};
+  }
  }
  // A repeated subject is optional in a coordinated action (“I'll check ...
  // and then send it”). Sequence does NOT mean “only if it covers the product”.
  const continuation=new RegExp('\\s*,?\\s+(?:and\\s+)?then\\s+(?:'+actor+')?'+delivery+'[.!]?$','i').exec(line)
   ||new RegExp('\\s*,?\\s+and\\s+((?:once|after|when)\\s+(?:I|we)(?:\x27ve| have)\\s+got\\s+(?:that|it))\\s*,\\s*'+actor+delivery+'[.!]?$','i').exec(line)
-  ||new RegExp('(?:\\s*,?\\s+and\\s+|[.!]\\s+)(?:then\\s+)?(?:'+actor+')?'+delivery+'\\s+('+positiveCondition+')[.!]?$','i').exec(line)
-  ||new RegExp('(?:\\s*,?\\s+and\\s+|[.!]\\s+)(?:then\\s+)?('+positiveCondition+')\\s*,?\\s+'+actor+delivery+'[.!]?$','i').exec(line)
+  ||new RegExp('(?:\\s*,?\\s+and\\s+|[.!;]\\s+)(?:then\\s+)?(?:'+actor+')?'+delivery+'\\s+('+positiveCondition+')[.!]?$','i').exec(line)
+  ||new RegExp('(?:\\s*,?\\s+and\\s+|[.!;]\\s+)(?:then\\s+)?('+positiveCondition+')\\s*,?\\s+'+actor+delivery+'[.!]?$','i').exec(line)
   ||new RegExp('[.!]\\s+((?:once|after|when)\\s+(?:that|it|the (?:scope|coverage|answer))(?:(?:\x27s|\\s+is|\\s+has been)\\s+(?:checked|verified|confirmed)))\\s*,\\s*'+actor+delivery+'[.!]?$','i').exec(line);
  if(!continuation)return;
  const investigation=line.slice(0,continuation.index).trim();
@@ -489,6 +506,64 @@ export function investigationThenDocumentDelivery(text:string,context?:Context):
  const deliveryCondition=continuation[1]?/^(?:once|after|when)\b/i.test(continuation[1])?'check_completion':'stated_condition':'sequence_only';
  return {investigation,document:referents[0].kind,deliveryCondition,...(continuation[1]?{conditionText:continuation[1]}:{})};
 }
+
+type DocumentWithholding={approval?:'buyer'|'engineering'|'manager';positiveCoverage:boolean};
+/** A closed refusal to send is a restriction, never an outgoing promise or a
+ * claim that its release conditions already hold. Inspect every conjunct so
+ * an attached shipment/coverage assertion cannot inherit that status. */
+function documentWithholding(text:string,context?:Context):DocumentWithholding|undefined{
+ const line=text.trim().replace(/[’‘]/g,"'").replace(/[.!]$/,'');
+ const preface=/^([^;:.!?]+?)[,;:.!?]\s+(.+)$/.exec(line);
+ if(preface&&investigationAcknowledgment(preface[1]+'.',context))return documentWithholding(preface[2],context);
+ const artifact='(?:anything|it|(?:the|that) (?:(?:material test|inspection|test) )?report)';
+ const negative=new RegExp('^(?:I|we)(?: won\x27t| will not| do not| don\x27t) (?:send|email|share|forward) '+artifact+' (?:until|unless) (.+)$','i').exec(line);
+ const wait=new RegExp('^(?:I|we)(?:\x27ll| will| can) (?:wait|hold) for (.+) before (?:sending|emailing|sharing) '+artifact+'$','i').exec(line);
+ const condition=negative?.[1]||wait?.[1];if(!condition)return;
+ let approval:DocumentWithholding['approval'],positiveCoverage=false;
+ for(const part of condition.split(/\s+and\s+/i)){
+  const owner=/^(?:your\s+(engineer|engineering|manager)(?:'s)?\s+(?:approval|sign[- ]?off)|your\s+(engineer|engineering|manager)\s+approves?(?:\s+(?:it|the drawing|the report|the revision))?|you\s+approve(?:\s+(?:it|the drawing|the report))?|your\s+(?:approval|sign[- ]?off))$/i.exec(part);
+  if(owner){const role=owner[1]||owner[2];approval=role?/manager/i.test(role)?'manager':'engineering':'buyer';continue;}
+  const reports=currentCallReportInquiry(context),document=reports&&documents(reports).find(item=>/report$/.test(item.kind));
+  const resolved=part.replace(/^it\b/i,document?'the '+document.kind:'it');
+  if(document&&/^(?:it|(?:the|that) (?:(?:material test|inspection|test) )?report)\s+(?:matches?|covers?|does)\b/i.test(part)&&(/\b(?:matches?|does)$/i.test(part)||isBoundedEpistemicFactAction('I will check whether '+resolved,context))){positiveCoverage=true;continue;}
+  return;
+ }
+ return {approval,positiveCoverage};
+}
+export type DocumentActionMeaning={
+ text:string;
+ coverage:'none'|'future_inquiry'|'positive_result_condition'|'assertion_or_unparsed';
+ /** Closed action proof only. It never proves availability, scope or authority. */
+ locallyNonAssertive:boolean;
+ checksCoverage:boolean;
+ /** An explicit alternative/bypass cannot satisfy a required positive match. */
+ weakensPositiveMatch:boolean;
+ withholding?:DocumentWithholding;
+ delivery?:ParsedDocumentDelivery;
+ outgoing:{start:number;end:number;text:string;condition:'coverage_positive'|'check_complete'|'sequence_only'|'alternative'|'unparsed'}[];
+ references:{text:string;start:number;end:number;basis:'confirmed_buyer'|'heard_buyer'|'source_known_identifier'|'unknown'}[];
+};
+/** One interpretation consumed by factual, condition, relevance and identity
+ * checks. No consumer may turn completing a check into a positive result, or
+ * reclassify a parsed future result-condition as an already true coverage fact.
+ * The proof covers the ENTIRE supplied group. Mixed or unparsed assertions
+ * retain all normal factual checks; no keyword grants a whole-reply exemption. */
+export function analyzeDocumentActionMeaning(text:string,context?:Context):DocumentActionMeaning{
+ const inquiry=isBoundedEpistemicFactAction(text,context),parsed=parseInvestigationThenDocumentDelivery(text,context),withholding=documentWithholding(text,context);
+ // Uncertainty may ask about alternatives. A RELEASE condition is different:
+ // “if it matches OR you approve” permits sending without a match. Keep that
+ // distinction in the shared action record, not separate caller exceptions.
+ const delivery:ParsedDocumentDelivery|undefined=parsed?.deliveryCondition==='stated_condition'&&/\bor\b/i.test(parsed.conditionText||'')?{...parsed,deliveryCondition:'alternative_condition'}:parsed;
+ const actions=affirmativeOutgoingDocumentActions(text);
+ const weakensPositiveMatch=delivery?.deliveryCondition==='alternative_condition'||actions.some(action=>/\b(?:regardless|anyway)\b|\bwhether\b[^.!?;]*\bor not\b|\beven if\b[^.!?;]*\b(?:not|no match)\b/i.test(text.slice(action.end).split(/[.!?;]/,1)[0]));
+ const locallyNonAssertive=inquiry||!!delivery||!!withholding;
+ const confirmed=buyerConversationIdentifierReferences(text,context?.turns||[]),heard=buyerProductIdentifierReferences(text,latestBuyer(context||{})),known=productIdentityReferences(text,context?.sources||[]);
+ const references=[...buyerProductIdentifierReferences(text,text),...known].filter((reference,index,all)=>all.findIndex(other=>other.start===reference.start&&other.end===reference.end)===index).map(reference=>({text:reference.text,start:reference.start,end:reference.end,basis:(confirmed.some(other=>other.start===reference.start&&other.end===reference.end)?'confirmed_buyer':heard.some(other=>other.start===reference.start&&other.end===reference.end)?'heard_buyer':known.some(other=>other.start===reference.start&&other.end===reference.end)?'source_known_identifier':'unknown') as DocumentActionMeaning['references'][number]['basis']}));
+ const checksCoverage=!!delivery||inquiry&&(documents(text).some(document=>/report$/.test(document.kind))&&/\b(?:cover\w*|scope|matches?|appl(?:y|ies|icable)|relates?|pertains?)\b/i.test(text)||!!currentCallReportInquiry(context)&&references.some(reference=>reference.basis==='confirmed_buyer'));
+ return {text,coverage:delivery?.deliveryCondition==='stated_condition'?'positive_result_condition':inquiry&&checksCoverage?'future_inquiry':documents(text).length&&relationWords(text)?'assertion_or_unparsed':'none',locallyNonAssertive,checksCoverage,weakensPositiveMatch,withholding,delivery,outgoing:actions.map(action=>({...action,condition:delivery?.deliveryCondition==='stated_condition'?'coverage_positive':delivery?.deliveryCondition==='alternative_condition'?'alternative':delivery?.deliveryCondition==='check_completion'?'check_complete':delivery?'sequence_only':'unparsed'})),references};
+}
+/** Compatibility facade. All consumers get the same parsed action meaning. */
+export function investigationThenDocumentDelivery(text:string,context?:Context):ParsedDocumentDelivery|undefined{return analyzeDocumentActionMeaning(text,context).delivery;}
 
 /** Negation of report coverage differs from a limitation on what the report
  * proves. “It records the tested sample, but does not certify suitability”
@@ -548,7 +623,7 @@ function competingScopeEvidence(kind:string,product:string,identifier:string|und
 /** Return a hard veto for absent linkage. A present relationship remains a
  * candidate for normal semantic checking: scope alone never proves results,
  * suitability, certification, or any other contents of the report. */
-export function assessDocumentProductCoverage(clause:string,context:Context,sources:DocumentProductSource[]):{supported:false;pending?:true;candidateSourceIds?:string[];reason:string;verificationBoundary?:'document_product_scope'}|undefined {
+export function assessDocumentProductCoverage(clause:string,context:Context,sources:DocumentProductSource[]):{supported:false;pending?:true;candidateSourceIds?:string[];reason:string;verificationBoundary?:'document_product_scope';wholeStatement?:true}|undefined {
  sources=sources.map(source=>({...source,text:canonicalizeKnownProductIdentifiers(source.text,sources)}));
  context={...context,buyerText:canonicalizeKnownProductIdentifiers(latestBuyer(context),sources)};
  const buyer=latestBuyer(context),asked=requestsDocumentProductCoverage(buyer),priorInquiry=currentCallReportInquiry(context);
@@ -558,7 +633,7 @@ export function assessDocumentProductCoverage(clause:string,context:Context,sour
  // Explicit uncertainty is a commitment to investigate, never a positive or
  // negative assertion about report scope. Appended assertions are assessed in
  // their own clause by the normal verification policy.
- if(isBoundedEpistemicFactAction(line,context)||investigationThenDocumentDelivery(line,context)||isBuyerIdentifierClarification(line,buyer))return;
+ if(analyzeDocumentActionMeaning(line,context).locallyNonAssertive||isBuyerIdentifierClarification(line,buyer))return;
  if(/^(?:does|do|is|are|can|could|would|will|which|what|how|whether)\b/i.test(line)&&/\?\s*$/.test(line)&&! /\b(?:our|the)\s+[a-z]+\d+[^?]{0,30}\b(?:reports?|sheets?|certificates?)\b/i.test(line))return;
  const ownDocuments=documents(line),buyerDocuments=documents(buyer);
  const assent=asked&&/^\s*(?:yes|correct|exactly|absolutely|certainly|sure|it does|that does|we do)\b/i.test(line);
@@ -574,8 +649,12 @@ export function assessDocumentProductCoverage(clause:string,context:Context,sour
  // comparison action is not itself a document subject or coverage assertion.
  const subjectDocument=ownDocuments.find(document=>/^\s*(?:(?:yes|correct|exactly)[,.!]\s*)?(?:(?:our|the|this|that|a|an|both)\s+)*$/i.test(line.slice(0,document.start)));
  const documentSubject=!!scopes(line).length&&!!subjectDocument;
+ // A document remains the subject of its own relative predicate even when
+ // offered in a send: “send the report, which discusses [reference]” asserts
+ // product-specific contents. Availability alone cannot prove that tail.
+ const relativeDocument=!!scopes(line).length&&ownDocuments.some(document=>/^\s*,?\s+(?:which|that)\s+\S/i.test(line.slice(document.end)));
  const leadingScope=!!ownDocuments.length&&/^\s*for\s+[^,;.!?]+,\s*/i.test(line)&&scopes(line.slice(0,line.indexOf(','))).length>0;
- if(!assent&&!documentPronoun&&!explicitRelation&&!qualified&&!documentSubject&&!leadingScope)return;
+ if(!assent&&!documentPronoun&&!explicitRelation&&!qualified&&!documentSubject&&!relativeDocument&&!leadingScope)return;
  const claimedDocuments=ownDocuments.length?ownDocuments:assent||documentPronoun?buyerDocuments.length?buyerDocuments:priorInquiry?documents(priorInquiry):[]:[];
  const explicitScopes=scopes(line),buyerScopes=scopes(buyer);
  const claimedScopes=explicitScopes.length?explicitScopes:implicitScope&&priorInquiry?scopes(priorInquiry):asked||/\b(?:that|this|the exact|your)\s+(?:product|grade|mesh|material)\b/i.test(line)?buyerScopes:[];
@@ -587,7 +666,7 @@ export function assessDocumentProductCoverage(clause:string,context:Context,sour
  // predicates with one document still assert a relationship and need evidence.
  const pairs=claimedDocuments.flatMap(document=>{
   const local=explicitScopes.filter(scope=>linked(line,document,scope));
-  const inferred=(assent||documentPronoun)&&!ownDocuments.length||!explicitScopes.length&&(assent||explicitRelation)||document===subjectDocument||ownDocuments.length===1&&explicitRelation||leadingScope;
+  const inferred=(assent||documentPronoun)&&!ownDocuments.length||!explicitScopes.length&&(assent||explicitRelation)||document===subjectDocument||ownDocuments.length===1&&(explicitRelation||relativeDocument)||leadingScope;
   const applicable=local.length?local:inferred?claimedScopes:[];
   return applicable.map(scope=>({document,scope}));
  });
@@ -602,8 +681,8 @@ export function assessDocumentProductCoverage(clause:string,context:Context,sour
   // The qualified noun is grounded. Let the existing document-availability
   // guard check every unqualified member of the send, without a second model
   // round for an otherwise closed action containing no content assertion.
-  if(bareDocumentAction(line))return;
-  return {supported:false,pending:true,candidateSourceIds:[...new Set(matching.flatMap(matches=>matches.map(source=>source.id)))],reason:'Original evidence links this specific document type to this product; normal verification must still establish the claimed scope, conditions and contents.'};
+  if(!relativeDocument&&bareDocumentAction(line))return;
+  return {supported:false,pending:true,...(relativeDocument?{wholeStatement:true as const}:{}),candidateSourceIds:[...new Set(matching.flatMap(matches=>matches.map(source=>source.id)))],reason:'Original evidence links this specific document type to this product; normal verification must still establish the claimed scope, conditions and contents.'};
  }
  return {supported:false,verificationBoundary:'document_product_scope',reason:'This document-to-product coverage is not established by original Company Knowledge. Document availability and separate product specifications do not link that specific report to that specific product. Confirm the coverage gap without asserting it, including in a paraphrase.'};
 }

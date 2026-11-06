@@ -4,11 +4,81 @@ const finite=value=>typeof value==='number'&&Number.isFinite(value);
 const canonical=value=>Array.isArray(value)?value.map(canonical):value&&typeof value==='object'?Object.fromEntries(Object.entries(value).sort(([a],[b])=>a.localeCompare(b)).map(([key,item])=>[key,canonical(item)])):value;
 const same=(a,b)=>JSON.stringify(canonical(a))===JSON.stringify(canonical(b));
 const digest=value=>typeof value==='string'&&/^[a-f0-9]{64}$/i.test(value);
+export const COMPARISON_INPUT_VERSION='explicit-audit-clocks-v1';
+export const COMPARISON_SPEECH_VERSION='terminal-ack-format-v1';
+
+/** A deliberately small, predeclared formatting equivalence. Interior
+ * punctuation, numbers, references, negation and conditions remain literal.
+ * The final acknowledgment boundary may be transcribed as “..., okay?” or
+ * “.... OK?” without changing the preceding complete words. This is not a
+ * general semantic judge and never changes the captured transcript. */
+export function comparisonSpeechText(text){
+ const line=normalized(text).replace(/[’‘]/g,"'");
+ const tail=/^([\s\S]+\S)[,.!?]\s+(?:ok|okay)[.!?]*$/i.exec(line);
+ return tail&&(tail[1].match(/\b[\w']+\b/g)||[]).length>=3?tail[1]+' [terminal acknowledgment: okay]':line;
+}
+export function compareSpeechText(before,after){
+ const originalBefore=normalized(before),originalAfter=normalized(after),canonicalBefore=comparisonSpeechText(before),canonicalAfter=comparisonSpeechText(after);
+ return {equivalent:canonicalBefore===canonicalAfter,kind:originalBefore===originalAfter?'identical':canonicalBefore===canonicalAfter?'declared_formatting':'different_or_unproven',version:COMPARISON_SPEECH_VERSION,before:originalBefore,after:originalAfter};
+}
+
+/** Reusable input for a caller's SHA-256. Only explicit bookkeeping clocks
+ * are excluded. Source/version dates, historical call dates, promises,
+ * deadlines, send/receipt/approval status and unrecognized fields stay intact.
+ * Return omissions as diagnostics; never erase them from the actual capture. */
+export function projectComparisonInput(snapshot,{currentBuyerItemIds=[]}={}){
+ if(!snapshot||typeof snapshot!=='object'||Array.isArray(snapshot))throw Error('A captured or scripted request snapshot is required.');
+ const excludedAuditFields=[],formattedSpeech=[],runtimeIds=new Map(),turnIds=new Set((snapshot.turns||[]).map(turn=>turn.id).filter(Boolean));
+ (snapshot.turns||[]).forEach((turn,index)=>{if(turn.id)runtimeIds.set(turn.id,'comparison:turn:'+index);});
+ currentBuyerItemIds.forEach((id,index)=>{if(!runtimeIds.has(id))runtimeIds.set(id,'comparison:pending-buyer:'+index);});
+ if(snapshot.callId)runtimeIds.set(snapshot.callId,'comparison:current-call');
+ if(snapshot.coachingRequest?.id)runtimeIds.set(snapshot.coachingRequest.id,'comparison:current-request');
+ const currentIds=new Set(currentBuyerItemIds),observedCurrentIds=new Set([...(snapshot.coachingRequest?.listeningSession?.currentTurnIds||[]),...currentBuyerItemIds]),auditPaths=new Set([
+  'companyConfiguration.boundAt','brain.createdAt','brain.updatedAt','brain.buyerMemory.updatedAt',
+  'clientContext.reviewedAt','brain.clientContext.reviewedAt',
+  'coachingRequest.requestedAt','coachingRequest.releasedAt','coachingRequest.preparationMs','coachingRequest.queuedForMs','coachingRequest.listeningSession.startedAt',
+ ]);
+ const contextAt=parts=>parts.reduce((value,key)=>value?.[key],snapshot);
+ const auditReason=(parts,parent,value)=>{
+  if(!finite(value))return;
+  const name=parts.join('.');
+  // Zero is an application state (“not reviewed/bound”), not a different
+  // wall-clock reading. Keep it so audit normalization cannot grant review.
+  if(['companyConfiguration.boundAt','clientContext.reviewedAt','brain.clientContext.reviewedAt'].includes(name)&&value<=0)return;
+  if(auditPaths.has(name))return 'Explicit runtime bookkeeping clock; meaningful content/status/version fields are retained.';
+  if(parts.length===3&&parts[0]==='turns'&&parts[2]==='at'&&observedCurrentIds.has(parent.id))return 'Current-session speech observation clock; transcript order and words remain retained, with relative timing measured separately.';
+  if(parts[0]==='coachingRequest'&&parts.length===4&&(parts[1]==='partials'&&['at','observedAt'].includes(parts[3])||parts[1]==='pendingSpeech'&&parts[3]==='at'))return 'Provisional speech observation clock; its literal words, item membership and order remain retained.';
+  const offset=parts[0]==='clientContext'?0:parts[0]==='brain'&&parts[1]==='clientContext'?1:-1;
+  if(offset<0||parts[offset+1]!=='entries'||parts.length!==offset+4)return;
+  if(parts.at(-1)==='recordedAt')return 'Client-entry capture bookkeeping clock; its business event date, content, order and status remain retained.';
+  if(parts.at(-1)==='at'){
+   const context=contextAt(parts.slice(0,offset+1));
+   if(parent.kind==='update'&&parent.source==='rep_update'&&['preparation-background:','preparation-update:'].some(prefix=>parent.id===prefix+context?.callId)&&value===context?.reviewedAt&&parent.recordedAt===context?.reviewedAt)return 'Generated current preparation note uses the review click clock, not a dated business event.';
+  }
+ };
+ const referenceKeys=new Set(['turnId','buyerTurnId','lastBuyerTurnId','triggerTurnId','sourceTurnId','segmentStartTurnId','currentTurnIds','speechItemIds','processedTurnIds','requestId','callId']);
+ const visit=(value,parts=[],parent)=>{
+  const reason=auditReason(parts,parent,value);
+  if(reason){excludedAuditFields.push({path:parts.join('.'),value,reason});return undefined;}
+  if(Array.isArray(value))return value.map((item,index)=>visit(item,[...parts,String(index)],value));
+  if(value&&typeof value==='object')return Object.fromEntries(Object.entries(value).sort(([a],[b])=>a.localeCompare(b)).flatMap(([key,item])=>{const projected=visit(item,[...parts,key],value);return projected===undefined?[]:[[key,projected]];}));
+  if(typeof value==='string'){
+   const key=parts.at(-1),container=parts.at(-2),isTurnId=parts.length===3&&parts[0]==='turns'&&key==='id',isRequestId=parts.join('.')==='coachingRequest.id',isObservedItemId=parts.length===4&&parts[0]==='coachingRequest'&&['partials','pendingSpeech'].includes(parts[1])&&key==='id';
+   if(runtimeIds.has(value)&&(referenceKeys.has(key)||referenceKeys.has(container)||isTurnId||isRequestId||isObservedItemId))return runtimeIds.get(value);
+   // Only actual speech and evidence quoting a known transcript turn use the
+   // speech-format rule. Company evidence text and unrelated quotes stay exact.
+   const currentSpeech=parts.length===3&&parts[0]==='turns'&&key==='text'&&currentIds.has(parent.id)||parts.length===4&&parts[0]==='coachingRequest'&&parts[1]==='partials'&&key==='text'&&parent.role==='buyer'&&currentIds.has(parent.id),currentQuote=key==='quote'&&turnIds.has(parent?.turnId)&&currentIds.has(parent.turnId);
+   if(currentSpeech||currentQuote){const formatted=comparisonSpeechText(value);if(formatted!==value)formattedSpeech.push({path:parts.join('.'),before:value,after:formatted,version:COMPARISON_SPEECH_VERSION});return formatted;}
+  }
+  return value;
+ };
+ return {version:COMPARISON_INPUT_VERSION,projection:visit(snapshot),excludedAuditFields,formattedSpeech};
+}
 
 export function scheduledContract({id,audioSha256,lastWordOffsetMs,wordUncertaintyMs=0,requestOffsetMs,maxDispatchDriftMs=40,maxPairOffsetDeltaMs=40,expectedPhase='speaking',probe='ordinary'}){
  if(!id||!digest(audioSha256)||![lastWordOffsetMs,wordUncertaintyMs,requestOffsetMs,maxDispatchDriftMs,maxPairOffsetDeltaMs].every(value=>finite(value)&&value>=0))throw new Error('A schedule requires identity, audio SHA and nonnegative source-relative milliseconds.');
  if(!['before_speech','speaking','transcribing','transcript_ready'].includes(expectedPhase)||!['ordinary','exact-final','meaning-change'].includes(probe))throw new Error('Unknown scheduled phase or lifecycle probe.');
- return {version:1,id,audioSha256,sourceCue:{lastWordOffsetMs,wordUncertaintyMs},request:{offsetMs:requestOffsetMs,maxDispatchDriftMs,maxPairOffsetDeltaMs,expectedPhase},probe};
+ return {version:2,id,audioSha256,sourceCue:{lastWordOffsetMs,wordUncertaintyMs},request:{offsetMs:requestOffsetMs,maxDispatchDriftMs,maxPairOffsetDeltaMs,expectedPhase},probe,comparisonPolicy:{input:COMPARISON_INPUT_VERSION,speech:COMPARISON_SPEECH_VERSION}};
 }
 
 export function phaseAtRequest(events,atMs){
@@ -103,12 +173,24 @@ export function validateScheduledRun(contract,run){
  return {eligible:reasons.length===0,reasons,quality:run.quality||null,actualRequestOffsetMs:actualOffset,actualPhase,probeOutcome:one('speculation_accepted')?'retained':one('speculation_discarded')?'discarded':null,timingKind:run.observationKind==='offline-scripted'?'scripted-clock-not-live':'observed-audio-browser',liveLatencyMs:run.observationKind==='observed-audio-browser'?elapsed:null,scriptedScheduleMs:run.observationKind==='offline-scripted'?elapsed:null,conservativeLiveLatencyMs:run.observationKind==='observed-audio-browser'&&elapsed!==null?elapsed+contract.sourceCue.wordUncertaintyMs:null,components,counts,events};
 }
 
-export function compareScheduledRuns(contract,baseline,candidate){
- const before=validateScheduledRun(contract,baseline),after=validateScheduledRun(contract,candidate),reasons=[];
+export function compareScheduledRuns(contract,baseline,candidate,{historicalDiagnosticOnly=false}={}){
+ const before=validateScheduledRun(contract,baseline),after=validateScheduledRun(contract,candidate),reasons=[],diagnostics=[];
+ const declared=contract.comparisonPolicy?.input===COMPARISON_INPUT_VERSION&&contract.comparisonPolicy?.speech===COMPARISON_SPEECH_VERSION,useCurrentPolicy=declared||historicalDiagnosticOnly;
+ if(contract.comparisonPolicy&&!declared&&!historicalDiagnosticOnly)reasons.push({code:'unknown_comparison_policy',detail:'The prospectively declared input/speech equivalence versions are not supported by this runner.'});
  if(!before.eligible)reasons.push(...before.reasons.map(row=>({...row,run:'baseline'})));
  if(!after.eligible)reasons.push(...after.reasons.map(row=>({...row,run:'candidate'})));
  if(baseline.audioSha256!==candidate.audioSha256)reasons.push({code:'pair_audio_mismatch'});
- if(baseline.inputSha256!==candidate.inputSha256)reasons.push({code:'pair_input_mismatch'});
+ const observedInput=run=>{
+  const evidence=run.inputEvidence,required=run.observationKind==='observed-audio-browser'?'observed_request_snapshot':'scripted_request_snapshot';
+  if(!evidence?.snapshot)return;
+  if(evidence.provenance!==required){reasons.push({code:'input_evidence_provenance',detail:'Input snapshot provenance does not match this run’s observed/scripted transport.'});return;}
+  return projectComparisonInput(evidence.snapshot,{currentBuyerItemIds:evidence.currentBuyerItemIds||[]});
+ };
+ const beforeInput=useCurrentPolicy?observedInput(baseline):undefined,afterInput=useCurrentPolicy?observedInput(candidate):undefined;
+ if(beforeInput&&afterInput){
+  if(!same(beforeInput.projection,afterInput.projection))reasons.push({code:'pair_input_mismatch',detail:'Request meaning differs after only the explicit audit-clock/runtime-identity projection.'});
+  else if(baseline.inputSha256!==candidate.inputSha256||!same(beforeInput.excludedAuditFields,afterInput.excludedAuditFields))diagnostics.push({code:'pair_audit_metadata_variation',detail:'Projected request meaning matches; raw inputs and explicit bookkeeping-clock omissions are retained.',baseline:beforeInput.excludedAuditFields,candidate:afterInput.excludedAuditFields});
+ }else if(baseline.inputSha256!==candidate.inputSha256)reasons.push({code:'pair_input_mismatch',detail:'Without both captured request snapshots, differing hashes cannot be assumed to be audit-only.'});
  if(!same(baseline.models,candidate.models))reasons.push({code:'pair_model_mismatch'});
  if(baseline.observationKind!==candidate.observationKind)reasons.push({code:'pair_observation_mismatch'});
  const speechEvidence=run=>{
@@ -118,13 +200,20 @@ export function compareScheduledRuns(contract,baseline,candidate){
   return {completed:turn?normalized(turn.text):null,segments:turn?.itemIds?.map(id=>normalized(items.get(id)?.text)),provisional:provisional?normalized(provisional.text):null};
  };
  const beforeSpeech=speechEvidence(baseline),afterSpeech=speechEvidence(candidate);
- if(beforeSpeech.completed!==afterSpeech.completed)reasons.push({code:'pair_completed_transcript_mismatch',detail:'The same recording produced different completed-turn words; approved-prefix equality does not make model inputs identical.'});
- if(!same(beforeSpeech.segments,afterSpeech.segments))reasons.push({code:'pair_asr_item_sequence_mismatch',detail:'The source ASR item sequence or its words changed.'});
- if(beforeSpeech.provisional!==afterSpeech.provisional)reasons.push({code:'pair_provisional_transcript_mismatch',detail:'The provisional generation received different words; no automatic semantic equivalence is assumed.'});
+ const speechEqual=(a,b,label)=>{
+  if(a===b)return true;
+  const decision=useCurrentPolicy&&a!==null&&b!==null?compareSpeechText(a,b):undefined;
+  if(decision?.equivalent){diagnostics.push({code:'pair_speech_formatting_variation',field:label,...decision});return true;}
+  return false;
+ };
+ if(!speechEqual(beforeSpeech.completed,afterSpeech.completed,'completed'))reasons.push({code:'pair_completed_transcript_mismatch',detail:'Recognition differs beyond the predeclared narrow formatting rule; meaning is different or unproven, not automatically guessed equivalent.'});
+ const segmentsEqual=beforeSpeech.segments?.length===afterSpeech.segments?.length&&beforeSpeech.segments?.every((text,index)=>speechEqual(text,afterSpeech.segments[index],'segment:'+index));
+ if(!segmentsEqual)reasons.push({code:'pair_asr_item_sequence_mismatch',detail:'The source ASR item sequence or its words changed beyond the declared formatting rule.'});
+ if(!speechEqual(beforeSpeech.provisional,afterSpeech.provisional,'provisional'))reasons.push({code:'pair_provisional_transcript_mismatch',detail:'The provisional generation received different or unproven-equivalent words.'});
  if(before.actualPhase!==after.actualPhase)reasons.push({code:'pair_phase_mismatch'});
  if(finite(before.actualRequestOffsetMs)&&finite(after.actualRequestOffsetMs)&&Math.abs(before.actualRequestOffsetMs-after.actualRequestOffsetMs)>contract.request.maxPairOffsetDeltaMs)reasons.push({code:'pair_dispatch_mismatch'});
- const eligible=reasons.length===0,canCompareLiveTiming=eligible&&baseline.observationKind==='observed-audio-browser';
- return {eligible,canCompareLiveTiming,reasons,baseline:before,candidate:after,liveDeltaMs:canCompareLiveTiming?after.liveLatencyMs-before.liveLatencyMs:null,qualityPreserved:[baseline.quality,candidate.quality],qualification:eligible?'Protocol matched for this individual pair; this alone is not statistical or causal proof of a speedup. Scripted transport cannot establish live latency.':'Not a matched speed comparison. Keep wording, quality failures and individual timings; do not pool or claim a speed delta.'};
+ const eligible=reasons.length===0,canCompareLiveTiming=eligible&&!historicalDiagnosticOnly&&baseline.observationKind==='observed-audio-browser';
+ return {eligible,canCompareLiveTiming,reasons,diagnostics,comparisonPolicy:{input:useCurrentPolicy?COMPARISON_INPUT_VERSION:'legacy-hash-only',speech:useCurrentPolicy?COMPARISON_SPEECH_VERSION:'legacy-literal',declaredBeforeRun:declared,historicalDiagnosticOnly},baseline:before,candidate:after,liveDeltaMs:canCompareLiveTiming?after.liveLatencyMs-before.liveLatencyMs:null,qualityPreserved:[baseline.quality,candidate.quality],qualification:historicalDiagnosticOnly?'Historical diagnostic reclassification only. Original reports and attempts remain intact; revised criteria supply no retroactive speedup claim.':eligible?'Protocol matched for this individual pair; this alone is not statistical or causal proof of a speedup. Scripted transport cannot establish live latency.':'Not a matched speed comparison. Keep wording, quality failures and individual timings; do not pool or claim a speed delta.'};
 }
 
 // A local timer removes operator/tool round trips. The callback must be the
