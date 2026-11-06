@@ -13,8 +13,9 @@ export function documentKindsForState(text:string):DocumentKind[]{return ([
  ['company profile',/\b(?:company\s+)?profiles?\b/i],['spec sheets',/\b(?:spec(?:ification)?\s+sheets?|specifications?|specs?|data sheets?)\b/i],['test reports',/\b(?:(?:material|inspection|quality)\s+)?test reports?\b|\b(?:inspection|quality) reports?\b|\breports?\b/i],['drawings',/\b(?:drawings?|blueprints?|diagrams?)\b/i],['catalog',/\bcatalog(?:ue)?s?\b/i],['brochure',/\bbrochures?\b/i],['website link',/\b(?:website|web site)(?: link)?\b/i],
 ] as [DocumentKind,RegExp][]).filter(([,pattern])=>pattern.test(text)).map(([kind])=>kind);}
 const senderPrefix=/\b(?:I|we)(?:'ll|\s+(?:will|can|could|would|plan to|intend to))\s+(?:send|email|forward|share|attach|include)\b/i;
+const ownSendQuestion=/^\s*(?:(?:please|also|just)\s+)*(?:(?:can|could|may|should|would|shall)\s+(?:I|we)\s+(?:(?:please|also|just)\s+)*(?:send|email|forward|share|attach|include)|would you\s+(?:like|want|prefer)\s+(?:me|us)\s+to\s+(?:send|email|forward|share|attach|include))\b/i;
 /** A buyer's own first-person send is not a request for the rep to send. */
-export function isBuyerOwnedDocumentSend(text:string):boolean {const s=normalize(text);return senderPrefix.test(s)&&!/^\s*(?:once|when|if|after|before|until)\b/i.test(s);}
+export function isBuyerOwnedDocumentSend(text:string):boolean {const s=normalize(text);return ownSendQuestion.test(s)||senderPrefix.test(s)&&!/^\s*(?:once|when|if|after|before|until)\b/i.test(s);}
 const request=/\b(?:please\s+(?:send|email|share|forward|attach|include)|(?:can|could|would|will) you\s+(?:please\s+)?(?:send|email|share|forward|attach|include)|(?:send|email|share|forward)\s+(?:me|us)|you\s+(?:can|could|should)\s+(?:send|email|share|forward))\b|^(?:(?:okay|ok|sure|yes)[,. ]+)?(?:send|email|share|forward|attach|include)\b/i;
 const negated=/\b(?:I|we)\s+(?:haven't|have not|didn't|did not|won't|will not|cannot|can't)\s+(?:send|sent|email|emailed|receive|received|get|got)\b/i;
 const pastSend=/^\s*(?:(?:yes|okay|ok|sure)[,.!]\s*)?(?:I|we)(?:'ve| have)?\s+(?:already\s+)?(?:sent|emailed|forwarded|shared)\b/i;
@@ -27,13 +28,17 @@ export function deriveDocumentState(input:{turns?:DocumentTurn[];seed?:DocumentS
  const ids=new Set(turns.flatMap(t=>t.id?[t.id]:[]));
  const rebuild=!!input.seed?.processedTurnIds.length&&input.seed.processedTurnIds.every(id=>ids.has(id));
  const result:DocumentState=rebuild||!input.seed?{version:1,transfers:[],processedTurnIds:[]}:structuredClone(input.seed);
+ const position=new Map(turns.map((turn,index)=>[turn.id||`document-turn-${index}`,index]));
+ const actionEvent=(event:DocumentEvent)=>['requested','offered','promised','sent','received','cancelled'].includes(event.kind);
+ const laterAction=(record:DocumentTransfer,turnId:string)=>record.events.some(event=>actionEvent(event)&&(position.get(event.turnId)??-1)>(position.get(turnId)??-1));
  const get=(document:DocumentKind,sender:DocumentActor,label?:string)=>{let record=result.transfers.find(t=>t.document===document&&t.sender===sender&&(!label||!t.label||t.label===label));if(!record){record={id:`${sender}:${label||document}`,document,...label?{label}:{},sender,recipient:other(sender),phase:'inquiry',sendStatus:'unconfirmed',receiptStatus:'unconfirmed',coverage:'unknown',coverageEvidence:[],events:[]};result.transfers.push(record);}if(label&&!record.label)record.label=label;return record;};
  for(const [index,turn] of turns.entries()){
   if(!rebuild&&turn.id&&result.processedTurnIds.includes(turn.id))continue;
   const actor:DocumentActor=turn.role==='you'?'you':'buyer',text=normalize(turn.text),turnId=turn.id||`document-turn-${index}`;
   const condition=actor==='buyer'?reportDeliveryCondition(text):undefined;
   const event=(record:DocumentTransfer,kind:DocumentEvent['kind'],quote:string)=>{record.events.push({kind,actor,turnId,quote,source:turn.source||'transcript'});record.events=record.events.slice(-64);};
-  let parts=text.split(/(?<=[.!?;])\s+|\s+(?=(?:Once|When|After|Before)\b)/).filter(Boolean);
+  let parts=text.split(/(?<=[.!?;])\s+|\s+(?=(?:Once|When|After|Before)\b)/)
+   .flatMap(part=>part.split(/\s+(?:and|but)\s+(?=(?:(?:can|could|would|will|may|should)\s+(?:you|I|we)\s+(?:(?:please|also|just)\s+)*(?:send|email|forward|share|attach|include)|please\s+(?:send|email|forward|share|attach|include))\b)/i)).filter(Boolean);
   if(!parts.length)parts=[text];
   for(const part of parts){
    const labelFor=(kind:DocumentKind)=>kind==='test reports'?part.match(/\b((?:material test|inspection|quality|test) report)\b/i)?.[1].toLowerCase():undefined;
@@ -41,6 +46,27 @@ export function deriveDocumentState(input:{turns?:DocumentTurn[];seed?:DocumentS
    if(!kinds.length&&/\b(?:it|them|both|those|that)\b/i.test(part)&&/\b(?:send|email|reply|receive|received|got|sent|emailed)\b/i.test(part)){
     const relevant=result.transfers.filter(t=>t.sender===(receipt.test(part)?other(actor):actor==='buyer'&&request.test(part)?'you':actor));
     if(relevant.length===1)kinds=[relevant[0].document];
+   }
+   const ownOffer=ownSendQuestion.exec(part);
+   const plain=part.trim().replace(/^(?:(?:please|sorry|actually|instead)[,:]?\s+)*/i,'');
+   const refusedSend=/^(?:(?:do not|don't|never|no need to)\s+(?:send|email|forward|share|attach|include)|stop\s+(?:sending|emailing|forwarding|sharing|attaching|including)|you\s+(?:(?:don't|do not)\s+(?:need|have) to|should not|shouldn't|must not|mustn't)\s+(?:send|email|forward|share|attach|include)|(?:I|we)\s+(?:do not|don't|no longer)\s+(?:want|need)\s+(?:you\s+)?to\s+(?:send|email|forward|share|attach|include)|(?:I am|I'm|we are|we're)\s+not asking you to\s+(?:send|email|forward|share|attach|include))\b/i.test(plain);
+   const ownWithdrawal=/^(?:I|we)\s+(?:won't|will not|can't|cannot)\s+(?:send|email|forward|share|attach|include)\b/i.test(plain);
+   if(refusedSend||ownWithdrawal){
+    const sender=ownWithdrawal?actor:other(actor),held=/\b(?:unless|until|if|when|after|once|yet)\b/i.test(plain)||part.includes('?');
+    const named=kinds.length?kinds:result.transfers.filter(row=>row.sender===sender&&/\b(?:it|that|them|those|the documents)\b/i.test(part)).map(row=>row.document);
+    for(const kind of named){const record=get(kind,sender,labelFor(kind));
+     if(held){record.condition={kind:'unresolved',text:part,turnId};event(record,'restricted',part);}
+     else{record.phase='cancelled';record.sendStatus='unconfirmed';record.condition=undefined;event(record,'cancelled',part);}
+    }
+    continue;
+   }
+   // A speaker asking permission to send their document is an offer by that
+   // speaker, not a request for the other side to send it. Limit the object to
+   // this action rather than borrowing documents from a following purpose.
+   if(ownOffer){
+    const object=part.slice(ownOffer[0].length).split(/\s+(?:so(?: that)?|because|if|when|once|provided|and (?:(?:can|could|would|will|may|should) you|you (?:can|will|could|should)|please))\b|,\s*(?:which|so|and\b)/i,1)[0];
+    for(const kind of documentKindsForState(object)){const record=get(kind,actor,labelFor(kind));record.phase='offered';record.sendStatus='pending';event(record,'offered',part);}
+    continue;
    }
    const question=part.includes('?')&&/^\s*(?:have|has|did|do|does|is|are|when|where|what|which|how|whether|can|could|would|will)\b/i.test(part)&&!/^\s*(?:can|could|would|will) you\b/i.test(part);
    if(negated.test(part)||question){
@@ -64,7 +90,7 @@ export function deriveDocumentState(input:{turns?:DocumentTurn[];seed?:DocumentS
      if(actor==='you'){if(meaning.delivery?.deliveryCondition==='stated_condition')r.condition={kind:'coverage_positive',text:meaning.delivery.conditionText||part,turnId};}
      continue;
     }
-    if(actor==='buyer'&&!ownSend&&(request.test(part)||condition&&kind==='test reports')){const r=get(kind,'you',labelFor(kind));r.phase=r.events.some(e=>e.kind==='promised')?'promised':'requested';r.sendStatus='pending';event(r,'requested',part);}
+    if(actor==='buyer'&&!ownSend&&(request.test(part)||condition&&kind==='test reports')){const r=get(kind,'you',labelFor(kind));r.phase=r.phase!=='cancelled'&&r.events.some(e=>e.kind==='promised')?'promised':'requested';r.sendStatus='pending';event(r,'requested',part);}
     if(actor==='you'&&kind==='test reports'&&/\b(?:I|we)(?:'ll| will| can)\s+(?:check|verify|confirm)\s+(?:whether|if)\b/i.test(part)){const r=get(kind,'you',labelFor(kind));if(!r.events.some(event=>['requested','promised','offered','sent','received'].includes(event.kind)))r.phase='checking';event(r,'check_promised',part);}
    }
   }
@@ -74,8 +100,8 @@ export function deriveDocumentState(input:{turns?:DocumentTurn[];seed?:DocumentS
  // Reuse the existing spoken bundle resolver for contextual "both/that"
  // agreements and explicit cancellations rather than reinterpreting them.
  const spoken=deriveSpokenDocumentEvidence(turns.map((turn,index)=>({id:turn.id||`document-turn-${index}`,role:turn.role==='customer'?'buyer':turn.role as 'you'|'buyer',text:turn.text,at:index})));
- for(const agreement of spoken.agreements)for(const kind of agreement.documents){const document=kind as DocumentKind;if(!documentKindsForState(document).includes(document))continue;const record=get(document,'you');if(record.sendStatus!=='reported_sent')record.phase='promised';record.sendStatus=record.sendStatus==='reported_sent'?'reported_sent':'pending';if(!record.events.some(event=>event.kind==='promised'&&event.turnId===agreement.turnId))record.events.push({kind:'promised',actor:'you',turnId:agreement.turnId,quote:agreement.quote,source:turns.find(turn=>turn.id===agreement.turnId)?.source||'transcript'});}
- for(const cancelled of spoken.cancellations)for(const record of result.transfers.filter(row=>row.sender==='you'&&cancelled.documents.includes(row.document))){record.phase='cancelled';record.sendStatus='unconfirmed';record.condition=undefined;record.events.push({kind:'cancelled',actor:'buyer',turnId:cancelled.turnId,quote:cancelled.quote,source:turns.find(turn=>turn.id===cancelled.turnId)?.source||'transcript'});}
+ for(const agreement of spoken.agreements)for(const kind of agreement.documents){const document=kind as DocumentKind;if(!documentKindsForState(document).includes(document))continue;const record=get(document,'you');if(laterAction(record,agreement.turnId)||record.events.some(event=>event.turnId===agreement.turnId&&actionEvent(event)))continue;if(record.sendStatus!=='reported_sent')record.phase='promised';record.sendStatus=record.sendStatus==='reported_sent'?'reported_sent':'pending';record.events.push({kind:'promised',actor:'you',turnId:agreement.turnId,quote:agreement.quote,source:turns.find(turn=>turn.id===agreement.turnId)?.source||'transcript'});}
+ for(const cancelled of spoken.cancellations)for(const record of result.transfers.filter(row=>row.sender==='you'&&cancelled.documents.includes(row.document))){if(laterAction(record,cancelled.turnId)||record.events.some(event=>event.turnId===cancelled.turnId&&event.kind==='cancelled'))continue;record.phase='cancelled';record.sendStatus='unconfirmed';record.condition=undefined;record.events.push({kind:'cancelled',actor:'buyer',turnId:cancelled.turnId,quote:cancelled.quote,source:turns.find(turn=>turn.id===cancelled.turnId)?.source||'transcript'});}
  // Original approved evidence can prove scope; requests and assurances cannot.
  for(const r of result.transfers.filter(r=>r.document==='test reports')){
   r.coverage='unknown';r.coverageEvidence=[];
@@ -90,7 +116,7 @@ export function deriveDocumentState(input:{turns?:DocumentTurn[];seed?:DocumentS
  * omitted raw speech or override a salesperson's correction. */
 export function documentStateReviewLines(state:DocumentState):string[]{return state.transfers.filter(r=>r.events.length).map(r=>{
  const label=r.label||r.document;
- if(r.phase==='cancelled')return `The buyer cancelled the request for the ${label}; no sending obligation remains.`;
+ if(r.phase==='cancelled')return `${r.events.findLast(event=>event.kind==='cancelled')?.actor==='you'?'The salesperson withdrew the proposed handoff of':'The buyer cancelled the request for'} the ${label}; no sending obligation remains.`;
  if(r.sender==='buyer')return r.receiptStatus==='confirmed'?`The salesperson confirmed receipt of the buyer’s ${label}.`:r.sendStatus==='reported_sent'?`The buyer reported sending the ${label}; the salesperson has not confirmed receipt.`:`The buyer ${r.phase==='offered'?'offered':'promised'} to send the ${label}; sending and salesperson receipt remain unconfirmed.`;
  const check=r.events.some(e=>e.kind==='check_promised')?'The salesperson will check the report coverage. ':'';
  const hasSend=r.events.some(event=>event.kind==='requested'||event.kind==='promised'||event.kind==='offered');

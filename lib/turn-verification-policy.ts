@@ -484,7 +484,9 @@ export function buyerReleaseState(context:VerificationPolicyContext):BuyerReleas
 /** Awaiting an incoming artifact is not promising an outgoing email. Require
  * the entire closed action so an attached send/claim is checked separately. */
 export function isAwaitingBuyerDocumentReceipt(text:string):boolean {
- return /^(?:I|we)(?:['’]ll|\s+(?:will|can))\s+(?:be\s+)?(?:(?:look(?:ing)? out|watch(?:ing)?|wait(?:ing)?)\s+for|await(?:ing)?)\s+(?:your|the)\s+(?:email|e-mail|message|drawing|documents?|reply)(?:\s+(?:from you|when ready))?[.!]?$/i.test(text.trim());
+ const line=text.trim();
+ return /^(?:I|we)(?:['’]ll|\s+(?:will|can))\s+(?:be\s+)?(?:(?:look(?:ing)? out|watch(?:ing)?|wait(?:ing)?)\s+for|await(?:ing)?)\s+(?:your|the)\s+(?:email|e-mail|message|drawing|documents?|reply)(?:\s+(?:from you|when ready))?[.!]?$/i.test(line)
+  ||/^(?:(?:I am|I'm|we are|we're)\s+)?looking\s+forward\s+to\s+(?:receiving\s+)?(?:your|the)\s+(?:email|e-mail|message|drawing|documents?|reply)(?:\s+(?:from you|when ready))?[.!]?$/i.test(line);
 }
 function preservesBuyerApproval(say:string,approver:BuyerReleaseState['approver']='buyer'):boolean {
  if(/\b(?:regardless|anyway|without (?:your )?approval|even if you (?:do not|don't) approve)\b/i.test(say))return false;

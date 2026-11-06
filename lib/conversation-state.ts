@@ -66,9 +66,35 @@ const materialRefusal=(line:string)=>{
 };
 const conditionalOffer=(line:string)=>/\b(?:if|unless|maybe|perhaps)\b/.test(line);
 const conditionalMaterialRequest=(line:string)=>/\b(?:i|we)(?:'ll| will| would| might| may) (?:ask|request)\b.{0,70}\b(?:send|email|share|forward|attach)\b/.test(line)||/\b(?:if|unless|once|when|after)\b.{0,100}\b(?:send|email|share|forward|attach)\b/.test(line)&&!/^\s*if (?:possible|you can|it's possible|it is possible)\b/.test(line);
-const affirmativeMaterialClause=(line:string)=>!materialRefusal(line)&&!conditionalMaterialRequest(line)&&materialRequest.test(line);
-const definiteSendingPromise=(line:string)=>/\b(?:i|we)(?:'ll| will) (?:send|email|share|forward)\b/.test(line)&&materialRequest.test(line)&&!conditionalOffer(line)&&!/\b(?:not|never|didn't|did not|don't|do not|won't|will not)\b/.test(line)&&!line.includes('?');
-const sendingOffer=(line:string)=>materialRequest.test(line)&&!materialRefusal(line)&&(/\b(?:i|we)(?:'ll| will| can| could| might| may) (?:send|email|share|forward)\b|\b(?:can|could|may|should) (?:i|we) (?:send|email|share|forward)\b|\bwould you (?:like|want)\b.{0,30}\b(?:send|email|share|forward)\b/.test(line));
+const deliveryVerb='(?:send|email|share|forward|attach|include)';
+const independentDeliveryMove=new RegExp('^(?:'+deliveryVerb+'\\b|you\\s+(?:(?:can|could|should|may|will)\\s+)?'+deliveryVerb+'\\b|(?:can|could|would|will|may|should)\\s+(?:you|i|we)\\s+(?:(?:please|also|just)\\s+)*'+deliveryVerb+'\\b|(?:i|we)(?:\\x27ll|\\s+(?:will|can|could|would|may|might))\\s+(?:(?:please|also|just)\\s+)*'+deliveryVerb+'\\b|(?:i|we)(?:\\x27d|\\s+would)?\\s+(?:like|want|need)\\s+(?:you\\s+)?to\\s+'+deliveryVerb+'\\b|would you (?:like|want)\\b)');
+/** A mentioned delivery is not an independent request or promise. Keep a
+ * dependent lead-in as context, then inspect the actual main move. Returning
+ * that main clause also prevents its earlier document nouns from becoming
+ * newly requested materials. No word/name/code from a saved call is special. */
+function independentMaterialAction(line:string,repOwnedOnly=false):string|undefined {
+  const courtesy=(value:string)=>value.trim().replace(/^(?:(?:well|okay|ok|yes|yeah|sure|great|thanks|thank you|actually|instead|also|just|only|please|now)[,:]?\s+(?:and\s+)?)*/,'').replace(/^(?:how about|what about)(?: (?:this|that))?[: ,]*\s*/,'').replace(/^if (?:possible|you can|it's possible|it is possible)[, ]*/,'');
+  let main=courtesy(line);
+  if(/^(?:before|after|while|when|once|until|unless|if|whenever|as soon as|as long as)\b/.test(main)&&!/^if (?:possible|you can|it's possible|it is possible)\b/.test(main)){
+    const comma=main.indexOf(',');
+    if(comma>=0)main=main.slice(comma+1).trim();
+    else {
+      // ASR may omit a comma: a separate modal request is still identifiable.
+      const request=new RegExp('\\b(?:can|could|would|will|may|should)\\s+(?:you|i|we)\\s+(?:(?:please|also|just)\\s+)*'+deliveryVerb+'\\b').exec(main);
+      if(!request)return;main=main.slice(request.index);
+    }
+  }
+  const coordinatedRequest=new RegExp('\\b(?:and|then)\\s+(?=(?:(?:please|also|just)\\s+)*(?:'+deliveryVerb+'\\b|you\\s+(?:(?:can|could|should|may|will)\\s+)?'+deliveryVerb+'\\b|(?:can|could|would|will|may|should)\\s+you\\s+(?:(?:please|also|just)\\s+)*'+deliveryVerb+'\\b))','g');
+  const coordinated=[...main.matchAll(coordinatedRequest)];
+  const starts=[0,...[...main.matchAll(/,\s*/g),...coordinated].map(match=>(match.index||0)+match[0].length)];
+  const candidates=starts.map(start=>main.slice(start,coordinated.find(match=>(match.index||0)>=start)?.index));
+  const actions=[...new Set(candidates.map(courtesy).filter(value=>independentDeliveryMove.test(value)&&materialRequest.test(value)&&(!repOwnedOnly||!isBuyerOwnedDocumentSend(value))))];
+  return actions.length?actions.join(' '):undefined;
+}
+const affirmativeMaterialAction=(line:string,repOwnedOnly=false)=>!materialRefusal(line)&&!conditionalMaterialRequest(line)?independentMaterialAction(line,repOwnedOnly):undefined;
+const affirmativeMaterialClause=(line:string)=>!!affirmativeMaterialAction(line);
+const definiteSendingPromise=(line:string)=>{const main=independentMaterialAction(line);return !!main&&/^(?:i|we)(?:'ll| will) (?:send|email|share|forward)\b/.test(main)&&!conditionalOffer(line)&&!/\b(?:not|never|didn't|did not|don't|do not|won't|will not)\b/.test(main)&&!line.includes('?');};
+const sendingOffer=(line:string)=>{const main=independentMaterialAction(line);return !!main&&!materialRefusal(main)&&(/\b(?:i|we)(?:'ll| will| can| could| might| may) (?:send|email|share|forward)\b|\b(?:can|could|may|should) (?:i|we) (?:send|email|share|forward)\b|\bwould you (?:like|want)\b.{0,30}\b(?:send|email|share|forward)\b/.test(main));};
 const acceptsOffer=(line:string)=>/^(?:(?:okay|ok)[, ]*)?(?:yes|yeah|yep|sure|please do|go ahead|that (?:works|would be (?:useful|helpful|good|great)))(?:[, ]*(?:please|thanks|thank you|go ahead|send it(?: over)?|do that))?[.!\s]*$/.test(line.trim());
 const incompleteReview=(line:string)=>/\b(?:not|never|hasn't|has not|haven't|have not|isn't|is not|aren't|are not|didn't|did not|don't know|do not know|not sure|still waiting)\b.{0,55}\b(?:review\w*|check\w*|evaluat\w*|finish\w*|approv\w*|complete\w*|done)\b|\b(?:review|evaluation)\b.{0,25}\b(?:not|pending|incomplete|unfinished)\b/.test(line);
 const conditionalReview=(line:string)=>/\b(?:if|once|when|after|before|until)\b.{0,70}\b(?:review\w*|check\w*|evaluat\w*|finish\w*|approv\w*|complete\w*|done)\b/.test(line);
@@ -77,7 +103,7 @@ const completedReview=(line:string)=>/\b(?:engineer\w*|technical team|engineerin
 export const hasAffirmativeMaterialsRequest=(raw:string)=>clauses(norm(raw)).some(affirmativeMaterialClause);
 export const hasMaterialsRefusal=(raw:string)=>clauses(norm(raw)).some(materialRefusal);
 export const materialsNamed=(raw:string)=>materialNames(norm(raw));
-export const affirmativeMaterialsNamed=(raw:string)=>[...new Set(clauses(norm(raw)).filter(affirmativeMaterialClause).flatMap(materialNames))];
+export const affirmativeMaterialsNamed=(raw:string)=>[...new Set(clauses(norm(raw)).flatMap(line=>materialNames(affirmativeMaterialAction(line)||'')))];
 
 /** Address receipt may share a turn with a new stakeholder/need constraint.
  * Strip only ordinary receipt wording, not the buyer's additional clauses. */
@@ -204,7 +230,7 @@ export function deriveConversationState(input:StateInput):ConversationState {
     const line=norm(turn.text),evidence={turnId:turn.id||`turn-${i}`,quote:turn.text};
     const buyer=turn.role==="buyer",rep=turn.role==="you";
     const parts=clauses(line),refused=buyer?parts.filter(materialRefusal):[];
-    const requestParts=buyer?parts.filter(part=>affirmativeMaterialClause(part)&&!isBuyerOwnedDocumentSend(part)):[];
+    const requestParts=buyer?parts.map(part=>affirmativeMaterialAction(part,true)).filter((part):part is string=>!!part):[];
     const globalRefusal=buyer&&hasClearConversationRefusal(line);
     const existingMaterials=send?materialNames(norm(send.action)):[];
     const refusedMaterials=refused.flatMap(materialNames);
@@ -221,9 +247,10 @@ export function deriveConversationState(input:StateInput):ConversationState {
     const suppliesRequestedAddress=!!fieldEvidence('Email',[turn])&&!!previousRep&&previousRep.text.includes('?')&&/\b(?:email|address)\b/i.test(previousRep.text);
     const accepted=buyer&&(acceptsOffer(line)||suppliesRequestedAddress)&&previousRep&&sendingOffer(norm(previousRep.text))&&turns.slice(previousRepIndex+1,i).every(item=>item.role==='buyer'&&/^(?:uh+|um+|hmm+|one moment|one second|hold on)[.!\s]*$/.test(norm(item.text).trim()));
     const request=!!requestParts.length||!!accepted;
-    const promise=rep&&parts.some(definiteSendingPromise);
+    const promiseParts=rep?parts.filter(definiteSendingPromise).map(part=>independentMaterialAction(part)!):[];
+    const promise=promiseParts.length>0;
     if(request||promise) {
-      const requestedLine=accepted?norm(previousRep!.text):promise?line:requestParts.join(' ');
+      const requestedLine=accepted?independentMaterialAction(norm(previousRep!.text))||norm(previousRep!.text):promise?promiseParts.join(' '):requestParts.join(' ');
       const requestedGroups=materialGroups(requestedLine),materials=describeMaterialGroups(requestedGroups);
       if(!send||send.status==="cancelled"||send.status==="fulfilled") {
         send={id:"send_materials",action:`Send ${materials}`,owner:"you",status:"needs_email",missing:["email"],evidence:[]};
@@ -293,7 +320,7 @@ export function deriveConversationState(input:StateInput):ConversationState {
       return /^(?:yes|yeah|yep|sure|okay|ok|please do|that (?:works|would be (?:useful|helpful|good|great)))[,.!\s]*$/i.test(turn.text.trim())&&/\b(?:send|email|share|review|receive)\b/i.test(previous)&&/\b(?:profile|specs?|information|materials|documents)\b/i.test(previous);
     });
   }
-  const confirmHandoffPlan=participant.afterTransfer&&!participant.transferPending&&!!advanced&&send?.status!=="fulfilled"&&!participant.handoffPlanAccepted;
+  const confirmHandoffPlan=participant.afterTransfer&&!participant.transferPending&&!!advanced&&!!send&&send.status!=="fulfilled"&&!participant.handoffPlanAccepted;
   const stagePurpose=advanced?`${advanceStage.purpose}. Agreed sequence retained: ${lastAgreedNextStep}. New questions or concerns can be addressed without losing this agreement.`:advanceStage.purpose;
   const routingAction=participant.transferPending?{
     kind:participant.transfer?.status==='intended'?'transfer_intended':'transfer_pending',gap:participant.transfer?.status==='intended'&&!facts.email?'alternative contact route':'',

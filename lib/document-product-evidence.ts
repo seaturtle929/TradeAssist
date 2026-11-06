@@ -429,7 +429,10 @@ function parseInvestigationThenDocumentDelivery(text:string,context?:Context):Pa
  // cannot fit this closed grammar and keep their independent checks.
  const action='(?:(?:reply|respond)\\s+and\\s+(?:send|email|share|forward|include|attach)\\s+|(?:send|email|share|forward|include|attach)\\s+|(?:reply|respond)\\s+with\\s+)';
  const artifact='(?:it|(?:that|the)\\s+(?:(?:material test|inspection|test)\\s+)?report|the documents|the details)';
- const tail='(?:\\s+(?:over|along|to you|for review|your way|back to you|right back to you))?';
+ // Direction, recipient and purpose can compose ("send it over to you for
+ // review"). Keep each complement closed: added claims or release conditions
+ // must still be interpreted independently by the ordinary checks below.
+ const tail='(?:\\s+(?:over|along))?(?:\\s+(?:to you|your way|back to you|right back to you))?(?:\\s+for review)?';
  const delivery=action+artifact+tail;
  // The object may be the buyer's actual code or a natural reference phrase.
  // Parse its complete predicate below rather than whitelisting object words.
