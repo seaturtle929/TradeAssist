@@ -2,6 +2,8 @@ import {buyerConversationIdentifierReferences,buyerProductIdentifierReferences,c
 import {availableDocumentActionEvidence} from './document-availability-evidence.ts';
 import {deriveCallParticipant} from './call-participant.ts';
 import {affirmativeOutgoingDocumentActions} from './document-action-syntax.ts';
+import {reportDeliveryCondition} from './document-delivery-condition.ts';
+import {materialClauses} from './material-request-meaning.ts';
 
 /** Document availability and product coverage are different propositions.
  * A scope claim must have its own original document→product relationship;
@@ -178,6 +180,14 @@ export function isConversationalAcknowledgment(text:string,context?:Context):boo
  }
  return /^[,.!]*$/.test(tail)||/^,\s*[A-Z][A-Za-z'-]*(?:\s+[A-Z][A-Za-z'-]*){0,2}[.!]?$/.test(tail);
 }
+/** Remove only a complete neutral courtesy, with any vocative checked against
+ * the actual speaker. An assertion before the boundary must remain a claim. */
+function afterVerifiedCourtesy(text:string,context?:Context):string|undefined {
+ for(const boundary of text.matchAll(/[—–:;]/g)){
+  const prefix=text.slice(0,boundary.index).trim(),rest=text.slice(boundary.index!+1).trim();
+  if(rest&&isConversationalAcknowledgment(prefix,context))return rest;
+ }
+}
 /** Reporting an investigation's eventual result does not supply that result.
  * Keep the communication action, optional neutral object and ordering clause
  * separate so ordinary wording variations cannot become scope assertions. */
@@ -297,6 +307,7 @@ export function isBoundedEpistemicFactAction(text:string,context?:Context):boole
  // separator is not part of the predicate; internal separators and every
  // following clause still retain their independent factual checks.
  let line=text.trim().replace(/[’‘]/g,"'").replace(/;$/,'.');
+ const courtesy=afterVerifiedCourtesy(line,context);if(courtesy)return isBoundedEpistemicFactAction(courtesy,context);
  // Arrival is a prerequisite for the future investigation, not an invented
  // calendar deadline or evidence that the drawing/report has been received.
  const incomingPrerequisite=/^(.+?)\s+(?:when|once|after)\s+(?:your|the|that)\s+drawing\s+(?:arrives|comes in)[.!]?$/i.exec(line);
@@ -440,15 +451,56 @@ function approvalNoun(text:string):DocumentApproval|undefined {
  const match=/^your(?:\s+(engineer|engineering team|manager)['’]s)?\s+(?:approval|sign[- ]?off)$/i.exec(text.trim());
  return match?match[1]?/manager/i.test(match[1])?'manager':'engineering':'buyer':undefined;
 }
-function closedDelivery(text:string,context?:Context):ParsedDocumentDelivery|undefined {
+function closedDelivery(text:string,context?:Context,boundReport?:string):ParsedDocumentDelivery|undefined {
  if(!new RegExp('^'+deliveryActor+deliveryAction+deliveryArtifact+deliveryTail+'[.!]?$','i').test(text))return;
  const explicit=documents(text).filter(document=>/report$/.test(document.kind));
- const prior=currentCallReportInquiry(context),report=explicit.length===1?explicit[0]:explicit.length===0&&prior?documents(prior).find(document=>/report$/.test(document.kind)):undefined;
- return report?{investigation:'',document:report.kind,deliveryCondition:'sequence_only'}:undefined;
+ const prior=currentCallReportInquiry(context),report=explicit.length===1?explicit[0].kind:explicit.length===0?boundReport||prior&&documents(prior).find(document=>/report$/.test(document.kind))?.kind:undefined;
+ return report?{investigation:'',document:report,deliveryCondition:'sequence_only'}:undefined;
+}
+function actualReportSendRequested(kind:string,context?:Context):boolean {
+ const turns=(context?.turns||[]).filter(turn=>turn.role==='buyer'||turn.role==='customer');
+ let requested=false,named:string|undefined;
+ for(const turn of turns)for(const clause of materialClauses(turn.text)){
+  const line=clause.replace(/[’‘]/g,"'").trim(),reports=documents(line).filter(document=>/report$/.test(document.kind));
+  const specific=[...new Set(reports.filter(report=>report.kind!=='report').map(report=>report.kind))];if(specific.length)named=specific.length===1?specific[0]:undefined;
+  const binds=reports.some(report=>{const target=report.kind==='report'&&named?named:report.kind;return sameDocument(target,kind)||sameDocument(kind,target);});
+  const withdraw=/\b(?:cancel|forget|withdraw)\b[^.!?]{0,35}\b(?:report|request)\b|\b(?:don't|do not)\s+(?:want|need)\b[^.!?]{0,35}\breport\b|\bno need for\b[^.!?]{0,35}\breport\b/i.test(line);
+  const noSend=/^(?:actually[, ]+)?(?:please\s+)?(?:do not|don't|never)\s+(?:send|email|share)\s+(?:anything|it|(?:(?:the|that|any|a)\s+)?(?:(?:material test|inspection|quality|test)\s+)?reports?)(?:\s+please)?[.!]?\s*$/i.test(line);
+  if(withdraw&&binds||noSend){requested=false;continue;}
+  if(!binds)continue;
+  // Shared report-specific conditional grammar excludes buyer-owned offers.
+  // Inspect one complete clause so a profile request cannot grant a report.
+  const conditional=reportDeliveryCondition(line);
+  const simple=/^(?:(?:can|could|would|will) you\s+)?(?:(?:please|just|also)\s+)*(?:send|email|share|forward|include|attach)\s+(?:(?:me|us)\s+)?(?:(?:the|that|your)\s+)?(?:(?:material test|inspection|quality|test)\s+)?report(?:\s+(?:over|for review|to me|to us))?[.!?]?$/i.test(line);
+  if(conditional||simple)requested=true;
+ }
+ return requested;
+}
+/** A nominal “match” may bind only to ONE explicit, bounded report inquiry
+ * and ONE complete known reference in that same group, never a catalog fit,
+ * a second report or an approval/check-completion result. */
+function explicitReportInquiry(text:string,context?:Context):{document:string}|undefined {
+ const inquiry=text.trim().replace(/,?\s+first$/i,'');
+ if(!isBoundedEpistemicFactAction(inquiry,context))return;
+ const predicate=/\b(?:whether|if)\s+((?:(?:the|that|this|our|your)\s+)?(?:(?:material test|inspection|test)\s+)?report)\s+(?:covers?|matches?|includes?|appl(?:y|ies)\s+to)\s+(.+)$/i.exec(inquiry);
+ const referents=documents(inquiry);if(!predicate||referents.length!==1||! /report$/.test(referents[0].kind))return;
+ const object=predicate[2].trim();
+ if(![...buyerConversationIdentifierReferences(object,context?.turns||[]),...productIdentityReferences(object,context?.sources||[])].some(reference=>reference.start===0&&reference.end===object.length))return;
+ return {document:referents[0].kind};
 }
 function parseInvestigationThenDocumentDelivery(text:string,context?:Context):ParsedDocumentDelivery|undefined {
  const line=text.trim().replace(/[’‘]/g,"'").replace(/[.!]$/,'');
+ const courtesy=afterVerifiedCourtesy(line,context);if(courtesy)return parseInvestigationThenDocumentDelivery(courtesy,context);
+ const requestedSuffix=/\s+as(?: you)? (?:requested|asked|agreed)$/i.exec(line);
+ if(requestedSuffix){const report=documents(line).find(document=>/report$/.test(document.kind))?.kind||currentCallReportInquiry(context)&&documents(currentCallReportInquiry(context)!).find(document=>/report$/.test(document.kind))?.kind;if(!report||!actualReportSendRequested(report,context))return;return parseInvestigationThenDocumentDelivery(line.slice(0,requestedSuffix.index),context);}
  const withApproval=(parsed:ParsedDocumentDelivery|undefined,approval:DocumentApproval,condition:string)=>parsed?{...parsed,conditionText:[parsed.conditionText,condition].filter(Boolean).join(' AND '),approvals:[...new Set([...(parsed.approvals||[]),approval])]}:undefined;
+ const joint=/^(.+?)\s*,?\s+and\s+(?:once|after|when|if|provided that|as long as)\s+([^,;.!?]+),\s*(.+)$/i.exec(line);
+ if(joint){
+  const inquiry=explicitReportInquiry(joint[1].replace(/,$/,''),context),delivery=inquiry&&closedDelivery(joint[3],context,inquiry.document);
+  const conditions=joint[2].split(/\s+and\s+/i),approvals=conditions.map(approvalPredicate).filter((value):value is DocumentApproval=>!!value);
+  const positive=conditions.filter(condition=>/^(?:I|we)\s+have\s+(?:(?:a|the|that)\s+)?(?:positive\s+)?(?:report\s+)?match$/i.test(condition));
+  if(inquiry&&delivery&&sameDocument(delivery.document,inquiry.document)&&positive.length===1&&approvals.length>0&&positive.length+approvals.length===conditions.length)return {...delivery,investigation:joint[1],deliveryCondition:'stated_condition',conditionText:joint[2],approvals:[...new Set(approvals)]};
+ }
  // The conjunction belongs to the SAME release predicate, not a new rep
  // action. Parse the entire remaining delivery normally before adding it.
  const and=[...line.matchAll(/\s+and\s+/gi)].at(-1);
@@ -566,6 +618,7 @@ type DocumentWithholding={approval?:DocumentApproval;positiveCoverage:boolean};
  * an attached shipment/coverage assertion cannot inherit that status. */
 function documentWithholding(text:string,context?:Context):DocumentWithholding|undefined{
  const line=text.trim().replace(/[’‘]/g,"'").replace(/[.!]$/,'');
+ const courtesy=afterVerifiedCourtesy(line,context);if(courtesy)return documentWithholding(courtesy,context);
  const preface=/^([^;:.!?]+?)[,;:.!?]\s+(.+)$/.exec(line);
  if(preface&&investigationAcknowledgment(preface[1]+'.',context))return documentWithholding(preface[2],context);
  const artifact='(?:anything|it|(?:the|that) (?:(?:material test|inspection|test) )?report)';
