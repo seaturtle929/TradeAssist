@@ -1,9 +1,7 @@
 import {projectedOnDemandTask,projectOnDemandImmediateAction,referencedCompanyFacts} from './on-demand-projection.ts';
 import {CoachingPhaseClock,type CoachingPhaseTiming} from './coaching-timing.ts';
-import {ON_DEMAND_COACHING_RULES,ON_DEMAND_LINE_FORMAT,onDemandDecisionRules,onDemandTaskContext} from './on-demand-coaching.ts';
+import {ON_DEMAND_COACHING_RULES,ON_DEMAND_LINE_FORMAT,onDemandDecisionRules,onDemandTaskContext,onDemandRepairRules,REPAIR_VIOLATION_SCOPE} from './on-demand-coaching.ts';
 import {applyCoachingConfiguration,configurationInstructions} from './coaching-configuration.ts';
-import {learnedSuggestionProblems} from './learning-loop.ts';
-import {foundationSuggestionProblems} from './general-foundation.ts';
 import {generationFoundationFor} from './generation-foundation.ts';
 import {checkSuggestion} from './call-purpose.ts';
 import {attributeGuidance,FOUNDATION_GENERATION_RULES,foundationLayerFor} from './generation-foundation.ts';
@@ -114,7 +112,7 @@ export function manualRequestFor(input: ManualCoachInput) {
   }:compact;
   return {
     model: MANUAL_TEXT_MODEL, service_tier: 'default', store: false, stream: true, reasoning: { effort: 'none' },
-    instructions: input.coachingRequest ? ON_DEMAND_COACHING_RULES+'\n'+ON_DEMAND_LINE_FORMAT+configurationInstructions(input)+onDemandDecisionRules(input)+(input.selfCheckFailure?'\nINTERNAL CHECK FEEDBACK FOR THIS ONE REPAIR: '+input.selfCheckFailure:'') : FOUNDATION_GENERATION_RULES + "\n" + MANUAL_REPLY_RULES + '\n' + VERIFICATION_TURN_RULES + configurationInstructions(input) + (isNeedsOnlyTurn(input) ? '\nThis buyer is describing their own needs, not requesting supplier claims. Respond to the stated need with supported relevance or one useful question; no factory deferral or unsupported capability claims.' : ''),
+    instructions: input.coachingRequest ? ON_DEMAND_COACHING_RULES+'\n'+ON_DEMAND_LINE_FORMAT+configurationInstructions(input)+onDemandDecisionRules(input)+onDemandRepairRules(input) : FOUNDATION_GENERATION_RULES + "\n" + MANUAL_REPLY_RULES + '\n' + VERIFICATION_TURN_RULES + configurationInstructions(input) + (isNeedsOnlyTurn(input) ? '\nThis buyer is describing their own needs, not requesting supplier claims. Respond to the stated need with supported relevance or one useful question; no factory deferral or unsupported capability claims.' : ''),
     input: JSON.stringify(projectOnDemandImmediateAction(input,{foundation:projectOnDemandImmediateAction(input,foundationLayerFor(input)),...projection})), max_output_tokens: 420,
   };
 }
@@ -164,7 +162,7 @@ export async function streamManualCoaching(options: ManualStreamOptions) {
     if('guidance' in event)phaseClock.display(event.guidance.say,event.type!=='delta',event.type==='verification_complete');
     options.emit('timing' in event?{...event,timing:{...event.timing,phases:phaseClock.snapshot()}}:event);
   };
-  let rawText = '', lastSay = '', rawSay = '', candidate: Guidance | null = null;
+  let rawText = '', rawSay = '', candidate: Guidance | null = null;
   let rejectedReasons:string[]|undefined;
   let completedResponse: ManualResponseResult | undefined, providerModel = MANUAL_TEXT_MODEL,providerTier='unknown', verification: Promise<void> | undefined;
   let verifiedGuidance:Guidance|undefined;
@@ -178,7 +176,7 @@ export async function streamManualCoaching(options: ManualStreamOptions) {
     const assessment = phaseClock.validate(()=>assessReplyVerification(cleanSpokenReply(rawSay,input), input));
     const unsupported=input.coachingRequest?assessment.unsupportedClaims:[];
     if(unsupported.length){
-      rejectedReasons=unsupported.map(claim=>'Unsupported claim '+JSON.stringify(claim.text)+': '+claim.reason+' Rewrite the complete useful move using the explicitly supported broad company category or applicable original evidence. Do not leave a vague question after deleting its subject, repeat an unsupported application/capability, or claim an undocumented mechanism or artifact.');
+      rejectedReasons=unsupported.map(claim=>'Unsupported claim '+JSON.stringify(claim.text)+': '+claim.reason+' '+REPAIR_VIOLATION_SCOPE);
       emit({type:'self_check_rejected',reasons:rejectedReasons,lessonIds:(input.brain?.learningExamples||[]).map(item=>item.id),moveId:generationFoundationFor(input).moveId,rejectedSay:rawSay,checkedSay:assessment.sanitizedReply});return;
     }
     const immediateMove = assessment.classification.kind !== 'fact_request';

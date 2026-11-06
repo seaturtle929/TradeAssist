@@ -1,4 +1,5 @@
 import {buyerVadSilenceMs} from './turn-detection.ts';
+import {REPAIR_VIOLATION_SCOPE} from './on-demand-coaching.ts';
 import {CoachingPhaseClock,type CoachingPhaseTiming} from './coaching-timing.ts';
 import {snapshotCoachingContext,coachingRequestFocus,type CoachingSpeechSnapshot} from './coaching-context-snapshot.ts';
 import {deriveCallParticipant} from './call-participant.ts';
@@ -927,13 +928,15 @@ export class LiveCoachingSession {
     // the mutable Realtime conversation would let speech arriving after the
     // click leak into this request. Retrieved sources live in the pinned rules.
     const requestContext=work.repairReason?{...work.context,selfCheckFailure:work.repairReason,regenerationAttempt:1}:work.context;
-    const repairInstruction=work.repairReason?'\nONE SAME-REQUEST REPAIR: The preceding candidate failed the source or conversation checks given in selfCheckFailure. Rewrite the exact spoken wording to serve the original objective using only established information. Preserve the supported substantive action and remove or correct the failing part. Do not repeat an unsupported claim or lose the buyer’s requested action in empty filler. A concise, specific acknowledgment of the requested action is a complete move when no clarification is needed; do not add a new question just to make the response longer. The frozen transcript has not changed. Begin with SAY:.':'';
-    const instructions=liveRequestInstructionsFor(requestContext,ticket.turn,continuation?work.lookupSources:[])+repairInstruction;
+    const instructions=liveRequestInstructionsFor(requestContext,ticket.turn,continuation?work.lookupSources:[]);
     work.phaseClock.providerStarted(instructions.length);
     const eventId=`coaching-${ticket.revision}-${work.repairCount}-${crypto.randomUUID()}`;
     this.requestEvents.set(eventId,{work,attempt:work.repairCount});
     this.trace(work,'provider_request',{reason:work.awaitingTranscript?'Hidden speculative generation; final transcript acceptance is required before checks or display.':work.repairReason||'Generate from the intentional request snapshot.'});
-    this.options.send({type:"response.create",event_id:eventId,response:{metadata:{epoch:String(ticket.revision),trigger:ticket.turn.id},...continuation||!factual?{tool_choice:"none"}:{},input:[{type:"message",role:"user",content:[{type:"input_text",text:"Write the representative’s next spoken line for this pinned moment. Start with SAY: followed immediately by literal words the rep can say aloud; then newline MOVE: with a concise action. Use the supplied objective and context; no new buyer speech is implied. A supported confirmation or goodbye is complete when that is the useful move."}]}],instructions}});
+    const task=work.repairReason
+      ? "Repair the rejected spoken line for this SAME intentional request. Read selfCheckFailure for the exact violation and correct the meaning under the current action constraints and documentFollowThrough contract. The buyer has not said anything new. Return one usable SAY: line followed by MOVE:, without diagnosis, filler or another question unless essential to the actual request."
+      : "Write the representative’s next spoken line for this pinned moment. Start with SAY: followed immediately by literal words the rep can say aloud; then newline MOVE: with a concise action. Use the supplied objective and context; no new buyer speech is implied. A supported confirmation or goodbye is complete when that is the useful move.";
+    this.options.send({type:"response.create",event_id:eventId,response:{metadata:{epoch:String(ticket.revision),trigger:ticket.turn.id},...continuation||!factual?{tool_choice:"none"}:{},input:[{type:"message",role:"user",content:[{type:"input_text",text:task}]}],instructions}});
   }
   private merge(buffer:ResponseBuffer,verified:Guidance):Guidance {
     const parsed=parseLiveDraft(buffer.text,buffer.work.context);
@@ -1055,7 +1058,7 @@ export class LiveCoachingSession {
     buffer.work.phaseClock.wordingComplete();
     const assessment=buffer.work.phaseClock.validate(()=>this.assessReply(buffer.work,main.say));
     if(buffer.work.context.coachingRequest&&assessment.unsupportedClaims.length){
-      this.repairDemand(buffer,assessment.unsupportedClaims.map(claim=>'Unsupported claim '+JSON.stringify(claim.text)+': '+claim.reason).join('; ')+' Rewrite the full useful move with the supported broad company category or applicable original evidence. Do not delete the subject and leave a vague question or repeat the unsupported predicate.',main.say);return;
+      this.repairDemand(buffer,assessment.unsupportedClaims.map(claim=>'Unsupported claim '+JSON.stringify(claim.text)+': '+claim.reason).join('; ')+' '+REPAIR_VIOLATION_SCOPE,main.say);return;
     }
     if(!assessment.requiresVerification&&!needsFactCheck(main.say,buffer.work.context)) {
       const verified:Guidance={...main,backup:"",evidence:assessment.locallyVerifiedWholeReply?assessment.localEvidence.map(({sourceId,quote})=>({sourceId,quote})):[],verified:true,verificationStatus:assessment.locallyVerifiedWholeReply||assessment.claims.some(claim=>claim.kind!=='product_identity')?'verified':'not_required'};

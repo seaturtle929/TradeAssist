@@ -1,3 +1,5 @@
+import {affirmativeMaterialAction} from './material-request-meaning.ts';
+import {isBuyerOwnedDocumentSend} from './document-state.ts';
 import type {CallParticipant} from './call-participant.ts';
 
 export const BUYER_NEED_KEYS=['application','difficulty','impact','priority','evaluation','timing','current_supplier'] as const;
@@ -77,7 +79,8 @@ function interestFor(raw:string,evidence:BuyerNeedEvidence):BuyerInterest|undefi
  if(affirmative&&targetNegation(line,/\b(?:replace|replacing|replacement)\b|\b(?:switch|switching|change|changing)\b.{0,30}\bsuppliers?\b/i).positive)return {kind:'replacement',status,evidence};
  if(affirmative&&targetNegation(line,/\b(?:backup|back-up) (?:source|supplier|vendor)\b|\b(?:source|supplier|vendor) as (?:a )?(?:backup|back-up)\b|\b(?:second source|additional source|alternative source|additional supplier|second supplier)\b/i).positive)return {kind:'backup',status,evidence};
  if(affirmative&&targetNegation(line,/\b(?:compar\w*|benchmark\w*|second quote|another quote)\b/i).positive)return {kind:'comparison',status,evidence};
- if(/\b(?:send|email|share|forward|attach)\b.{0,75}\b(?:profile|specs?|information|info|catalog\w*|brochure|documents?|materials|website|link)\b/i.test(line)&&targetNegation(line,intentTargets.information).positive)return {kind:'information',status,evidence};
+ const informationRequest=affirmativeMaterialAction(line,isBuyerOwnedDocumentSend);
+ if(informationRequest&&targetNegation(informationRequest,intentTargets.information).positive)return {kind:'information',status,evidence};
  return;
 }
 
@@ -152,6 +155,15 @@ export function deriveBuyerNeeds({turns=[],callContext,participant,seed,processe
  const earlier=participant?.afterTransfer&&segmentIndex>=0?turns.slice(0,segmentIndex):[];
  if(earlier.length){const history=blank();applyTurns(history,earlier,'transcript');result.earlierContactFacts=[...result.earlierContactFacts,...Object.values(history.facts)].filter((fact,index,list)=>list.findIndex(item=>item.key===fact.key&&item.turnId===fact.turnId)===index).slice(-8) as BuyerNeedFact[];}
  const current=participant?.afterTransfer&&segmentIndex>=0?turns.slice(segmentIndex):turns;
+ // Older same-call summaries may have promoted a document mention into
+ // information interest. Recheck that field against its attributed words;
+ // retain/recover actual earlier requests without changing unrelated needs.
+ const interestEvidence=result.interest.evidence;
+ if(sameSegment&&result.interest.kind==='information'&&interestEvidence?.source==='transcript'&&interestFor(interestEvidence.quote,interestEvidence)?.kind!=='information'){
+  const recovered=blank();
+  if(current.some(turn=>turn.id===interestEvidence.turnId))applyTurns(recovered,current,'transcript');
+  result.interest=recovered.interest;
+ }
  if(callContext?.knownFacts?.trim())applyTurns(result,[{id:'call-context',role:'buyer',text:callContext.knownFacts}],'context',callContext.doNotGuess);
  applyTurns(result,sameSegment?current.filter(turn=>!turn.id||!processedTurnIds.includes(turn.id)):current,'transcript');
  result.addressedTopics=unique(result.addressedTopics);result.askedTopics=unique(result.askedTopics);result.declinedTopics=unique(result.declinedTopics);
