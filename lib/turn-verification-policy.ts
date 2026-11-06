@@ -16,7 +16,7 @@ export type VerificationPolicyContext = {
   companyConfiguration?:import('./company-configuration').CallConfigurationBinding;clientContext?:ClientCoachingContext;clientId?:string;contactId?:string;callId?:string;
   buyerText?: string;
   turns?: { role: string; text: string }[];
-  sources?: { id: string; text: string; title?: string; complete?:boolean }[];
+  sources?: { id: string; text: string; title?: string; complete?:boolean; original?:boolean }[];
   brain?: { facts?: { text: string; sourceId: string; quote: string; confirmed: boolean }[]; rules?: { neverPromise?: string; neverInvent?: string; promiseThreshold?: string; escalateThreshold?: string } };
   manufacturer?: { id?:string;name?: string; products?: string };
   conversationState?: {
@@ -158,7 +158,9 @@ function evidenceFor(context: VerificationPolicyContext): Evidence[] {
   const confirmed=(context.brain?.facts||[]).filter(fact=>fact.confirmed&&sources.some(source=>source.id===fact.sourceId&&source.text.includes(fact.quote))).map(fact=>({id:fact.sourceId,text:`${fact.text}\n${fact.quote}`,original:false}));
   // Keep the existing non-specification paraphrase behavior, but extracted
   // Brain summaries are never original numeric specification evidence.
-  return [...sources.map(source => ({ id: source.id, text: source.text, title:source.title, complete:source.complete,original:true })),...confirmed];
+  // Preserve provenance: a derived row cannot authorize document release by
+  // becoming an original source during normalization.
+  return [...sources.map(source => ({ id: source.id, text: source.text, title:source.title, complete:source.complete,original:source.original!==false })),...confirmed];
 }
 
 function identitySupported(identity: string, context: VerificationPolicyContext, evidence: Evidence[]) {
@@ -340,6 +342,9 @@ function concreteSupplierAssertion(clause: string): boolean {
   const applicationQuestion=/\?\s*$|^\s*(?:what|how|which|whether|is|are|would|could|can)\b|\b(?:check|confirm|learn|understand|find out)\s+(?:whether|if)\b/i.test(clause);
   if((applicationClaim||supplierApplicationClaim(clause))&&!applicationQuestion)return true;
   const own = /\b(?:we|our|ours|I|it|which|that|this\s+(?:product|grade|material)|the\s+(?:product|grade|material)|F\s?\d+)\b/i.test(clause);
+  // A document can be the subject of an asserted guarantee too. Its existence
+  // never establishes that outcome; retain the ordinary predicate checks.
+  const documentSubject=/\b(?:reports?|documents?|certificates?)\b/i.test(clause);
   // Document availability is still a claim even when its subject has no 'we'.
   // Check it separately from a neighbouring rep-status/uncertainty clause.
   if(!clause.includes('?')&&/\b(?:specs?|specifications?|drawings?|documents?|profiles?|data sheets?|catalog(?:ue)?)\b.{0,100}\b(?:is|are)\s+available\b/i.test(clause))return true;
@@ -349,7 +354,7 @@ function concreteSupplierAssertion(clause: string): boolean {
   // A relative tail remains an asserted guarantee after clause splitting;
   // grounded numerical wording before it cannot authorize the new outcome.
   if(/^\s*(?:which|that)\s+(?:guarantees?|ensures?|proves?|certifies?)\b/i.test(clause))return true;
-  if (!own || /^\s*(?:and\s+)?(?:is|are|do|does|would|could|can|what|how|when)\b/i.test(clause) || /^\s*which\s+(?!(?:is|are|has|have)\b)/i.test(clause)) return false;
+  if ((!own&&!documentSubject) || /^\s*(?:and\s+)?(?:is|are|do|does|would|could|can|what|how|when)\b/i.test(clause) || /^\s*which\s+(?!(?:is|are|has|have)\b)/i.test(clause)) return false;
   if (/\b(?:free\s+samples?|guarantee(?:s|d)?|in\s+stock|(?:is|are|have)\s+available|certif(?:y|ies|ying|ied|ication|icates?)|ISO\s?\d+|best\s+(?:quality|performance|products?|materials?|grades?|prices?|supply|service)|superior|more\s+reliable|faster\s+delivery|better\s+(?:quality|performance)|(?:good|high|consistent|stable|premium)[-\s]+(?:quality|performance)|(?:is|are)\s+(?:consistent|reliable)|performs?\s+well|based\s+in|protected\s+payment|quality\s+(?:products|materials)|(?:meet|exceed)\w*\s+(?:\w+\s+){0,3}standards|competitive\s+pric(?:e|es|ing)|lowest\s+pric(?:e|es)|sample\s+policy)\b/i.test(clause)||/\b(?:our|we|it)\b.{0,50}\b(?:is|are|offer|offers)\s+(?:the\s+)?best\b/i.test(clause)) return true;
   if (CONDITIONAL_PROPOSAL.test(clause) && !/\b(?:guarantee|free|in\s+stock|certified)\b/i.test(clause)) return false;
   // Sending existing documents is a rep action, not factory capacity or a sample policy.

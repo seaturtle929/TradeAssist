@@ -452,8 +452,15 @@ function approvalNoun(text:string):DocumentApproval|undefined {
  return match?match[1]?/manager/i.test(match[1])?'manager':'engineering':'buyer':undefined;
 }
 function closedDelivery(text:string,context?:Context,boundReport?:string):ParsedDocumentDelivery|undefined {
- if(!new RegExp('^'+deliveryActor+deliveryAction+deliveryArtifact+deliveryTail+'[.!]?$','i').test(text))return;
- const explicit=documents(text).filter(document=>/report$/.test(document.kind));
+ const action=new RegExp('^'+deliveryActor+deliveryAction,'i').exec(text);if(!action)return;
+ const artifact=text.slice(action[0].length),explicit=documents(artifact);
+ // Use the canonical document spans for the noun, then validate every word
+ // around it. Recognizing a report type neither proves its availability nor
+ // establishes its coverage; those retain their independent evidence checks.
+ if(explicit.length){
+  const report=explicit[0];
+  if(explicit.length!==1||! /report$/.test(report.kind)||! /^(?:(?:that|the)\s+)?$/i.test(artifact.slice(0,report.start))||!new RegExp('^'+deliveryTail+'[.!]?$','i').test(artifact.slice(report.end)))return;
+ }else if(!new RegExp('^(?:it|the documents|the details)'+deliveryTail+'[.!]?$','i').test(artifact))return;
  const prior=currentCallReportInquiry(context),report=explicit.length===1?explicit[0].kind:explicit.length===0?boundReport||prior&&documents(prior).find(document=>/report$/.test(document.kind))?.kind:undefined;
  return report?{investigation:'',document:report,deliveryCondition:'sequence_only'}:undefined;
 }
@@ -482,9 +489,12 @@ function actualReportSendRequested(kind:string,context?:Context):boolean {
 function explicitReportInquiry(text:string,context?:Context):{document:string;reference:string}|undefined {
  const inquiry=text.trim().replace(/[.!;]$/,'').replace(/,?\s+first$/i,'');
  if(!isBoundedEpistemicFactAction(inquiry,context))return;
- const predicate=/\b(?:whether|if)\s+((?:(?:the|that|this|our|your)\s+)?(?:(?:material test|inspection|test)\s+)?report)\s+(?:covers?|matches?|includes?|appl(?:y|ies)\s+to)\s+(.+)$/i.exec(inquiry);
+ const predicate=/\b(?:whether|if)\s+/i.exec(inquiry);
  const referents=documents(inquiry);if(!predicate||referents.length!==1||! /report$/.test(referents[0].kind))return;
- const object=predicate[2].trim();
+ const report=referents[0],before=inquiry.slice(predicate.index+predicate[0].length,report.start);
+ if(report.start<predicate.index+predicate[0].length||! /^(?:(?:the|that|this|our|your)\s+)?$/i.test(before))return;
+ const relation=/^\s+(?:covers?|matches?|includes?|appl(?:y|ies)\s+to)\s+(.+)$/i.exec(inquiry.slice(report.end));if(!relation)return;
+ const object=relation[1].trim();
  if(![...buyerConversationIdentifierReferences(object,context?.turns||[]),...productIdentityReferences(object,context?.sources||[])].some(reference=>reference.start===0&&reference.end===object.length))return;
  return {document:referents[0].kind,reference:norm(canonicalizeKnownProductIdentifiers(object,context?.sources||[]))};
 }
