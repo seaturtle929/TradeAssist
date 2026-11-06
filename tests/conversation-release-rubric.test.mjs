@@ -45,12 +45,14 @@ test('Completing a check is different from a positive result and a new approval 
     'I’ll check whether the report covers UP29. If it does, I’ll reply with it.',
     'I’ll check whether the material test report covers UP29. I’ll send it only if that reference is covered.',
     'If UP29 is covered by the report, I’ll reply and send it.',
+    'I will check the inspection report against UP29 and email it if that reference is included in its scope.',
   ]) assert.equal(evaluateReply(line, conditional).pass, true, line);
   for(const line of [
     'Once I check whether the report covers UP29, I’ll send it.',
     'I’ll send the report for UP29 regardless of the result.',
     'If it covers UP29, we will dispatch a sample tomorrow.',
     'I’ll send it only if UP29 is not covered.',
+    'I will check the inspection report against UP29 and email it if that reference is not included in its scope.',
     'If the report covers UP29, I’ll send it. I’ll send the report anyway.',
     'If the report covers UP29, I’ll send it. I’ll forward it without waiting for the result.',
     'If the report covers UP29, I’ll send it, but I’ll forward it before that check.',
@@ -68,6 +70,16 @@ test('An investigation or condition cannot conceal a mixed present-coverage asse
     'I’ll check whether it covers UP29. It definitely does.',
     'I’ll check the scope for UP29. That reference is covered by our report.',
   ]) assert.equal(evaluateReply(line, rubric).pass, false, line);
+});
+
+test('The independent rubric identifies reciprocal report-scope assertions without rejecting their condition', () => {
+  const rubric={move:'investigate_coverage',reference:'UP29',preserveReference:true};
+  for(const say of [
+    'I will check the details. UP29 falls within the scope of our inspection report.',
+    'I will check the details. UP29 is within our inspection report’s scope.',
+  ]) assert.equal(evaluateReply(say,rubric).checks.find(row=>row.name==='does not assert current coverage').pass,false,say);
+  const conditional='If the report covers UP29, I will email it. Otherwise I will explain the gap.';
+  assert.equal(evaluateReply(conditional,{move:'conditional_send',reference:'UP29',preserveReference:true}).pass,true);
 });
 
 test('Wordiness alone is feedback, not a release-blocking harm', () => {

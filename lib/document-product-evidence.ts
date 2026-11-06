@@ -20,6 +20,7 @@ const uncertainty=/\b(?:unknown|unconfirmed|unverified|may|might|could|unless|ex
 const negative=/\b(?:not|no|never|doesn't|does not|isn't|is not|aren't|are not|excluding|except)\b/i;
 const productNounTail=/^(?:products?|models?|grades?|mesh|valves?|irrigation valves?|woven mesh|stainless steel mesh|woven stainless[- ]steel mesh)$/i;
 const parts=(text:string)=>text.split(/\n+|(?<=[.!?;])\s+/).filter(Boolean);
+const positiveReportConditionConnector='(?:if|provided(?:\\s+that)?|as long as|on condition that)';
 
 function documents(text:string){return [...text.matchAll(documentPattern)].map(match=>({text:match[0],start:match.index||0,end:(match.index||0)+match[0].length,kind:norm(match[0]).replace(/\breports\b/g,'report').replace(/\bsheets\b/g,'sheet').replace(/\bcertificates\b/g,'certificate').replace(/\bcertifications\b/g,'certification').replace(/\bspec sheet\b/g,'specification sheet')}));}
 /** Keep numbered document identifiers distinct from the products and measured
@@ -34,11 +35,36 @@ export function documentIdentifierSource(reference:ReturnType<typeof documentIde
 const inclusionPredicate=/^\s+(?:(?:definitely|certainly|explicitly|specifically|already|also)\s+)*(?:includes?|contains?)\b/i;
 const relationWords=(text:string)=>relationship.test(text.replace(documentPattern,' '))
  ||documents(text).some(document=>inclusionPredicate.test(text.slice(document.end)))
+ ||/\b(?:(?:its|(?:the|that|this) report['’]s)\s+scope|the scope of (?:the|that|this) report)\s+(?:includes?|contains?)\b/i.test(text)
+ ||!!closedReportScopePredicate(text)
  ||/^\s*(?:it|this|that)\b/i.test(text)&&inclusionPredicate.test(text.replace(/^\s*(?:it|this|that)\b/i,''));
+
+/** Reciprocal scope wording asserts the same relationship as “report covers
+ * item.” Keep one complete report predicate, not merely co-occurring nouns,
+ * so factual detection and conditional-action parsing use the same meaning. */
+function closedReportScopePredicate(text:string,implicitDocument?:string):{item:string;document:string}|undefined {
+ let line=text.trim().replace(/[’‘]/g,"'").replace(/[.!;]$/,'');
+ if(implicitDocument&&!documents(line).length)line=line.replace(/\bits scope\b/i,'the scope of the '+implicitDocument);
+ const reports=documents(line);
+ if(reports.length!==1||! /report$/.test(reports[0].kind))return;
+ const report=reports[0],before=line.slice(0,report.start),after=line.slice(report.end);
+ const item='(?:[A-Z]{1,6}[-\\u2010-\\u2015\\u2212\\uFE63\\uFF0D ]?\\d{1,6}[A-Z0-9-]*|(?:(?:the|your|that|this)\\s+)?(?:exact\\s+)?(?:(?:drawing|product|part|item|grade|mesh)(?:\\s+reference)?|reference))';
+ const reportScope=new RegExp("^'s\\s+scope\\s+(?:includes?|contains?|covers?)\\s+("+item+')$','i').exec(after);
+ if(reportScope&&/^\s*(?:(?:our|the|your|that|this)\s+)?$/i.test(before))return {item:reportScope[1],document:report.kind};
+ const scopeOf=new RegExp('^('+item+')\\s+(?:(?:(?:is|falls?)\\s+(?:within|inside)|is\\s+included\\s+in)\\s+(?:the\\s+)?scope\\s+of|is\\s+covered\\s+by)\\s+(?:(?:our|the|your|that|this)\\s+)?$','i').exec(before);
+ if(scopeOf&&!after.trim())return {item:scopeOf[1],document:report.kind};
+ const possessive=new RegExp('^('+item+')\\s+(?:is|falls?)\\s+(?:within|inside)\\s+(?:(?:our|the|your|that|this)\\s+)?$','i').exec(before);
+ if(possessive&&/^'s\s+scope$/i.test(after))return {item:possessive[1],document:report.kind};
+}
 function sameDocument(claim:string,source:string){return claim===source||claim==='test report'&&source==='material test report'||claim==='report'&&/report$/.test(source);}
 function scopes(text:string):Scope[]{
  const identifiers=documentIdentifierReferences(text);
  const result:Scope[]=[...new Set([...text.matchAll(productPattern)].filter(match=>!notProduct.test(match[0])&&!identifiers.some(id=>id.start<=(match.index||0)&&id.end>=(match.index||0)+match[0].length)).map(match=>norm(match[0])))].map(key=>({key,labels:[key]}));
+ // The reciprocal grammar also locates a complete separator/spaced buyer
+ // reference. Keep literal spaces distinct from compact source identities;
+ // only the existing source-known identifier normalizer can establish aliases.
+ const scopePredicate=closedReportScopePredicate(text);
+ if(scopePredicate&&/^[A-Z]{1,6}[-\u2010-\u2015\u2212\uFE63\uFF0D ]?\d{1,6}[A-Z0-9-]*$/i.test(scopePredicate.item)&&!notProduct.test(scopePredicate.item.replace(/[-\s\u2010-\u2015\u2212\uFE63\uFF0D]/g,''))&&!result.some(scope=>scope.key===norm(scopePredicate.item)))result.push({key:norm(scopePredicate.item),labels:[scopePredicate.item]});
  // Count/material are a product description, not evidence that a report
  // covers that product. The signature only resolves equivalent descriptions.
  const mesh=text.match(/\b(\d+(?:\.\d+)?)\s*mesh\b/i),steel=text.match(/\b(\d{3})\s*stainless(?:\s+steel)?\b/i);
@@ -68,7 +94,7 @@ function productPosition(text:string,scope:Scope){
  }
  // A model substring inside a report identifier (IR-PX20-2026) is not the
  // product occurrence in “report IR-PX20-2026 covers Example PX20”.
- const match=new RegExp('(?<![a-z0-9/-])'+escaped(scope.key)+'(?![a-z0-9/-])','i').exec(text);return match?{start:match.index,end:match.index+match[0].length}:undefined;
+ const match=[scope.key,...scope.labels].map(label=>new RegExp('(?<![a-z0-9/-])'+escaped(label)+'(?![a-z0-9/-])','i').exec(text)).find(Boolean);return match?{start:match.index,end:match.index+match[0].length}:undefined;
 }
 function linked(text:string,document:ReturnType<typeof documents>[number],scope:Scope){
  const product=productPosition(text,scope);if(!product)return false;
@@ -77,6 +103,8 @@ function linked(text:string,document:ReturnType<typeof documents>[number],scope:
   // "PX20 specification sheets and material test reports" is a catalog
   // list, not an assertion that the report covers PX20.
   return /^\s*(?:['’]s\s*)?(?:(?:product|material|quality|inspection)\s+)?$/i.test(between)
+   ||/^\s+(?:(?:(?:is|falls?)\s+(?:within|inside)|is\s+included\s+in)\s+(?:the\s+)?scope\s+of|is\s+covered\s+by)\s+(?:(?:our|the|your|that|this)\s+)?$/i.test(between)
+   ||/^\s+(?:is|falls?)\s+(?:within|inside)\s+(?:(?:our|the|your|that|this)\s+)?$/i.test(between)&&/^['’]s\s+scope(?=[.!;,]|$)/i.test(text.slice(document.end))
    ||/^\s+(?:has|comes with|is supported by)\s+(?:a|an|the|our)?\s*$/i.test(between);
  }
  if(document.end<=product.start){
@@ -89,6 +117,7 @@ function linked(text:string,document:ReturnType<typeof documents>[number],scope:
   return !/[;.!?]|\b(?:and|or)\b/i.test(between)&&(
    /^\s*(?:(?:we have|that we have|which we have)\s*)?(?:(?:is|are)\s*)?(?:(?:available|provided|issued|prepared)\s*)?(?:for|on|about|of|specific to|applicable to|related to|pertaining to|covering)\s+(?:(?:our|the|this|that|product|grade|exact)\s+)*$/i.test(between)
    ||/^\s*(?:(?:is|are)\s*)?(?:covers?|addresses?|describes?|documents?|records?|details?|tests?|evaluates?|assesses?)\s+(?:(?:the|our|this|that|exact|product|grade)\s+)*$/i.test(between)
+   ||/^['’]s\s+scope\s+(?:includes?|contains?|covers?)\s+$/i.test(between)
    ||/^\s+(?:includes?|contains?|provides?)\s+(?:test\s+)?(?:data|results|information|details|measurements|evidence)\s+(?:for|on|about|of)\s+(?:(?:our|the|this|that|product|grade|exact)\s+)*$/i.test(between));
  }
  return false;
@@ -221,7 +250,7 @@ export function hasConditionalReportReplyForSemanticReview(text:string,context?:
  const reports=documents(line).filter(document=>/report$/.test(document.kind));if(!reports.length||!reports.every(report=>availableDocumentActionEvidence(report.kind,context?.sources||[])))return false;
  if(affirmativeOutgoingDocumentActions(line).length!==1)return false;
  if(/\b(?:regardless|anyway|even if|does not|doesn't|not covered|not match|no match|certif\w*|guarantee\w*|discount\w*|price|MOQ|ship\w*|deliver\w*|stock|payment|free|soon|shortly|ASAP|quickly|promptly|immediately|tomorrow|today|within)\b|\bby\s+(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday|\d)/i.test(line))return false;
- const postposed=/\b(?:only\s+)?if\s+(?:it|that report|the report)\s+(?:does|covers?|matches?)\b/i.exec(line);
+ const postposed=new RegExp('\\b(?:only\\s+)?'+positiveReportConditionConnector+'\\s+(?:it|that report|the report)\\s+(?:does|covers?|matches?)\\b','i').exec(line);
  if(postposed){
   const before=line.slice(0,postposed.index),inquiry=/\b(?:whether|if)\b/i.exec(before);
   if(!inquiry||!requestsDocumentProductCoverage(before))return false;
@@ -229,7 +258,7 @@ export function hasConditionalReportReplyForSemanticReview(text:string,context?:
   if(assessDocumentProductCoverage(before.slice(0,inquiry.index),context||{},context?.sources||[])?.verificationBoundary||presupposesOwnedProduct(before.slice(0,inquiry.index))||presupposesOwnedProduct(before.slice(inquiry.index)))return false;
   return true;
  }
- const fronted=/^\s*(?:once|after|when|if)\s+([\s\S]+?),\s*(?:I|we)(?:'ll|\s+(?:will|can|would))\s+/i.exec(line);
+ const fronted=new RegExp('^\\s*(?:once|after|when|'+positiveReportConditionConnector+')\\s+([\\s\\S]+?),\\s*(?:I|we)(?:\x27ll|\\s+(?:will|can|would))\\s+','i').exec(line);
  if(!fronted||/\b(?:whether|if)\b/i.test(fronted[1])||!documents(fronted[1]).length||!relationWords(fronted[1]))return false;
  return !presupposesOwnedProduct(fronted[1])&&!/\b(?:which|that)\s+(?:is|are|has|have|can|will|meets?|guarantees?|proves?)\b/i.test(fronted[1]);
 }
@@ -305,7 +334,8 @@ export function isBoundedEpistemicFactAction(text:string,context?:Context):boole
  // A scope inquiry can contain arbitrary unknown content, but not an appended
  // claim hidden behind a causal, relative, parenthetical or coordinate clause.
  // Ambiguity stays on the normal verification path rather than being guessed.
- const temporalSubject=subject.replace(/\bwithin(?=\s+(?:(?:the|that|this|our|your)\s+)?(?:(?:material test|inspection|test)\s+)?report(?:'s)?\s+(?:scope|coverage)\b)/gi,'inside');
+ const temporalSubject=subject.replace(/\bwithin(?=\s+(?:(?:the|that|this|our|your)\s+)?(?:(?:material test|inspection|test)\s+)?report(?:'s)?\s+(?:scope|coverage)\b)/gi,'inside')
+  .replace(/\bwithin(?=\s+(?:the\s+)?scope\s+of\s+(?:(?:the|that|this|our|your)\s+)?(?:(?:material test|inspection|test)\s+)?report\b)/gi,'inside');
  if(timing.test(temporalSubject)||/[;:—–()[\]"“”]|[.!?]\s+\S|\b(?:but|however|because|since|although|though|therefore|thus|nevertheless|despite|yet|guarantee(?:s|d)?)\b|\bso\s+(?:you|we|it|this|that|the)\b/i.test(subject))return false;
  const next=subject.search(/\s+\b(?:and|plus|also)\b\s+/i);
  if(next>=0){
@@ -321,11 +351,14 @@ export function isBoundedEpistemicFactAction(text:string,context?:Context):boole
  // Only the closed communication/ordering suffix above may consume a comma.
  // Punctuation anywhere in the unresolved predicate remains conservative.
  if(/,/.test(subject))return false;
+ const reportComparison=/^(?:(?:the|that|this|our)\s+)?(?:(?:material test|inspection|test)\s+)?report\s+(?:against|with)\s+(.+)$/i.exec(subject);
+ if(investigation&&reportComparison&&buyerConversationIdentifierReferences(reportComparison[1],context?.turns||[]).some(reference=>reference.start===0&&reference.end===reportComparison[1].length))return true;
  if(presupposesOwnedProduct(subject))return false;
  // A relative modifier can assert a certification/result even while the
  // main report-coverage question remains uncertain. It needs its own proof.
  if(/\b(?:which|that)\s+(?:is|are|was|were|has|have|can|will|meets?|complies|passes?|guarantees?|certifies?|proves?)\b/i.test(subject))return false;
  if(/^(?:whether|if|which|what)\b\s+\S/i.test(subject)){
+  if(closedReportScopePredicate(subject.replace(/^(?:whether|if|which|what)\s+/i,'')))return true;
   // Uncertainty about a predicate does not erase a qualified noun inside it:
   // “what our PX20 report contains” already says that this report exists for
   // PX20, as does “the report we have for PX20”. Keep that premise checked.
@@ -370,7 +403,16 @@ export function investigationThenDocumentDelivery(text:string,context?:Context):
  const delivery=action+artifact+tail;
  // The object may be the buyer's actual code or a natural reference phrase.
  // Parse its complete predicate below rather than whitelisting object words.
- const positiveCondition='(?:only\\s+)?if\\s+(?:it|that report|the report)\\s+(?:does|matches?(?:\\s+[^,;.!?]+)?|covers?\\s+[^,;.!?]+)';
+ const positiveConnector=positiveReportConditionConnector;
+ const positiveCondition='(?:only\\s+)?'+positiveConnector+'\\s+(?:it|that report|the report)\\s+(?:does|matches?(?:\\s+[^,;.!?]+)?|(?:covers?|includes?|appl(?:y|ies)\\s+to)\\s+[^,;.!?]+)';
+ // A coordinated bounded comparison may make its outgoing action conditional
+ // on the same item's inclusion. Bind “its scope” only to that one report;
+ // the complete closed predicate must remain positive and result-conditional.
+ const scopedContinuation=new RegExp('^(.+?)(?:\\s*,?\\s+and\\s+|[.!]\\s+)(?:'+actor+')?'+delivery+'\\s+((?:only\\s+)?'+positiveConnector+'\\s+(.+?))[.!]?$','i').exec(line);
+ if(scopedContinuation&&isBoundedEpistemicFactAction(scopedContinuation[1],context)){
+  const report=documents(scopedContinuation[1]);
+  if(report.length===1&&/report$/.test(report[0].kind)&&closedReportScopePredicate(scopedContinuation[3],report[0].kind))return {investigation:scopedContinuation[1],document:report[0].kind,deliveryCondition:'stated_condition',conditionText:scopedContinuation[2]};
+ }
  // A direct conditional send asserts neither present coverage nor a check's
  // result. Resolve "it matches" only against the actual same-call inquiry;
  // never invent a report reference from a company's catalogue or memory.
@@ -378,18 +420,25 @@ export function investigationThenDocumentDelivery(text:string,context?:Context):
  if(direct){
   const explicit=documents(line).filter(document=>/report$/.test(document.kind)),prior=currentCallReportInquiry(context),document=explicit[0]||prior&&documents(prior).find(item=>/report$/.test(item.kind));
   if(document&&explicit.length<=1){
-   const predicate=direct[1].replace(/^(?:only\s+)?if\s+/i,'').replace(/^(?:it|that report|the report)\b/i,'the '+document.kind);
+   const predicate=direct[1].replace(new RegExp('^(?:only\\s+)?'+positiveConnector+'\\s+','i'),'').replace(/^(?:it|that report|the report)\b/i,'the '+document.kind);
    if(/\b(?:does|matches?)$/i.test(predicate)?!!prior:isBoundedEpistemicFactAction('I will check whether '+predicate,context))return {investigation:'',document:document.kind,deliveryCondition:'stated_condition',conditionText:direct[1]};
   }
  }
- const fronted=new RegExp('^(?:once|after|when|if)\\s+(.+?),\\s*'+actor+delivery+'[.!]?$','i').exec(line);
+ const fronted=new RegExp('^(?:once|after|when|'+positiveConnector+')\\s+(.+?),\\s*'+actor+delivery+'[.!]?$','i').exec(line);
  if(fronted){
   let condition=fronted[1].trim();
   condition=condition.replace(/^(?:I|we)(?:'ve| have)?\s+(?:reviewed|seen|checked)\s+(?:that|the|your)\s+drawing\s+and\s+/i,'');
   const inquiry=/^(?:(?:I|we)(?:'ve| have)?\s+)?(?:check(?:ed)?|verif(?:y|ied)|confirm(?:ed)?)\s+(?:(whether|if|that)\s+)?(.+)$/i.exec(condition);
-  const predicate=inquiry?inquiry[2]:condition;
+  let predicate=inquiry?inquiry[2]:condition;
+  // A singular “it” can carry the one report in this same-call inquiry.
+  // Resolve only its complete positive predicate; availability, added factual
+  // clauses and the buyer's release restrictions are still checked normally.
+  if(/^it\s+/i.test(predicate)&&!documents(predicate).length){
+   const prior=currentCallReportInquiry(context),reports=prior&&documents(prior).filter(document=>/report$/.test(document.kind));
+   if(reports&&reports.length===1)predicate=predicate.replace(/^it\b/i,'the '+reports[0].kind);
+  }
   const referents=documents(predicate);
-  const positive=/^(?:(?:the|that|this|our|your)\s+)?(?:(?:material test|inspection|test)\s+)?report\s+(?:covers?|matches?|includes?|appl(?:y|ies)\s+to)\s+[^,;.!?]+$/i.test(predicate)
+  const positive=!!closedReportScopePredicate(predicate)||/^(?:(?:the|that|this|our|your)\s+)?(?:(?:material test|inspection|test)\s+)?report\s+(?:covers?|matches?|includes?|appl(?:y|ies)\s+to)\s+[^,;.!?]+$/i.test(predicate)
    ||/^(?:(?:the|that|this)\s+)?(?:(?:material test|inspection|test)\s+)?report\s+coverage\s+(?:for|of)\s+[^,;.!?]+$/i.test(predicate);
   const inquiryPredicate=predicate.replace(/^((?:(?:the|that|this)\s+)?(?:(?:material test|inspection|test)\s+)?report)\s+coverage\s+(?:for|of)\s+/i,'$1 covers ');
   if(positive&&referents.length===1&&!/\b(?:and|but|however|not|never|no|certif\w*|guarantee\w*|discount|approval|price|ship\w*|deliver\w*)\b/i.test(predicate)&&isBoundedEpistemicFactAction('I will check whether '+inquiryPredicate,context))return {investigation:'I will check whether '+inquiryPredicate,document:referents[0].kind,deliveryCondition:inquiry&&/^(?:if|whether)$/i.test(inquiry[1]||'')?'check_completion':'stated_condition',conditionText:fronted[1]};
@@ -409,8 +458,8 @@ export function investigationThenDocumentDelivery(text:string,context?:Context):
  if(referents.length!==1||! /report$/.test(referents[0].kind))return;
  // Bare “matches” can only refer back to this explicit report-scope inquiry,
  // not an unresolved price/approval/availability predicate or earlier call.
- if(continuation[1]&&/^(?:only\s+)?if\b/i.test(continuation[1])){
-  const predicate=continuation[1].replace(/^(?:only\s+)?if\s+/i,'').replace(/^(?:it|that report|the report)\b/i,'the '+referents[0].kind);
+ if(continuation[1]&&new RegExp('^(?:only\\s+)?'+positiveConnector+'\\b','i').test(continuation[1])){
+  const predicate=continuation[1].replace(new RegExp('^(?:only\\s+)?'+positiveConnector+'\\s+','i'),'').replace(/^(?:it|that report|the report)\b/i,'the '+referents[0].kind);
   if(/\b(?:does|matches?)$/i.test(predicate)){
    if(!requestsDocumentProductCoverage(investigation)&&!inferredFromConfirmedReference)return;
   }else if(!isBoundedEpistemicFactAction('I will check whether '+predicate,context))return;
@@ -480,8 +529,10 @@ function competingScopeEvidence(kind:string,product:string,identifier:string|und
 export function assessDocumentProductCoverage(clause:string,context:Context,sources:DocumentProductSource[]):{supported:false;pending?:true;candidateSourceIds?:string[];reason:string;verificationBoundary?:'document_product_scope'}|undefined {
  sources=sources.map(source=>({...source,text:canonicalizeKnownProductIdentifiers(source.text,sources)}));
  context={...context,buyerText:canonicalizeKnownProductIdentifiers(latestBuyer(context),sources)};
- const buyer=latestBuyer(context),asked=requestsDocumentProductCoverage(buyer);
- const line=canonicalizeKnownProductIdentifiers(clause,sources).trim().replace(/[’‘]/g,"'");
+ const buyer=latestBuyer(context),asked=requestsDocumentProductCoverage(buyer),priorInquiry=currentCallReportInquiry(context);
+ let line=canonicalizeKnownProductIdentifiers(clause,sources).trim().replace(/[’‘]/g,"'");
+ const priorReport=priorInquiry&&documents(priorInquiry).filter(document=>/report$/.test(document.kind)),implicitScope=!documents(line).length&&closedReportScopePredicate(line,priorReport&&priorReport.length===1?priorReport[0].kind:'report');
+ if(implicitScope)line=line.replace(/\bits scope\b/i,'the scope of the '+implicitScope.document);
  // Explicit uncertainty is a commitment to investigate, never a positive or
  // negative assertion about report scope. Appended assertions are assessed in
  // their own clause by the normal verification policy.
@@ -492,7 +543,7 @@ export function assessDocumentProductCoverage(clause:string,context:Context,sour
  // “I'll confirm it covers ...” asserts a positive answer, unlike the
  // bounded “confirm whether ...” action handled above. The current question
  // supplies its document referent, never the missing coverage relationship.
- const documentPronoun=asked&&!ownDocuments.length&&/^\s*(?:(?:I|we)(?:'ll|\s+(?:will|can|would))\s+(?:confirm|verify)\s+(?:that\s+)?)?(?:it|this|that)\b/i.test(line)&&(relationWords(line)||/^\s*(?:it|this|that)\s+(?:documents?|records?|details?|describes?|reports?)\b/i.test(line));
+ const documentPronoun=(asked||!!priorInquiry)&&!ownDocuments.length&&/^\s*(?:(?:I|we)(?:'ll|\s+(?:will|can|would))\s+(?:confirm|verify)\s+(?:that\s+)?)?(?:it|this|that)\b/i.test(line)&&(relationWords(line)||/^\s*(?:it|this|that)\s+(?:documents?|records?|details?|describes?|reports?)\b/i.test(line));
  const explicitRelation=!!ownDocuments.length&&(relationWords(line)||/\b(?:report|sheet|certificate)\b.{0,65}\b(?:for|of)\s+(?:(?:our|your|that|this|the|exact)\s+)*(?:product|grade|mesh|material)\b/i.test(line));
  const qualified=ownDocuments.some(document=>scopes(line).some(scope=>linked(line,document,scope)));
  // Follow a document subject with a product-specific predicate even when its
@@ -503,9 +554,9 @@ export function assessDocumentProductCoverage(clause:string,context:Context,sour
  const documentSubject=!!scopes(line).length&&!!subjectDocument;
  const leadingScope=!!ownDocuments.length&&/^\s*for\s+[^,;.!?]+,\s*/i.test(line)&&scopes(line.slice(0,line.indexOf(','))).length>0;
  if(!assent&&!documentPronoun&&!explicitRelation&&!qualified&&!documentSubject&&!leadingScope)return;
- const claimedDocuments=ownDocuments.length?ownDocuments:assent||documentPronoun?buyerDocuments:[];
+ const claimedDocuments=ownDocuments.length?ownDocuments:assent||documentPronoun?buyerDocuments.length?buyerDocuments:priorInquiry?documents(priorInquiry):[]:[];
  const explicitScopes=scopes(line),buyerScopes=scopes(buyer);
- const claimedScopes=explicitScopes.length?explicitScopes:asked||/\b(?:that|this|the exact|your)\s+(?:product|grade|mesh|material)\b/i.test(line)?buyerScopes:[];
+ const claimedScopes=explicitScopes.length?explicitScopes:implicitScope&&priorInquiry?scopes(priorInquiry):asked||/\b(?:that|this|the exact|your)\s+(?:product|grade|mesh|material)\b/i.test(line)?buyerScopes:[];
  if(!claimedDocuments.length)return;
  // "for your engineer/review" is a recipient/action, not product coverage.
  if(!claimedScopes.length&&!assent&&!relationWords(line))return;
@@ -543,6 +594,11 @@ export function literalDocumentScopeEvidence(clause:string,context:Context,sourc
  const originals=sources.filter(source=>source.original!==false&&source.complete!==false&&!stale.test((source.title||'')+' '+source.text));
  const normalized=canonicalizeKnownProductIdentifiers(clause,originals).trim().replace(/[’‘]/g,"'").replace(/[.!;]$/,'');
  const line=normalized.replace(/^(?:yes|correct)[,\s]+/i,'');
+ const inverse=closedReportScopePredicate(line);
+ // Canonicalize only this closed equivalent candidate. Original source text
+ // remains untouched, and the ordinary exact document/product proof below
+ // still supplies the source ID and quote or leaves semantic checking pending.
+ if(inverse)return literalDocumentScopeEvidence(`The ${inverse.document} covers ${inverse.item}.`,context,sources);
  const doc=documents(line);if(doc.length!==1)return;
  const document=doc[0],before=line.slice(0,document.start),after=line.slice(document.end);
  if(/\b(?:reports|sheets|certificates|certifications)\b/i.test(document.text))return;

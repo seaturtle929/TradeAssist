@@ -31,7 +31,7 @@ function conditionalSend(line) {
       const prefix = unit.slice(0, match.index);
       if(/\b(?:check|verify|confirm|determine|find out|look into)\s*$/i.test(prefix)) continue;
       const tail = unit.slice(match.index + match[0].length).split(/[,;]/)[0];
-      const predicate = /\b(?:covers?|matches?|applies|covered|within (?:its |the )?scope|positive (?:scope |coverage )?match|confirmed coverage)\b/i.exec(tail);
+      const predicate = /\b(?:covers?|matches?|applies|covered|included in (?:its|(?:the|our|that|this) (?:inspection |material test |test )?report's) scope|within (?:its |the )?scope|positive (?:scope |coverage )?match|confirmed coverage)\b/i.exec(tail);
       if(!predicate) continue;
       const beforePredicate = tail.slice(0, predicate.index);
       if(/\b(?:not|never|doesn't|isn't|wasn't|fails?|failed|without)\b/i.test(beforePredicate)) continue;
@@ -47,10 +47,13 @@ function presentCoverageClaim(line) {
   const clauses = line.split(/(?<=[.!?;])\s+|,?\s+\b(?:but|however|nevertheless|yet|and|because|since)\b\s*/i);
   return clauses.some(clause => {
     if(/^\s*(?:only if|if|provided(?: that)?|as long as|once|after|when)\b/i.test(clause)) return false;
+    if(/^\s*(?:then\s+)?(?:send|email|forward|share|reply|respond|provide|return)\b[^.!?]*\b(?:only if|if|provided(?: that)?|as long as)\b/i.test(clause)) return false;
     if(/\b(?:I|we)(?:'ll| will| can| would)?\s+(?:send|email|forward|share|reply|respond|provide|return)\b/i.test(clause) && /\b(?:only if|if|provided(?: that)?|as long as)\b/i.test(clause)) return false;
     if(/\b(?:I|we)(?:'ll| will| can| would| need to)?\s+(?:check|verify|confirm|find out|determine|look into|review|compare|investigate|establish)\b[^.!?]{0,50}\b(?:whether|if)\b/i.test(clause)) return false;
+    if(/^\s*let (?:me|us)\s+(?:find out|check|verify|confirm|determine|look into)\s+(?:whether|if)\b/i.test(clause)) return false;
     return /\b(?:(?:the|our|that|this) (?:material |inspection |test )*(?:report|document)|it)\b[^.!?]{0,45}\b(?:covers?|includes?|contains?|applies|certifies|proves)\b/i.test(clause)
       || /\b(?:[A-Z]{1,6}[- ]?\d+|(?:that |the |your )?(?:reference|product|model|code)|it)\s+(?:is|are|has been|was)\s+(?:fully )?(?:covered|included|certified)\b/i.test(clause)
+      || /\b(?:[A-Z]{1,6}[- ]?\d+|(?:that |the |your )?(?:reference|product|model|code)|it)\s+(?:is|falls?)\s+within\s+(?:(?:the )?scope of (?:the |our |that |this )?(?:inspection |material test |test )?report|(?:the |our |that |this )?(?:inspection |material test |test )?report's scope)\b/i.test(clause)
       || /\bit\s+(?:definitely |certainly |already )?does\b/i.test(clause);
   });
 }
