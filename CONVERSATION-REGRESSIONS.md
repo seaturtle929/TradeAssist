@@ -236,3 +236,17 @@ The reviewed recap remains the salesperson's current account. Tests must cover
 corrections and removal of an extracted obligation, so original transcript text
 cannot silently restore something the reviewer changed. Save/reopen tests use
 disposable fictional records and must not modify user history.
+
+## Request-local assessment reuse
+
+The live controller may reuse an assessment only for the exact spoken candidate
+and the same immutable pinned context within one work item. A changed transcript
+or evidence context retires reuse, as does a repair. Full move checks still run;
+no source, authority or delivery-condition requirement is skipped. Phase telemetry
+records assessment runs, reuse hits and local assessment time separately.
+
+Offline CPU profiles can establish less repeated local work. They cannot replace
+last-word-to-stable-browser-paint measurements. A live comparison should use a
+state-corrected control and the same state plus the reuse experiment, with equal
+inputs, audio, scheduled press timing and models; comparing against an older
+build with different state or prompt input would confound the result.
