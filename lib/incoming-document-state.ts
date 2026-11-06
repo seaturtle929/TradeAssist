@@ -1,28 +1,16 @@
+import {deriveDocumentState} from './document-state.ts';
 type Turn={id?:string;role:string;text:string;transcriptionUncertainty?:unknown};
 type Context={turns?:Turn[]};
 export type IncomingDrawingState={state:'unconfirmed'|'promised'|'buyer_reports_sent'|'received';sourceTurnIds:string[];evidence:string[]};
-const drawing=/\b(?:drawings?|blueprints?|diagrams?)\b/i;
 const normalize=(text:string)=>text.replace(/[’‘]/g,"'");
 /** Track actions actually spoken, not suggested wording. A buyer's past send
  * report and the rep's receipt are distinct. A future/subordinate prerequisite
  * (“once we receive it”) cannot become completed receipt. */
 export function incomingDrawingState(context:Context):IncomingDrawingState{
- let result:IncomingDrawingState={state:'unconfirmed',sourceTurnIds:[],evidence:[]};
- for(const turn of context.turns||[]){
-  if(turn.transcriptionUncertainty||!['buyer','customer','you'].includes(turn.role))continue;
-  for(const sentence of normalize(turn.text).split(/(?<=[.!?;])\s+/)){
-   if(!drawing.test(sentence))continue;
-   const prefix='(?:I|we)';
-   const object='[^.!?;]{0,55}\\b(?:drawings?|blueprints?|diagrams?)\\b';
-   const future=!sentence.includes('?')&&new RegExp('\\b'+prefix+'(?:\\x27ll|\\s+(?:will|can|could|would|plan to|intend to))\\s+(?:send|email|forward|share)\\b'+object,'i').test(sentence);
-   const sent=!sentence.includes('?')&&new RegExp('^\\s*(?:(?:yes|okay|ok|sure)[,.!]\\s*)?'+prefix+'(?:\\x27ve| have)?\\s+(?:already\\s+)?(?:sent|emailed|forwarded|shared)\\b'+object,'i').test(sentence);
-   const received=!sentence.includes('?')&&/^\s*(?:(?:yes|okay|ok|great)[,.!]\s*)?(?:I|we)(?:'ve| have)?\s+(?:already\s+)?(?:received|got)\s+(?:your|the|that|this)\s+(?:drawing|blueprint|diagram)\b/i.test(sentence);
-   const denied=/\b(?:I|we)\s+(?:haven't|have not|didn't|did not)\s+(?:received?|got)\b/i.test(sentence);
-   const state=turn.role==='you'?(denied?'unconfirmed':received?'received':undefined):sent?'buyer_reports_sent':future?'promised':undefined;
-   if(state)result={state,sourceTurnIds:turn.id?[turn.id]:[],evidence:[sentence.trim()]};
-  }
- }
- return result;
+ const record=deriveDocumentState(context).transfers.find(row=>row.document==='drawings'&&row.sender==='buyer');
+ if(!record)return {state:'unconfirmed',sourceTurnIds:[],evidence:[]};
+ const state:IncomingDrawingState['state']=record.events.at(-1)?.kind==='restricted'?'unconfirmed':record.receiptStatus==='confirmed'?'received':record.sendStatus==='reported_sent'?'buyer_reports_sent':['promised','offered'].includes(record.phase)?'promised':'unconfirmed';
+ const last=record.events.at(-1);return {state,sourceTurnIds:last?[last.turnId]:[],evidence:last?[last.quote]:[]};
 }
 export function incomingDocumentWordingEffects(say:string,context:Context):{problems:string[];qualityFeedback:string[]}{
  const incoming=incomingDrawingState(context),problems:string[]=[],qualityFeedback:string[]=[];

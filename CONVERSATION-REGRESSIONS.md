@@ -222,3 +222,17 @@ model differences and incomplete settlement still gate comparison independently.
 The suite audits both local assessment and final conversation checks. A local
 pass alone is not publication. A remote check alone cannot override a buyer's
 condition or an active commercial boundary.
+
+## Document handoff state
+
+Exercise document actions in both directions through live requests and reviewed
+call saving/reopening. An offered or promised document remains pending; a
+sender's report of sending is distinct from the recipient confirming receipt.
+A promised coverage check leaves coverage unknown. Document availability does
+not prove that a particular report covers a particular product or buyer reference.
+Keep positive-match conditions attached to the report send.
+
+The reviewed recap remains the salesperson's current account. Tests must cover
+corrections and removal of an extracted obligation, so original transcript text
+cannot silently restore something the reviewer changed. Save/reopen tests use
+disposable fictional records and must not modify user history.
