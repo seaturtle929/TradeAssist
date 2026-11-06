@@ -7,7 +7,7 @@ import {buyerConversationIdentifierReferences,buyerProductIdentifierReferences,b
 import {availableDocumentActionEvidence} from './document-availability-evidence.ts';
 import {hasAffirmativeOutgoingDocumentAction} from './document-action-syntax.ts';
 export {hasAffirmativeOutgoingDocumentAction} from './document-action-syntax.ts';
-import {assessDocumentProductCoverage,documentIdentifierReferences,documentIdentifierSource,hasConditionalReportReplyForSemanticReview,hasFutureReportInquiry,investigationThenDocumentDelivery,isBoundedEpistemicFactAction,isConversationalAcknowledgment,literalDocumentScopeEvidence,literalDocumentStatementEvidence,requestsDocumentProductCoverage} from './document-product-evidence.ts';
+import {analyzeDocumentActionMeaning,assessDocumentProductCoverage,documentIdentifierReferences,documentIdentifierSource,hasConditionalReportReplyForSemanticReview,hasFutureReportInquiry,investigationThenDocumentDelivery,isConversationalAcknowledgment,literalDocumentScopeEvidence,literalDocumentStatementEvidence,requestsDocumentProductCoverage} from './document-product-evidence.ts';
 export type BuyerTurnKind = 'fact_request' | 'sales_move' | 'confirmation';
 export type VerificationPolicyContext = {
   coachingRequest?:{id:string;requestedAt:number};
@@ -194,7 +194,7 @@ function replyClauses(text: string,context?:VerificationPolicyContext): { text: 
     // Cutting “if it does, I will send it” at the second comma would invent an
     // unfinished coverage assertion; the combined action still gets source
     // availability and company-authority checks below.
-    if(investigationThenDocumentDelivery(sentence.text,context)||isBoundedEpistemicFactAction(sentence.text,context)||hasConditionalReportReplyForSemanticReview(sentence.text,context)||communicatesUnconfirmedResult(sentence.text)||isBuyerIdentifierClarification(sentence.text,latestBuyerText(context||{})))return [sentence];
+    if(analyzeDocumentActionMeaning(sentence.text,context).locallyNonAssertive||hasConditionalReportReplyForSemanticReview(sentence.text,context)||communicatesUnconfirmedResult(sentence.text)||isBuyerIdentifierClarification(sentence.text,latestBuyerText(context||{})))return [sentence];
     const separator = /,\s*(?=but\b)|,\s*(?=(?:and\s+)?(?:can|could|would|may|what|which|how|I|we|our|it|you)\b)|\s+(?=and\s+(?:can|could|would|what|which|how|I|we|our|it|you)\b)/gi;
     const parts: { text: string; start: number; end: number }[] = [];
     let offset = 0;
@@ -215,8 +215,9 @@ function replySentences(text:string,context?:VerificationPolicyContext):{text:st
  const original=sentences(text),grouped:{text:string;start:number;end:number}[]=[];
  for(const sentence of original){
   const previous=grouped.at(-1),together=previous?text.slice(previous.start,sentence.end):'';
-  const semanticContinuation=previous&&(isBoundedEpistemicFactAction(previous.text,context)||hasFutureReportInquiry(previous.text,context))&&hasConditionalReportReplyForSemanticReview(together,context);
-  if(previous&&(investigationThenDocumentDelivery(together,context)||isBoundedEpistemicFactAction(together,context)||semanticContinuation)){
+  const previousMeaning=previous&&analyzeDocumentActionMeaning(previous.text,context);
+  const semanticContinuation=previous&&((previousMeaning?.locallyNonAssertive&&!previousMeaning.delivery)||hasFutureReportInquiry(previous.text,context))&&hasConditionalReportReplyForSemanticReview(together,context);
+  if(previous&&(analyzeDocumentActionMeaning(together,context).locallyNonAssertive||semanticContinuation)){
    grouped[grouped.length-1]={text:together,start:previous.start,end:sentence.end};
   }else grouped.push(sentence);
  }
@@ -271,7 +272,8 @@ function supplierApplicationClaim(clause:string):boolean {
 /** A promise to find out whether a fact is true does not assert that it is.
  * Keep the uncertainty marker mandatory and reject an attached positive claim. */
 function unresolvedFactCheck(clause:string,context?:VerificationPolicyContext):boolean {
- return isBoundedEpistemicFactAction(clause,context);
+ const meaning=analyzeDocumentActionMeaning(clause,context);
+ return meaning.locallyNonAssertive&&!meaning.outgoing.length;
 }
 /** Closed conversational acts can accompany a fact question without asserting
  * its answer. Inspect every clause; a polite prefix never exempts its tail. */
@@ -551,7 +553,7 @@ function preservesBuyerApproval(say:string,approver:BuyerReleaseState['approver'
  * Document follow-through separately respects buyer and release conditions. */
 function technicalSupportAssertion(clause:string,context:VerificationPolicyContext,evidence:Evidence[]):Pick<ReplyFactClaim,'supported'|'pending'|'candidateSourceIds'|'reason'|'sourceId'|'verificationBoundary'>|undefined {
  if(unresolvedFactCheck(clause,context))return;
- const delivery=investigationThenDocumentDelivery(clause,context);
+ const delivery=analyzeDocumentActionMeaning(clause,context).delivery;
  if(delivery){
   const buyer=latestBuyerText(context).replace(/[’‘]/g,"'");
   const release=buyerReleaseState(context),buyerCondition=release.scope?'scope_required':release.unresolved?'unresolved':undefined;
@@ -798,12 +800,13 @@ export function assessReplyVerification(say: string, context: VerificationPolicy
    // coordinated new rep promise separately (not a whole-reply checkbox).
    // The existing bounded sentence grouper preserves only an adjacent
    // explicit inquiry + "if it does" referent, never a later unrelated send.
-   const actions=investigationThenDocumentDelivery(sentence.text,context)?[sentence.text]:sentence.text.split(/\b(?:and|but|however)\s+(?=(?:I|we)(?:['’]ll|\s+(?:will|can|would))\b)/i);
+   const actions=analyzeDocumentActionMeaning(sentence.text,context).delivery?[sentence.text]:sentence.text.split(/\b(?:and|but|however)\s+(?=(?:I|we)(?:['’]ll|\s+(?:will|can|would))\b)/i);
    for(const action of actions)if(!isAwaitingBuyerDocumentReceipt(action)&&hasAffirmativeOutgoingDocumentAction(action)){
     const start=sentence.start+sentence.text.indexOf(action);
     if(release.hold)add(action,start,'supplier_claim',{supported:false,reason:'The buyer cancelled or withheld this send and has not released it again. A company document being available does not override that instruction.'});
     if(buyerApproval&&!preservesBuyerApproval(action,release.approver))add(action,start,'supplier_claim',{supported:false,reason:'The buyer withheld permission to send until they approve. Preserve the buyer’s stated approver before every promised document send; confirming report coverage or mentioning approval for a different action does not release the documents.'});
-    if(buyerScope&&investigationThenDocumentDelivery(action.trim(),context)?.deliveryCondition!=='stated_condition')add(action,start,'supplier_claim',{supported:false,reason:'The buyer made delivery conditional on a positive report match. Preserve that condition for every promised send; completing a check or conditioning a different action does not authorize this delivery.'});
+    const meaning=analyzeDocumentActionMeaning(action.trim(),context);
+    if(buyerScope&&meaning.outgoing.some(send=>send.condition!=='coverage_positive'))add(action,start,'supplier_claim',{supported:false,reason:'The buyer made delivery conditional on a positive report match. Preserve that condition for every promised send; completing a check or conditioning a different action does not authorize this delivery.'});
    }
   }
   if (companyName) {
@@ -835,7 +838,7 @@ export function assessReplyVerification(say: string, context: VerificationPolicy
   // splitting its comma into separate clauses and losing the product scope.
   for(const sentence of replySentences(say,context)){
     const coverage=assessDocumentProductCoverage(sentence.text,context,evidence);
-    if(coverage?.verificationBoundary)add(sentence.text,sentence.start,'supplier_claim',coverage);
+    if(coverage?.verificationBoundary||coverage?.wholeStatement)add(sentence.text,sentence.start,'supplier_claim',coverage);
   }
   for (const part of replyClauses(say,context)) {
     const text = part.text;

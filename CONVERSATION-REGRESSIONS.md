@@ -153,6 +153,55 @@ live model/audio/browser speed. Private recorded-audio adapters may use the same
 contract, but only an independent full browser paint can finish a live latency
 measurement. Missing or mismatched evidence produces no paired speed delta.
 
+### Meaningful input versus audit clocks
+
+New `scheduledContract` records declare versioned comparison policies before a
+run. `projectComparisonInput(snapshot, { currentBuyerItemIds })` returns a stable
+`projection` for the caller's SHA-256 and a separate list of every excluded
+audit-clock field. Attach the **actual captured generation/request snapshot** as
+`run.inputEvidence = { snapshot, currentBuyerItemIds,
+provenance: 'observed_request_snapshot' }`; scripted transport uses
+`'scripted_request_snapshot'`. Expected answers, rubrics and a later recap are
+not evidence of what a request received. Without both snapshots, differing old
+hashes remain unmatched instead of being assumed to differ only in metadata.
+
+Only explicit schema paths are excluded: current configuration-binding and
+request/listening clocks, Brain record/buyer-memory update clocks, current client
+preparation review clocks, client-entry recording clocks, and transcript
+observation clocks belonging to the current listening session. Earlier-session
+transcript dates remain input. A generated `preparation-background:` or
+`preparation-update:` entry's `at` is audit-only **only** when its source/type and
+timestamps establish that it came from this current review click. A dated buyer
+fact, earlier call, agreement deadline, source/version activation/update date,
+sending/receipt/approval status, source ID/text/order and every unrecognized field
+remain input. This is not a generic removal of fields ending in `At`.
+Zero/unset review or configuration-binding timestamps remain state evidence;
+normalization cannot turn an unreviewed/unbound request into an approved one.
+
+Run-local request/turn pointers map to their logical transcript positions;
+company, client, contact and document-source identities remain literal. Moving a
+pointer to a different turn still changes meaning. Raw snapshots, clocks and all
+generation/check/cancellation/repair attempts remain in the report; metadata
+equivalence does not delete their evidence or their costs.
+
+The speech policy is deliberately narrow: whitespace/apostrophe typography and
+a final acknowledgment boundary such as `..., okay?` versus `.... OK?` are
+diagnostic formatting when the preceding words are unchanged. It does not
+normalize interior punctuation, changed words, references, numbers, conditions,
+negation or the ASR item sequence. Standalone `Okay.` and `Okay?` are not assumed
+to mean the same thing. Only current transcript text and evidence quoting those
+known turns receive this rule; company-document text stays exact. The within-run
+check still requires the published snapshot to use the actual complete final
+transcript; this cross-run formatting rule cannot excuse losing late speech.
+
+Unknown policy versions fail closed. Archived version-1 contracts retain their
+original criteria. A read-only review may explicitly pass
+`{ historicalDiagnosticOnly: true }` to classify retained differences under the
+new rules, but that review always returns no live timing delta and cannot become
+a retroactive speedup claim. A future paid comparison must declare the policy
+versions prospectively. Correctness, unavailable replies, timing/visibility,
+model differences and incomplete settlement still gate comparison independently.
+
 ## Blocking-rule audit
 
 | Gate in the active live path | Concrete harm it prevents | Safe paired behavior |

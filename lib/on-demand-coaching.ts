@@ -7,11 +7,11 @@ import {emailEvidenceFor} from './buyer-facts.ts';
 import {coachingConversationAtRequest,coachingTranscriptState} from './coaching-context-snapshot.ts';
 import {representativeIdentityFor,representativeIdentityRules,representativeIdentityProblems} from './representative-identity.ts';
 import {configurationReferences} from './company-configuration.ts';
-import {documentCoverageQuestionEvidence,hasFutureReportInquiry,investigationThenDocumentDelivery,requestsDocumentProductCoverage} from './document-product-evidence.ts';
+import {analyzeDocumentActionMeaning,documentCoverageQuestionEvidence,hasFutureReportInquiry,investigationThenDocumentDelivery,requestsDocumentProductCoverage} from './document-product-evidence.ts';
 import {buyerIdentifierConfirmation,buyerIdentifierConfirmationProblems} from './buyer-identifier-confirmation.ts';
 import {buyerReleaseState,isAwaitingBuyerDocumentReceipt,reportDeliveryCondition} from './turn-verification-policy.ts';
 import {availableDocumentActionEvidence} from './document-availability-evidence.ts';
-import {hasAffirmativeOutgoingDocumentAction} from './document-action-syntax.ts';
+import {incomingDrawingState} from './incoming-document-state.ts';
 
 /** The button/shortcut is the generation event. Speech is context, never a
  * request; partial speech stays separate so it cannot become an agreement. */
@@ -221,6 +221,8 @@ export function onDemandDecisionRules(context:CoachingContext):string {
  const session=context.coachingRequest?.listeningSession;
  if(session&&!turns.some(turn=>turn.role==='buyer'&&session.currentTurnIds.includes(turn.id||''))&&!['partial','pending'].includes(coachingTranscriptState(context)))return '\nCURRENT ACTION CONSTRAINTS:\n'+[...rules,'LISTENING SESSION BOUNDARY: No new buyer words have been captured in this listening session. Earlier transcript is retained background, not a current buyer request or current-speaker identification. Do not answer its last quote again or imply the buyer just repeated an old request. On a company main line use the polite transfer request above. Otherwise use only a brief neutral opening or invitation to speak. Do not greet a historical contact, thank them for an old answer, discuss their earlier drawing/document request, or propose the old handoff again. Resume that relationship after the current person is identified.'].join('\n');
  const deferralRule=buyerDeferralDecisionRules(turns);if(deferralRule)rules.push(deferralRule);
+ const incoming=incomingDrawingState({turns});
+ if(incoming.state!=='unconfirmed')rules.push('INCOMING DRAWING STATUS: '+JSON.stringify(incoming)+'. Keep the action’s actual tense. If the buyer only offers/promises to send it, acknowledge the future help (for example, “Thanks, that would help”) and explain the useful next step once it arrives. Do not thank them as though the send already happened or claim the drawing was received/reviewed. A buyer’s report that they sent it permits thanking them for sending, but is still distinct from confirmed receipt by the rep. Use a short natural acknowledgment; do not add a verification call for courtesy or style. Actual receipt, coverage, authority and sending conditions remain separate.');
  const returning=returningIntroductionStanding(context);
  const pickup=newContactPickup(context),handoff=buyerDocumentHandoff(context),documentAddition=requestedDocumentAddition(context);
  const transcriptState=coachingTranscriptState(context);
@@ -311,16 +313,18 @@ export function onDemandSuggestionProblems(say:string,context:CoachingContext):s
  // prefix or a later “we'll look out for your drawing” must not erase a
  // positive-result condition already established by the shared parser.
  // This is relevance only; all other sentences retain factual/release checks.
- const acknowledgesConditionalCheck=say.split(/(?<=[.!?;])\s+/).some(part=>investigationThenDocumentDelivery(part,context)?.deliveryCondition==='stated_condition');
- if(pendingCoverage&&!releaseRestriction&&(!/\breports?\b/i.test(say)||! /\b(?:check|verify|confirm|find out|look into|let you know)\b/i.test(say))&&!hasFutureReportInquiry(say,context)&&!acknowledgesConditionalCheck)problems.push('The buyer offered the drawing to answer the still-open report-coverage question. Explicitly acknowledge checking that report’s coverage for their reference; a generic drawing/specification fit discussion loses the unanswered question.');
+ const documentActions=say.split(/(?<=[.!?;])\s+/).map(part=>analyzeDocumentActionMeaning(part,context));
+ const acknowledgesCoverage=documentActions.some(meaning=>meaning.checksCoverage);
+ if(pendingCoverage&&!releaseRestriction&&!acknowledgesCoverage&&!hasFutureReportInquiry(say,context))problems.push('The buyer offered the drawing to answer the still-open report-coverage question. Explicitly acknowledge checking that report’s coverage for their reference; a generic drawing/specification fit discussion loses the unanswered question.');
  if(releaseRestriction){
   const line=say.replace(/[’‘]/g,"'");
-  const acknowledgesHold=/\b(?:wait|hold|won't\s+(?:send|email|share)|will not\s+(?:send|email|share)|not\s+(?:send|email|share|sending|emailing|sharing))\b/i.test(line);
-  const acknowledgesApproval=/\b(?:approval|approv\w*|sign[- ]?off)\b/i.test(line)&&(!releaseRestriction.approval||releaseRestriction.approver==='buyer'||new RegExp('\\b(?:'+(releaseRestriction.approver==='manager'?'manager':'engineer|engineering')+')\\b','i').test(line));
+  const sharedHold=documentActions.find(meaning=>meaning.withholding)?.withholding;
+  const acknowledgesHold=!!sharedHold||/\b(?:wait|hold|won't\s+(?:send|email|share)|will not\s+(?:send|email|share)|not\s+(?:send|email|share|sending|emailing|sharing))\b/i.test(line);
+  const acknowledgesApproval=sharedHold?.approval===releaseRestriction.approver||/\b(?:approval|approv\w*|sign[- ]?off)\b/i.test(line)&&(!releaseRestriction.approval||releaseRestriction.approver==='buyer'||new RegExp('\\b(?:'+(releaseRestriction.approver==='manager'?'manager':'engineer|engineering')+')\\b','i').test(line));
   if(!acknowledgesHold||releaseRestriction.approval&&!acknowledgesApproval)problems.push('Acknowledge the buyer’s current restriction on sending and the stated approver. A promise to check coverage alone misses the changed request; do not imply that a coverage match releases this hold.');
  }
  const conditionalReply=conditionalReportReply(context);
- const repDocumentReply=conditionalReply&&say.split(/(?<=[.!?;])\s+/).some(part=>!isAwaitingBuyerDocumentReceipt(part)&&(!!investigationThenDocumentDelivery(part,context)||hasAffirmativeOutgoingDocumentAction(part)));
+ const repDocumentReply=conditionalReply&&documentActions.some(meaning=>!isAwaitingBuyerDocumentReceipt(meaning.text)&&meaning.outgoing.length>0);
  if(conditionalReply&&(!/\breport\b/i.test(say)||!repDocumentReply))problems.push('The buyer requested the available '+conditionalReply.document+' as a reply only if its coverage matches. Explicitly acknowledge that conditional document reply; a vague follow-up or check alone loses the agreed action. Preserve the positive report-scope condition and any later release gate.');
  if((transcriptState==='partial'||transcriptState==='pending')&&!audioClarification(say,context)&&(say.includes('?')||/\b(?:can|could|would) you (?:tell|share|explain)|\bwhat(?:'s| is| are)\b/i.test(say)))problems.push('The buyer statement is unfinished at this request. Give a brief listening cue with no question; do not repeat discovery from an older turn.');
  if(pickup?.kind==='greeting_only'){
