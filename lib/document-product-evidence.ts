@@ -412,7 +412,7 @@ export function isBoundedEpistemicFactAction(text:string,context?:Context):boole
  * different actions. The first two assert no coverage. The last still needs
  * availability and company permission; return its explicit referent so the
  * ordinary document-action checks can enforce those independently. */
-type ParsedDocumentDelivery={investigation:string;document:string;deliveryCondition:'sequence_only'|'stated_condition'|'check_completion';conditionText?:string};
+type ParsedDocumentDelivery={investigation:string;document:string;deliveryCondition:'sequence_only'|'stated_condition'|'check_completion'|'alternative_condition';conditionText?:string};
 function parseInvestigationThenDocumentDelivery(text:string,context?:Context):ParsedDocumentDelivery|undefined {
  // Preserve a whole fronted condition when the clause extractor ends it at
  // a semicolon. Never strip an internal separator or its adjoining claims.
@@ -536,9 +536,11 @@ export type DocumentActionMeaning={
  /** Closed action proof only. It never proves availability, scope or authority. */
  locallyNonAssertive:boolean;
  checksCoverage:boolean;
+ /** An explicit alternative/bypass cannot satisfy a required positive match. */
+ weakensPositiveMatch:boolean;
  withholding?:DocumentWithholding;
  delivery?:ParsedDocumentDelivery;
- outgoing:{start:number;end:number;text:string;condition:'coverage_positive'|'check_complete'|'sequence_only'|'unparsed'}[];
+ outgoing:{start:number;end:number;text:string;condition:'coverage_positive'|'check_complete'|'sequence_only'|'alternative'|'unparsed'}[];
  references:{text:string;start:number;end:number;basis:'confirmed_buyer'|'heard_buyer'|'source_known_identifier'|'unknown'}[];
 };
 /** One interpretation consumed by factual, condition, relevance and identity
@@ -547,12 +549,18 @@ export type DocumentActionMeaning={
  * The proof covers the ENTIRE supplied group. Mixed or unparsed assertions
  * retain all normal factual checks; no keyword grants a whole-reply exemption. */
 export function analyzeDocumentActionMeaning(text:string,context?:Context):DocumentActionMeaning{
- const inquiry=isBoundedEpistemicFactAction(text,context),delivery=parseInvestigationThenDocumentDelivery(text,context),withholding=documentWithholding(text,context);
+ const inquiry=isBoundedEpistemicFactAction(text,context),parsed=parseInvestigationThenDocumentDelivery(text,context),withholding=documentWithholding(text,context);
+ // Uncertainty may ask about alternatives. A RELEASE condition is different:
+ // “if it matches OR you approve” permits sending without a match. Keep that
+ // distinction in the shared action record, not separate caller exceptions.
+ const delivery:ParsedDocumentDelivery|undefined=parsed?.deliveryCondition==='stated_condition'&&/\bor\b/i.test(parsed.conditionText||'')?{...parsed,deliveryCondition:'alternative_condition'}:parsed;
+ const actions=affirmativeOutgoingDocumentActions(text);
+ const weakensPositiveMatch=delivery?.deliveryCondition==='alternative_condition'||actions.some(action=>/\b(?:regardless|anyway)\b|\bwhether\b[^.!?;]*\bor not\b|\beven if\b[^.!?;]*\b(?:not|no match)\b/i.test(text.slice(action.end).split(/[.!?;]/,1)[0]));
  const locallyNonAssertive=inquiry||!!delivery||!!withholding;
  const confirmed=buyerConversationIdentifierReferences(text,context?.turns||[]),heard=buyerProductIdentifierReferences(text,latestBuyer(context||{})),known=productIdentityReferences(text,context?.sources||[]);
  const references=[...buyerProductIdentifierReferences(text,text),...known].filter((reference,index,all)=>all.findIndex(other=>other.start===reference.start&&other.end===reference.end)===index).map(reference=>({text:reference.text,start:reference.start,end:reference.end,basis:(confirmed.some(other=>other.start===reference.start&&other.end===reference.end)?'confirmed_buyer':heard.some(other=>other.start===reference.start&&other.end===reference.end)?'heard_buyer':known.some(other=>other.start===reference.start&&other.end===reference.end)?'source_known_identifier':'unknown') as DocumentActionMeaning['references'][number]['basis']}));
  const checksCoverage=!!delivery||inquiry&&(documents(text).some(document=>/report$/.test(document.kind))&&/\b(?:cover\w*|scope|matches?|appl(?:y|ies|icable)|relates?|pertains?)\b/i.test(text)||!!currentCallReportInquiry(context)&&references.some(reference=>reference.basis==='confirmed_buyer'));
- return {text,coverage:delivery?.deliveryCondition==='stated_condition'?'positive_result_condition':inquiry&&checksCoverage?'future_inquiry':documents(text).length&&relationWords(text)?'assertion_or_unparsed':'none',locallyNonAssertive,checksCoverage,withholding,delivery,outgoing:affirmativeOutgoingDocumentActions(text).map(action=>({...action,condition:delivery?.deliveryCondition==='stated_condition'?'coverage_positive':delivery?.deliveryCondition==='check_completion'?'check_complete':delivery?'sequence_only':'unparsed'})),references};
+ return {text,coverage:delivery?.deliveryCondition==='stated_condition'?'positive_result_condition':inquiry&&checksCoverage?'future_inquiry':documents(text).length&&relationWords(text)?'assertion_or_unparsed':'none',locallyNonAssertive,checksCoverage,weakensPositiveMatch,withholding,delivery,outgoing:actions.map(action=>({...action,condition:delivery?.deliveryCondition==='stated_condition'?'coverage_positive':delivery?.deliveryCondition==='alternative_condition'?'alternative':delivery?.deliveryCondition==='check_completion'?'check_complete':delivery?'sequence_only':'unparsed'})),references};
 }
 /** Compatibility facade. All consumers get the same parsed action meaning. */
 export function investigationThenDocumentDelivery(text:string,context?:Context):ParsedDocumentDelivery|undefined{return analyzeDocumentActionMeaning(text,context).delivery;}

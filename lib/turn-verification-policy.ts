@@ -806,7 +806,8 @@ export function assessReplyVerification(say: string, context: VerificationPolicy
     if(release.hold)add(action,start,'supplier_claim',{supported:false,reason:'The buyer cancelled or withheld this send and has not released it again. A company document being available does not override that instruction.'});
     if(buyerApproval&&!preservesBuyerApproval(action,release.approver))add(action,start,'supplier_claim',{supported:false,reason:'The buyer withheld permission to send until they approve. Preserve the buyer’s stated approver before every promised document send; confirming report coverage or mentioning approval for a different action does not release the documents.'});
     const meaning=analyzeDocumentActionMeaning(action.trim(),context);
-    if(buyerScope&&meaning.outgoing.some(send=>send.condition!=='coverage_positive'))add(action,start,'supplier_claim',{supported:false,reason:'The buyer made delivery conditional on a positive report match. Preserve that condition for every promised send; completing a check or conditioning a different action does not authorize this delivery.'});
+    if(buyerScope&&meaning.weakensPositiveMatch)add(action,start,'supplier_claim',{supported:false,reason:'This send explicitly permits delivery without the buyer’s required positive report match. An alternative approval, regardless clause, or sending whether it matches or not cannot release that condition.'});
+    else if(buyerScope&&meaning.outgoing.some(send=>send.condition!=='coverage_positive'))add(action,start,'supplier_claim',{supported:false,reason:'The buyer made delivery conditional on a positive report match. Preserve that condition for every promised send; completing a check or conditioning a different action does not authorize this delivery.'});
    }
   }
   if (companyName) {

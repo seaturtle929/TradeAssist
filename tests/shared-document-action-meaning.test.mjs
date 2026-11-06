@@ -56,6 +56,8 @@ for(const company of companies){
   {kind:'buyer reference turned into company product',say:`I'll check whether the ${company.report} covers our ${company.reference}.`},
   {kind:'check completion rather than a positive match',say:`Once I've checked whether the ${company.report} covers ${company.reference}, I'll send it.`},
   {kind:'second unconditional send',say:`I'll check whether the ${company.report} covers ${company.reference} and send it only if it matches. I'll email the report regardless.`},
+  {kind:'positive-match gate weakened by alternative approval',say:`I'll send the ${company.report} if it covers ${company.reference} or your engineer approves.`},
+  {kind:'positive-match gate weakened by alternative request',say:`I'll check whether the ${company.report} covers ${company.reference}, and I'll send it if it matches or you ask for it.`},
   {kind:'unsupported shipment',say:reply(company)+' We will ship your order tomorrow.'},
   {kind:'unapproved certification',say:reply(company)+' Our products are certified for medical use.'},
   {kind:'drawing receipt invented from a promise',say:`I've received your drawing. ${reply(company)}`},
@@ -66,6 +68,10 @@ for(const company of companies){
  });
 }
 
+test('A pure future inquiry may consider alternatives without weakening any delivery gate',()=>{
+ const context=fixture(),text="I'll check whether the inspection report covers LT47 or whether we need a different report.",meaning=analyzeDocumentActionMeaning(text,context);
+ assert.equal(meaning.locallyNonAssertive,true);assert.equal(meaning.weakensPositiveMatch,false);assert.equal(meaning.outgoing.length,0,'An inquiry about alternatives does not promise an alternative route for sending.');
+});
 test('Two failed candidates end visibly; a generic thanks is not useful recovery and cannot start an endless loop',async()=>{
  const company=companies[0],t=controller(fixture(company));try{t.request();t.respond(`The ${company.report} covers ${company.reference}.`);await sleep(5);assert.equal(t.creates().length,2);t.respond('Thanks.');await sleep(5);assert.equal(t.log.shown.length,0,'A filler acknowledgment loses the specific drawing/report commitment.');assert.equal(t.creates().length,2);assert.equal(t.log.traces.filter(event=>event.event==='failed').length,1);assert.ok(t.log.errors.some(message=>/could not pass|unavailable/i.test(message)));}finally{t.session.stop();}
 });

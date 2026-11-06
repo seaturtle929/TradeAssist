@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {assessReplyVerification,reportDeliveryCondition} from '../lib/turn-verification-policy.ts';
 import {needsFactCheck} from '../lib/call-coaching.ts';
+import {checkSuggestion} from '../lib/call-purpose.ts';
 import {investigationThenDocumentDelivery,isBoundedEpistemicFactAction} from '../lib/document-product-evidence.ts';
 
 // Authored fictional workflows only. No saved customer transcripts.
@@ -39,7 +40,7 @@ for(const company of companies){
   const coherent=`I'll check whether the ${report} covers ${product}. If it does, I'll send it along.`;
   fast(coherent,make(company,true));
   for(const say of ["If the report covers your reference, I'll send it. We'll send the report regardless.","If the report covers your reference, I'll send it, but we'll email the report anyway.",coherent+" We'll send the report regardless."]){
-   const result=assessReplyVerification(say,make(company,true));assert.ok(result.unsupportedClaims.some(claim=>/conditional|every promised send/.test(claim.reason)),say);
+   const input=make(company,true),result=assessReplyVerification(say,input);assert.ok(result.unsupportedClaims.some(claim=>claim.kind==='supplier_claim'&&!claim.pending&&claim.verificationBoundary!=='document_product_scope'),say);assert.equal(checkSuggestion({say},input,{factChecked:true}).ok,false,'A source approval cannot waive the buyer’s delivery condition.');
   }
  });
  test(`${name}: final buyer approval clause cannot be dropped`,()=>{
