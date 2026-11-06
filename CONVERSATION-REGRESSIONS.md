@@ -109,6 +109,50 @@ Do not run it until the user authorizes it. Reuse the existing audio/browser
 adapter and real `recordBuyerAcousticEnd`/`recordReplyPaint` instrumentation.
 Never synthesize a screen-paint timestamp from a controller publication event.
 
+## Scheduled comparison eligibility
+
+`scripts/regression/scheduled-comparison.mjs` declares a recording SHA, annotated
+last-word cue, one source-relative request offset, allowed dispatch drift, expected
+speech/ASR phase and lifecycle probe before playback. Its local timer calls the
+ordinary isolated-app request callback once; operator/tool round trips cannot
+change the planned press. It records actual dispatch drift rather than assuming
+the timer fired on time.
+
+`validateScheduledRun` and `compareScheduledRuns` reject speed comparisons when
+audio, approved input, models, schedule, actual request phase, completed-turn use,
+required lifecycle observations or full visible wording do not match. A reuse
+comparison must actually start a provisional generation before final recognition;
+merely running a build containing the reuse patch is insufficient. A changed
+final clause must discard that draft and generate from the completed turn. All
+wording and quality results remain available when speed comparison is ineligible.
+
+Each run's raw ASR events are scoped to that intentional request's buyer turn.
+An explicit `completed_turn` names every source item in spoken order and contains
+their complete assembled text; it is not the last ASR segment alone. All raw
+events remain available outside that scoped record. Publication must use the
+assembled turn. The run also declares which observation streams were active and
+ends with a settled count: zero verification or repairs is different from a
+missing observer. Every generation and started check needs a terminal record,
+and token/SAY timestamps must belong to the generation actually published.
+Pairing also compares observed completed-turn words, ordered source-item contents
+and provisional wording. Matching audio and approved pre-call facts cannot hide
+different recognition supplied to the model. This check is deliberately literal;
+it does not use a model to declare two transcriptions semantically equivalent.
+
+Run the authored protocol and actual-controller proof offline:
+
+```sh
+node --no-warnings --experimental-loader ./scripts/regression/typescript-loader.mjs --test tests/scheduled-comparison.test.mjs
+```
+
+The reusable `scheduled-lifecycle-worker.mjs SOURCE_ROOT PRIVATE_OUTPUT.json`
+drives the selected build's actual controller with the same chronological source
+schedule for exact-final reuse and changed-final-meaning cases. Generation, ASR
+and visibility callbacks are explicitly scripted; its timings cannot establish
+live model/audio/browser speed. Private recorded-audio adapters may use the same
+contract, but only an independent full browser paint can finish a live latency
+measurement. Missing or mismatched evidence produces no paired speed delta.
+
 ## Blocking-rule audit
 
 | Gate in the active live path | Concrete harm it prevents | Safe paired behavior |

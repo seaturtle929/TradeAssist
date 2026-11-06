@@ -21,12 +21,12 @@ function conditionalSend(line) {
   // Evaluate every outgoing commitment, rather than letting one safe initial
   // condition exempt an unconditional promise appended to the same reply.
   const units = line.split(/(?<=[.!?;])\s+|,?\s+\b(?:but|however|nevertheless|yet)\b\s*/i);
-  const actualSend = /\b(?:I|we)(?:'ll| will| can| would| shall)?\s+(?:(?:also|then|only|definitely)\s+)*(?:send|email|forward|share|reply|respond|provide|return)\b|\b(?:and|then)\s+(?:(?:I|we)(?:'ll| will| can)?\s+)?(?:send|email|forward|share|reply|respond|provide|return)\b|\b(?:happy|ready|able) to (?:send|email|forward|share)\b|\b(?:report|document|it)\s+(?:will|can) be (?:sent|emailed|forwarded|shared)\b/i;
+  const actualSend = /\b(?:I|we)(?:'ll| will| can| would| shall)?\s+(?:(?:also|then|only|definitely)\s+)*(?:send|email|forward|share|reply|respond|provide|return)\b|\b(?:and|then)\s+(?:(?:I|we)(?:'ll| will| can)?\s+)?(?:send|email|forward|share|reply|respond|provide|return)\b|\b(?:only if|if|provided(?: that)?|as long as|once|after|when)\b[^.!?;]*,\s*(?:then\s+)?(?:send|email|forward|share|reply|respond|provide|return)\b|\b(?:happy|ready|able) to (?:send|email|forward|share)\b|\b(?:report|document|it)\s+(?:will|can) be (?:sent|emailed|forwarded|shared)\b/i;
   const sends = units.filter(unit => actualSend.test(unit));
   if(!sends.length) return false;
   const scopeQuestion = /\b(?:whether|if)\b[^.!?]{0,90}\b(?:covers?|matches?|applies|covered)\b/i.test(line);
   return sends.every(unit => {
-    if(scopeQuestion && /\bif it (?:does|matches|applies)\b/i.test(unit)) return true;
+    if(scopeQuestion && /\bif it (?:does|matches|applies)\b(?!\s+not\b)/i.test(unit)) return true;
     for(const match of unit.matchAll(/\b(only if|if|provided(?: that)?|as long as|on condition that|once|after|when)\b/gi)) {
       const prefix = unit.slice(0, match.index);
       if(/\b(?:check|verify|confirm|determine|find out|look into)\s*$/i.test(prefix)) continue;
@@ -50,6 +50,10 @@ function presentCoverageClaim(line) {
     if(/^\s*(?:then\s+)?(?:send|email|forward|share|reply|respond|provide|return)\b[^.!?]*\b(?:only if|if|provided(?: that)?|as long as)\b/i.test(clause)) return false;
     if(/\b(?:I|we)(?:'ll| will| can| would)?\s+(?:send|email|forward|share|reply|respond|provide|return)\b/i.test(clause) && /\b(?:only if|if|provided(?: that)?|as long as)\b/i.test(clause)) return false;
     if(/\b(?:I|we)(?:'ll| will| can| would| need to)?\s+(?:check|verify|confirm|find out|determine|look into|review|compare|investigate|establish)\b[^.!?]{0,50}\b(?:whether|if)\b/i.test(clause)) return false;
+    // Coordinated actions can share a subject: “I'll review it and confirm
+    // whether…” remains an inquiry after splitting at “and”. Keep the
+    // uncertainty marker; “confirm that” and adjoining assertions still fail.
+    if(/^\s*(?:then\s+)?(?:check|verify|confirm|find out|determine|look into|review|compare|investigate|establish)\b[^.!?]{0,50}\b(?:whether|if)\b/i.test(clause)) return false;
     if(/^\s*let (?:me|us)\s+(?:find out|check|verify|confirm|determine|look into)\s+(?:whether|if)\b/i.test(clause)) return false;
     return /\b(?:(?:the|our|that|this) (?:material |inspection |test )*(?:report|document)|it)\b[^.!?]{0,45}\b(?:covers?|includes?|contains?|applies|certifies|proves)\b/i.test(clause)
       || /\b(?:[A-Z]{1,6}[- ]?\d+|(?:that |the |your )?(?:reference|product|model|code)|it)\s+(?:is|are|has been|was)\s+(?:fully )?(?:covered|included|certified)\b/i.test(clause)

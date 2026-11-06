@@ -104,3 +104,5 @@ next-env.d.ts
 !/scripts/regression/conversation-worker.mjs
 !/scripts/regression/conversation-fixtures.mjs
 !/scripts/regression/evaluate-reply.mjs
+!/scripts/regression/scheduled-comparison.mjs
+!/scripts/regression/scheduled-lifecycle-worker.mjs

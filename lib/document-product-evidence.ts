@@ -135,7 +135,7 @@ function bareDocumentAction(line:string){
 export function requestsDocumentProductCoverage(text:string):boolean {
  return !!documents(text).length&&/\?|\b(?:confirm|whether|if|need to know|tell me)\b/i.test(text)&&(relationWords(text)||/\b(?:report|sheet|certificate)\b.{0,55}\bfor\b/i.test(text));
 }
-const courtesyAction='(?:asking|(?:this|that|the|your) (?:question|update|clarification|information)|this|that|your time|your patience|raising that|checking(?: in)?|pointing that out|bringing that up|letting (?:me|us) know|keeping (?:me|us) informed|(?:sharing|explaining|clarifying|confirming|flagging|mentioning)(?: (?:that|this))?)';
+const courtesyAction='(?:asking|(?:this|that|the|your) (?:question|update|clarification|information|offer)|this|that|your time|your patience|raising that|checking(?: in)?|pointing that out|bringing that up|letting (?:me|us) know|keeping (?:me|us) informed|(?:sharing|explaining|clarifying|confirming|flagging|mentioning)(?: (?:that|this))?)';
 const courtesyStart=new RegExp('^(?:(?:thanks|thank you)(?: for '+courtesyAction+')?|of course|understood|sure|okay|ok|got it|that makes sense|that helps|that[\'’]s helpful|I understand)(.*)$','i');
 function acknowledgmentVocativesKnown(text:string,context?:Context):boolean {
  // A salutation is not part of the participant's name. The remaining name
@@ -266,6 +266,26 @@ function investigationAcknowledgment(text:string,context?:Context):boolean {
  if(!acknowledgmentVocativesKnown(text,context))return false;
  return isConversationalAcknowledgment(text,context)||/^[Yy]es(?:,\s*[A-Z][A-Za-z'-]*(?:\s+[A-Z][A-Za-z'-]*){0,2})?[.!]$/.test(text);
 }
+/** A drawing review is a prerequisite, not a finding about report scope.
+ * Consume only this closed action and leave the ENTIRE remaining predicate
+ * to the ordinary inquiry/delivery parser. A named comparison artifact still
+ * needs availability; a drawing reference must come from this conversation. */
+function afterDrawingReview(text:string,context?:Context):string|undefined {
+ const review=/^(?:once|after|when)\s+(?:I|we)(?:'ve| have)?\s+(?:review(?:ed)?|check(?:ed)?|seen)\s+(?:it|(?:the|that|your)\s+drawing)(?:\s+(?:with|against)\s+([^,;.!?]+))?\s*,\s*(.+)$/i.exec(text);
+ if(!review)return;
+ if(review[1]){
+  const target=review[1],reference=target.replace(/^(?:(?:that|the|your)\s+)?/i,'').replace(/\s+reference$/i,'');
+  const knownReference=[...buyerProductIdentifierReferences(reference,latestBuyer(context||{})),...buyerConversationIdentifierReferences(reference,context?.turns||[])].some(item=>item.start===0&&item.end===reference.length);
+  const report=documents(target);
+  const availableReport=report.length===1&&/report$/.test(report[0].kind)&&/^\s*(?:(?:that|the|your)\s+)?$/i.test(target.slice(0,report[0].start))&&!target.slice(report[0].end).trim()&&!!availableDocumentActionEvidence(report[0].kind,context?.sources||[]);
+  if(!knownReference&&!availableReport)return;
+ }
+ return review[2];
+}
+function purposeReportInquiry(text:string):string|undefined {
+ const inquiry=/^((?:I|we)(?:'ll| will| can))\s+(?:check|review)\s+((?:(?:the|that|this)\s+)?(?:(?:material test|inspection|test)\s+)?report)\s+to\s+(?:check|confirm|verify|find out)\s+(whether|if)\s+it\s+(.+)$/i.exec(text);
+ return inquiry?inquiry[1]+' check '+inquiry[3]+' '+inquiry[2]+' '+inquiry[4]:undefined;
+}
 /** One shared speech-act boundary for local fact classification and document
  * scope checks. Natural first-person investigation wording asserts no answer;
  * positive tails, commercial actions and timing do not inherit that status. */
@@ -279,12 +299,8 @@ export function isBoundedEpistemicFactAction(text:string,context?:Context):boole
  // Reviewing the incoming artifact is a prerequisite, not a positive answer
  // about it. Remove only this closed review action and check the ENTIRE
  // following uncertainty action normally, including any attached claims.
- const reviewPrerequisite=/^(?:once|after|when)\s+(?:I|we)(?:'ve| have)?\s+(?:review(?:ed)?|check(?:ed)?|seen)\s+(?:it|(?:the|that|your)\s+drawing)(?:\s+with\s+(?:(?:that|the|your)\s+)?([A-Z]{1,6}[-\u2010-\u2015\u2212\uFE63\uFF0D]?\d{1,6})\s+reference)?\s*,\s*(.+)$/i.exec(line);
- if(reviewPrerequisite){
-  const reference=reviewPrerequisite[1];
-  if(reference&&![...buyerProductIdentifierReferences(reference,latestBuyer(context||{})),...buyerConversationIdentifierReferences(reference,context?.turns||[])].some(item=>item.start===0&&item.end===reference.length))return false;
-  return isBoundedEpistemicFactAction(reviewPrerequisite[2],context);
- }
+ const reviewPrerequisite=afterDrawingReview(line,context);
+ if(reviewPrerequisite)return isBoundedEpistemicFactAction(reviewPrerequisite,context);
  // An unresolved spelling prerequisite does not claim report coverage.
  // Only strip this closed prerequisite; the complete following action still
  // needs to be a bounded inquiry, and its numbers/claims keep normal checks.
@@ -300,14 +316,18 @@ export function isBoundedEpistemicFactAction(text:string,context?:Context):boole
  // not evidence of report coverage. Strip only these closed handoff/review
  // forms, then apply the ordinary whole-predicate uncertainty check below.
  const original=line;
- line=line.replace(/^\s*(?:and\s+)?(?:if you\s+(?:can\s+)?(?:send|email)\s+(?:over\s+)?(?:that|the|your)\s+drawing(?:\s+over)?\s*,\s*|please\s+(?:go ahead and\s+)?(?:send|email)\s+(?:over\s+)?(?:that|the|your)\s+drawing(?:\s+over)?\s*,\s*(?:and\s+)?)/i,'').replace(/^and\s+(?=(?:I|we)\b)/i,'');
+ line=line.replace(/^\s*(?:and\s+)?(?:if you\s+(?:can\s+)?(?:send|email)\s+(?:over\s+)?(?:that|the|your)\s+drawing(?:\s+over)?\s*,\s*|please\s+(?:go ahead and\s+)?(?:send|email)\s+(?:over\s+)?(?:that|the|your)\s+drawing(?:\s+over)?\s*,\s*(?:and\s+)?(?:then\s+)?)/i,'').replace(/^and\s+(?=(?:I|we)\b)/i,'');
  line=line.replace(/\s+once\s+(?:I|we)\s+(?:review|check|see)\s+(?:it|that|the drawing|your drawing)[.!]?$/i,'');
  const comparison=/^((?:I|we)(?:'ll| will| can))\s+(?:line it up with|check it against|compare it with|compare it against)\s+our\s+(?:available\s+)?(?:specs|specifications)\s+and\s+(.+)$/i.exec(line);
  if(comparison){
   if(!availableDocumentActionEvidence('specification',context?.sources||[]))return false;
   line=comparison[1]+' '+comparison[2];
  }
- line=line.replace(/^((?:I|we)(?:'ll| will| can))\s+(?:review|check)\s+(?:your|the|that)\s+drawing\s+and\s+(?=(?:check|confirm|verify|let you know)\b)/i,'$1 ');
+ line=line.replace(/^((?:I|we)(?:'ll| will| can))\s+(?:review|check)\s+(?:it|(?:your|the|that)\s+drawing)\s+and\s+(?=(?:check|confirm|verify|let you know)\b)/i,'$1 ');
+ // Checking a report “to confirm whether it covers X” leaves the answer
+ // open. Bind “it” to that single report, and parse every remaining word;
+ // a qualified report noun, extra claim or outgoing action cannot disappear.
+ line=purposeReportInquiry(line)||line;
  // Reporting whether an investigation succeeds leaves its answer open;
  // reporting "that" it succeeds is still an affirmative claim below.
  line=line.replace(/^((?:I|we)(?:'ll| will| can))\s+let you know\s+(if|whether)\s+/i,'$1 check $2 ');
@@ -389,6 +409,8 @@ export function investigationThenDocumentDelivery(text:string,context?:Context):
  // Preserve a whole fronted condition when the clause extractor ends it at
  // a semicolon. Never strip an internal separator or its adjoining claims.
  let line=text.trim().replace(/[’‘]/g,"'").replace(/;$/,'.');
+ const reviewPrerequisite=afterDrawingReview(line,context);
+ if(reviewPrerequisite)return investigationThenDocumentDelivery(reviewPrerequisite,context);
  if(/\s+as you (?:requested|asked)[.!]?$/i.test(line)){
   const requested=[context?.buyerText||'',...(context?.turns||[]).filter(turn=>turn.role==='buyer'||turn.role==='customer').map(turn=>turn.text)].some(turn=>/\breport\b/i.test(turn)&&/\b(?:send|email|share|forward|reply|respond|include|attach)\b/i.test(turn));
   if(!requested)return;line=line.replace(/\s+as you (?:requested|asked)(?=[.!]?$)/i,'');
@@ -448,7 +470,7 @@ export function investigationThenDocumentDelivery(text:string,context?:Context):
  const continuation=new RegExp('\\s*,?\\s+(?:and\\s+)?then\\s+(?:'+actor+')?'+delivery+'[.!]?$','i').exec(line)
   ||new RegExp('\\s*,?\\s+and\\s+((?:once|after|when)\\s+(?:I|we)(?:\x27ve| have)\\s+got\\s+(?:that|it))\\s*,\\s*'+actor+delivery+'[.!]?$','i').exec(line)
   ||new RegExp('(?:\\s*,?\\s+and\\s+|[.!]\\s+)(?:then\\s+)?(?:'+actor+')?'+delivery+'\\s+('+positiveCondition+')[.!]?$','i').exec(line)
-  ||new RegExp('(?:\\s*,?\\s+and\\s+|[.!]\\s+)('+positiveCondition+')\\s*,?\\s+'+actor+delivery+'[.!]?$','i').exec(line)
+  ||new RegExp('(?:\\s*,?\\s+and\\s+|[.!]\\s+)(?:then\\s+)?('+positiveCondition+')\\s*,?\\s+'+actor+delivery+'[.!]?$','i').exec(line)
   ||new RegExp('[.!]\\s+((?:once|after|when)\\s+(?:that|it|the (?:scope|coverage|answer))(?:(?:\x27s|\\s+is|\\s+has been)\\s+(?:checked|verified|confirmed)))\\s*,\\s*'+actor+delivery+'[.!]?$','i').exec(line);
  if(!continuation)return;
  const investigation=line.slice(0,continuation.index).trim();
@@ -461,7 +483,7 @@ export function investigationThenDocumentDelivery(text:string,context?:Context):
  if(continuation[1]&&new RegExp('^(?:only\\s+)?'+positiveConnector+'\\b','i').test(continuation[1])){
   const predicate=continuation[1].replace(new RegExp('^(?:only\\s+)?'+positiveConnector+'\\s+','i'),'').replace(/^(?:it|that report|the report)\b/i,'the '+referents[0].kind);
   if(/\b(?:does|matches?)$/i.test(predicate)){
-   if(!requestsDocumentProductCoverage(investigation)&&!inferredFromConfirmedReference)return;
+   if(!requestsDocumentProductCoverage(purposeReportInquiry(investigation)||investigation)&&!inferredFromConfirmedReference)return;
   }else if(!isBoundedEpistemicFactAction('I will check whether '+predicate,context))return;
  }
  const deliveryCondition=continuation[1]?/^(?:once|after|when)\b/i.test(continuation[1])?'check_completion':'stated_condition':'sequence_only';
