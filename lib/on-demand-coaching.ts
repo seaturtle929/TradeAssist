@@ -307,7 +307,12 @@ export function onDemandSuggestionProblems(say:string,context:CoachingContext):s
  const pickup=newContactPickup(context),handoff=buyerDocumentHandoff(context),documentAddition=requestedDocumentAddition(context),transcriptState=coachingTranscriptState(context);
  const releaseRestriction=currentDocumentReleaseRestriction(context);
  const pendingCoverage=pendingReportCoverageHandoff(context);
- if(pendingCoverage&&!releaseRestriction&&(!/\breports?\b/i.test(say)||! /\b(?:check|verify|confirm|find out|look into|let you know)\b/i.test(say))&&!hasFutureReportInquiry(say,context)&&investigationThenDocumentDelivery(say,context)?.deliveryCondition!=='stated_condition')problems.push('The buyer offered the drawing to answer the still-open report-coverage question. Explicitly acknowledge checking that report’s coverage for their reference; a generic drawing/specification fit discussion loses the unanswered question.');
+ // Reuse the fact checker's parsed action, sentence by sentence. A courtesy
+ // prefix or a later “we'll look out for your drawing” must not erase a
+ // positive-result condition already established by the shared parser.
+ // This is relevance only; all other sentences retain factual/release checks.
+ const acknowledgesConditionalCheck=say.split(/(?<=[.!?;])\s+/).some(part=>investigationThenDocumentDelivery(part,context)?.deliveryCondition==='stated_condition');
+ if(pendingCoverage&&!releaseRestriction&&(!/\breports?\b/i.test(say)||! /\b(?:check|verify|confirm|find out|look into|let you know)\b/i.test(say))&&!hasFutureReportInquiry(say,context)&&!acknowledgesConditionalCheck)problems.push('The buyer offered the drawing to answer the still-open report-coverage question. Explicitly acknowledge checking that report’s coverage for their reference; a generic drawing/specification fit discussion loses the unanswered question.');
  if(releaseRestriction){
   const line=say.replace(/[’‘]/g,"'");
   const acknowledgesHold=/\b(?:wait|hold|won't\s+(?:send|email|share)|will not\s+(?:send|email|share)|not\s+(?:send|email|share|sending|emailing|sharing))\b/i.test(line);

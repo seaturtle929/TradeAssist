@@ -11,6 +11,7 @@ const runtimeScripts = new Set([
   'conversation-regression-suite.mjs', 'regression/conversation-fixtures.mjs',
   'regression/conversation-worker.mjs', 'regression/evaluate-reply.mjs',
   'regression/typescript-loader.mjs',
+  'regression/scheduled-comparison.mjs', 'regression/scheduled-lifecycle-worker.mjs',
 ]);
 function git(args, input) {
   const result = spawnSync('git', args, { input, maxBuffer: 64 * 1024 * 1024 });
