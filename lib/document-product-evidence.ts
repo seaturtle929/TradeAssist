@@ -479,28 +479,69 @@ function actualReportSendRequested(kind:string,context?:Context):boolean {
 /** A nominal “match” may bind only to ONE explicit, bounded report inquiry
  * and ONE complete known reference in that same group, never a catalog fit,
  * a second report or an approval/check-completion result. */
-function explicitReportInquiry(text:string,context?:Context):{document:string}|undefined {
- const inquiry=text.trim().replace(/,?\s+first$/i,'');
+function explicitReportInquiry(text:string,context?:Context):{document:string;reference:string}|undefined {
+ const inquiry=text.trim().replace(/[.!;]$/,'').replace(/,?\s+first$/i,'');
  if(!isBoundedEpistemicFactAction(inquiry,context))return;
  const predicate=/\b(?:whether|if)\s+((?:(?:the|that|this|our|your)\s+)?(?:(?:material test|inspection|test)\s+)?report)\s+(?:covers?|matches?|includes?|appl(?:y|ies)\s+to)\s+(.+)$/i.exec(inquiry);
  const referents=documents(inquiry);if(!predicate||referents.length!==1||! /report$/.test(referents[0].kind))return;
  const object=predicate[2].trim();
  if(![...buyerConversationIdentifierReferences(object,context?.turns||[]),...productIdentityReferences(object,context?.sources||[])].some(reference=>reference.start===0&&reference.end===object.length))return;
- return {document:referents[0].kind};
+ return {document:referents[0].kind,reference:norm(canonicalizeKnownProductIdentifiers(object,context?.sources||[]))};
+}
+type ReportInquiry=NonNullable<ReturnType<typeof explicitReportInquiry>>;
+/** Keep release prerequisites attached to ONE outgoing artifact, rather than
+ * infer them independently from words elsewhere in the reply. A nominal
+ * result needs the adjacent explicit inquiry; an explicit repeated report
+ * predicate carries its own identity even if other reports were discussed. */
+function closedReportRelease(text:string,context?:Context,inquiry?:ReportInquiry):{document:string;approvals:DocumentApproval[]}|undefined {
+ const conditions=text.trim().split(/\s+and\s+/i),approvals:DocumentApproval[]=[];
+ let coverage:ReportInquiry|undefined;
+ for(const condition of conditions){
+  const approval=approvalPredicate(condition);if(approval){approvals.push(approval);continue;}
+  if(coverage)return;
+  if(/^(?:I|we)\s+have\s+(?:(?:a|the|that)\s+)?(?:positive\s+)?(?:report\s+)?match$/i.test(condition)){
+   if(!inquiry)return;coverage=inquiry;continue;
+  }
+  const checked=/^(?:(?:I|we)(?:'ve| have)?\s+)?(?:check(?:ed)?|verif(?:y|ied)|confirm(?:ed)?)\s+(?:(whether|if|that)\s+)?(.+)$/i.exec(condition);
+  // Completing an unresolved WHETHER inquiry never supplies a positive match.
+  if(checked&&/^(?:whether|if)$/i.test(checked[1]||''))return;
+  let predicate=checked?checked[2]:condition;
+  if(/^(?:it|(?:the|that) report)\s+(?:does|matches?)$/i.test(predicate)){
+   if(!inquiry)return;coverage=inquiry;continue;
+  }
+  if(/^it\s+/i.test(predicate)&&inquiry)predicate=predicate.replace(/^it\b/i,'the '+inquiry.document);
+  const explicit=explicitReportInquiry('I will check whether '+predicate,context);
+  if(!explicit||inquiry&&(!sameDocument(explicit.document,inquiry.document)||explicit.reference!==inquiry.reference))return;
+  coverage=explicit;
+ }
+ return coverage?{document:coverage.document,approvals:[...new Set(approvals)]}:undefined;
+}
+function attachedReportRelease(text:string,context?:Context):ParsedDocumentDelivery|undefined {
+ const gate='(?:once|after|when|'+positiveReportConditionConnector+')';
+ // The prefix is exactly one bounded inquiry. A sentence boundary, semicolon,
+ // or conjunction changes punctuation, not its report/result association.
+ const fronted=new RegExp('^(?:(.+?)(?:[.!;:]\\s+|\\s*[—–]\\s+|\\s*,?\\s+and\\s+))?'+gate+'\\s+([^,;.!?]+),\\s*(.+)$','i').exec(text);
+ if(fronted){
+  const inquiry=fronted[1]?explicitReportInquiry(fronted[1],context):undefined;
+  if(fronted[1]&&!inquiry)return;
+  const release=closedReportRelease(fronted[2],context,inquiry),delivery=release&&closedDelivery(fronted[3],context,release.document);
+  if(delivery&&release&&sameDocument(delivery.document,release.document))return {...delivery,document:release.document,investigation:fronted[1]||'',deliveryCondition:'stated_condition',conditionText:fronted[2],approvals:release.approvals};
+ }
+ // The same predicate may follow its action. It still constrains only that
+ // closed action, never a later send or a factual sentence beside it.
+ const postposed=new RegExp('^(.+?)\\s+(?:only\\s+)?'+positiveReportConditionConnector+'\\s+([^.!?;]+)$','i').exec(text);
+ if(postposed){
+  const release=closedReportRelease(postposed[2],context),delivery=release&&closedDelivery(postposed[1],context,release.document);
+  if(delivery&&release&&sameDocument(delivery.document,release.document))return {...delivery,document:release.document,deliveryCondition:'stated_condition',conditionText:postposed[2],approvals:release.approvals};
+ }
 }
 function parseInvestigationThenDocumentDelivery(text:string,context?:Context):ParsedDocumentDelivery|undefined {
  const line=text.trim().replace(/[’‘]/g,"'").replace(/[.!]$/,'');
  const courtesy=afterVerifiedCourtesy(line,context);if(courtesy)return parseInvestigationThenDocumentDelivery(courtesy,context);
  const requestedSuffix=/\s+as(?: you)? (?:requested|asked|agreed)$/i.exec(line);
  if(requestedSuffix){const report=documents(line).find(document=>/report$/.test(document.kind))?.kind||currentCallReportInquiry(context)&&documents(currentCallReportInquiry(context)!).find(document=>/report$/.test(document.kind))?.kind;if(!report||!actualReportSendRequested(report,context))return;return parseInvestigationThenDocumentDelivery(line.slice(0,requestedSuffix.index),context);}
+ const attached=attachedReportRelease(line,context);if(attached)return attached;
  const withApproval=(parsed:ParsedDocumentDelivery|undefined,approval:DocumentApproval,condition:string)=>parsed?{...parsed,conditionText:[parsed.conditionText,condition].filter(Boolean).join(' AND '),approvals:[...new Set([...(parsed.approvals||[]),approval])]}:undefined;
- const joint=/^(.+?)\s*,?\s+and\s+(?:once|after|when|if|provided that|as long as)\s+([^,;.!?]+),\s*(.+)$/i.exec(line);
- if(joint){
-  const inquiry=explicitReportInquiry(joint[1].replace(/,$/,''),context),delivery=inquiry&&closedDelivery(joint[3],context,inquiry.document);
-  const conditions=joint[2].split(/\s+and\s+/i),approvals=conditions.map(approvalPredicate).filter((value):value is DocumentApproval=>!!value);
-  const positive=conditions.filter(condition=>/^(?:I|we)\s+have\s+(?:(?:a|the|that)\s+)?(?:positive\s+)?(?:report\s+)?match$/i.test(condition));
-  if(inquiry&&delivery&&sameDocument(delivery.document,inquiry.document)&&positive.length===1&&approvals.length>0&&positive.length+approvals.length===conditions.length)return {...delivery,investigation:joint[1],deliveryCondition:'stated_condition',conditionText:joint[2],approvals:[...new Set(approvals)]};
- }
  // The conjunction belongs to the SAME release predicate, not a new rep
  // action. Parse the entire remaining delivery normally before adding it.
  const and=[...line.matchAll(/\s+and\s+/gi)].at(-1);
@@ -670,6 +711,27 @@ export function analyzeDocumentActionMeaning(text:string,context?:Context):Docum
 }
 /** Compatibility facade. All consumers get the same parsed action meaning. */
 export function investigationThenDocumentDelivery(text:string,context?:Context):ParsedDocumentDelivery|undefined{return analyzeDocumentActionMeaning(text,context).delivery;}
+
+/** Preserve adjacent inquiry→release/action meaning for every consumer. Merge
+ * only when the ENTIRE resulting group has a closed nonassertive proof; an
+ * unrelated assertion, ambiguous artifact or second send stays independent.
+ * Offsets and literal whitespace remain available for claim diagnostics. */
+export function documentActionGroups(text:string,context?:Context):{text:string;start:number;end:number}[]{
+ const sentences:{text:string;start:number;end:number}[]=[];let start=0;
+ for(let index=0;index<text.length;index++){
+  if(!/[.!?;]/.test(text[index])||(text[index]==='.'&&!/\s|^$/.test(text[index+1]||'')))continue;
+  if(text[index]==='.'&&/\d/.test(text[index-1]||'')&&/\d/.test(text[index+1]||''))continue;
+  sentences.push({text:text.slice(start,index+1),start,end:index+1});start=index+1;
+ }
+ if(start<text.length)sentences.push({text:text.slice(start),start,end:text.length});
+ const grouped:{text:string;start:number;end:number}[]=[];
+ for(const sentence of sentences.filter(part=>part.text.trim())){
+  const previous=grouped.at(-1),together=previous?text.slice(previous.start,sentence.end):'';
+  if(previous&&analyzeDocumentActionMeaning(together,context).locallyNonAssertive)grouped[grouped.length-1]={text:together,start:previous.start,end:sentence.end};
+  else grouped.push(sentence);
+ }
+ return grouped;
+}
 
 /** Negation of report coverage differs from a limitation on what the report
  * proves. “It records the tested sample, but does not certify suitability”

@@ -1,6 +1,6 @@
 import type {CoachingContext} from './call-coaching';
 import {configurationReferences} from './company-configuration.ts';
-import {analyzeDocumentActionMeaning,requestsDocumentProductCoverage} from './document-product-evidence.ts';
+import {analyzeDocumentActionMeaning,documentActionGroups,requestsDocumentProductCoverage} from './document-product-evidence.ts';
 import {buyerConversationIdentifierReferences,buyerProductIdentifierReferences,buyerReferenceExplicitlyConfirmed,buyerSpelledIdentifierClarificationReferences,isBuyerIdentifierClarification,productIdentityReferences} from './product-identity-evidence.ts';
 
 const escaped=(text:string)=>text.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
@@ -101,7 +101,7 @@ export function buyerIdentifierConfirmationProblems(say:string,context:CoachingC
   // path. Literal buyer references/confirmed typography and approved source
   // identities are allowed; an invented adjacent code is neither of those.
   const buyerAllowed=[...buyers.flatMap(turn=>buyerProductIdentifierReferences(say,turn.text)),...buyerConversationIdentifierReferences(say,turns)],known=productIdentityReferences(say,sources);
-  const inquirySpans=[...say.matchAll(/[^.!?;]+[.!?;]?/g)].filter(match=>analyzeDocumentActionMeaning(match[0],context).locallyNonAssertive).map(match=>({start:match.index||0,end:(match.index||0)+match[0].length}));
+  const inquirySpans=documentActionGroups(say,context).filter(part=>analyzeDocumentActionMeaning(part.text,context).locallyNonAssertive).map(part=>({start:part.start,end:part.end}));
   const withdrawn=withdrawnBuyerReferences(turns);
   const changed=buyerProductIdentifierReferences(say,say).filter(reference=>withdrawn.has(reference.text.replace(/[-\u2010-\u2015\u2212\uFE63\uFF0D]/g,'').toUpperCase())||!buyerAllowed.some(item=>item.start===reference.start&&item.end===reference.end)&&(inquirySpans.some(span=>span.start<=reference.start&&span.end>=reference.end)||!known.some(item=>item.start===reference.start&&item.end===reference.end)));
   if(changed.length)problems.push('Preserve the buyer’s complete confirmed drawing/product reference. These proposed inquiry codes do not match the buyer’s actual words: '+[...new Set(changed.map(reference=>reference.text))].join(', ')+'. Do not substitute a similar code even when that code exists in the company catalogue.');

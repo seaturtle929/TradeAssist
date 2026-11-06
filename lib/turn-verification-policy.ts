@@ -9,7 +9,7 @@ import {buyerConversationIdentifierReferences,buyerProductIdentifierReferences,b
 import {availableDocumentActionEvidence} from './document-availability-evidence.ts';
 import {hasAffirmativeOutgoingDocumentAction} from './document-action-syntax.ts';
 export {hasAffirmativeOutgoingDocumentAction} from './document-action-syntax.ts';
-import {analyzeDocumentActionMeaning,assessDocumentProductCoverage,documentIdentifierReferences,documentIdentifierSource,hasConditionalReportReplyForSemanticReview,hasFutureReportInquiry,investigationThenDocumentDelivery,isConversationalAcknowledgment,literalDocumentScopeEvidence,literalDocumentStatementEvidence,requestsDocumentProductCoverage} from './document-product-evidence.ts';
+import {analyzeDocumentActionMeaning,documentActionGroups,assessDocumentProductCoverage,documentIdentifierReferences,documentIdentifierSource,hasConditionalReportReplyForSemanticReview,hasFutureReportInquiry,investigationThenDocumentDelivery,isConversationalAcknowledgment,literalDocumentScopeEvidence,literalDocumentStatementEvidence,requestsDocumentProductCoverage} from './document-product-evidence.ts';
 export type BuyerTurnKind = 'fact_request' | 'sales_move' | 'confirmation';
 export type VerificationPolicyContext = {
   coachingRequest?:{id:string;requestedAt:number};
@@ -214,7 +214,7 @@ function replyClauses(text: string,context?:VerificationPolicyContext): { text: 
  * check. Keep that closed action pair together; never borrow a referent from
  * earlier calls, unknown intervening sentences or a different company. */
 function replySentences(text:string,context?:VerificationPolicyContext):{text:string;start:number;end:number}[]{
- const original=sentences(text),grouped:{text:string;start:number;end:number}[]=[];
+ const original=documentActionGroups(text,context),grouped:{text:string;start:number;end:number}[]=[];
  for(const sentence of original){
   const previous=grouped.at(-1),together=previous?text.slice(previous.start,sentence.end):'';
   const previousMeaning=previous&&analyzeDocumentActionMeaning(previous.text,context);

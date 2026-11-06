@@ -1,6 +1,6 @@
 import {onDemandSuggestionProblems} from './on-demand-coaching.ts';
 import {buyerSpelledIdentifierClarificationReferences} from './product-identity-evidence.ts';
-import {analyzeDocumentActionMeaning} from './document-product-evidence.ts';
+import {analyzeDocumentActionMeaning,documentActionGroups} from './document-product-evidence.ts';
 import {incomingDocumentWordingEffects} from './incoming-document-state.ts';
 import {clientContextNeedsInterpretation,clientContextSuggestionProblems,clientContextSafeReply,reviewedClientContext} from './client-coaching-context.ts';
 import {applyCoachingConfiguration,configurationNeedsInterpretation,configurationSuggestionProblems,configuredSafeReply} from './coaching-configuration.ts';
@@ -420,7 +420,7 @@ export function checkSuggestion(guidance:Partial<Guidance>,context:PurposeContex
   const sourceText=(context.sources||[]).map(source=>source.text).join(" "),buyerText=(context.turns||[]).filter(turn=>turn.role!=="you").map(turn=>turn.text).join(" ");
   const authorizedContext=[context.manufacturer?.name,callContext.background,callContext.knownFacts,buyerText].join(" ");
   const numericValues=(value:string)=>new Set((value.match(/\b\d+(?:[.,]\d+)?/g)||[]).map(number=>String(Number(number.replace(/,/g,"")))));
-  const referenceSpans=[...say.matchAll(/[^.!?;]+[.!?;]?/g)].flatMap(part=>{const meaning=analyzeDocumentActionMeaning(part[0],context);return meaning.locallyNonAssertive?meaning.references.filter(reference=>reference.basis==='confirmed_buyer').map(reference=>({start:(part.index||0)+reference.start,end:(part.index||0)+reference.end})):[];});
+  const referenceSpans=documentActionGroups(say,context).flatMap(part=>{const meaning=analyzeDocumentActionMeaning(part.text,context);return meaning.locallyNonAssertive?meaning.references.filter(reference=>reference.basis==='confirmed_buyer').map(reference=>({start:part.start+reference.start,end:part.start+reference.end})):[];});
   const timeSpans=[...agreedResponseTimeSpans(say,context),...declinedNumericCommitmentSpans(say),...buyerSpelledIdentifierClarificationReferences(say,latest),...referenceSpans];
   const sourceNumbers=numericValues(sourceText),contextNumbers=numericValues(authorizedContext),numbers:string[]=[...say.matchAll(/\b\d+(?:[.,]\d+)?(?:%|\b)/g)].filter(match=>!timeSpans.some(span=>match.index>=span.start&&match.index+match[0].length<=span.end)).map(match=>match[0]);
   const numericKey=(value:string)=>String(Number(value.replace(/[,%]/g,"")));

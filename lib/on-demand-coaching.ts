@@ -7,7 +7,7 @@ import {emailEvidenceFor} from './buyer-facts.ts';
 import {coachingConversationAtRequest,coachingTranscriptState} from './coaching-context-snapshot.ts';
 import {representativeIdentityFor,representativeIdentityRules,representativeIdentityProblems} from './representative-identity.ts';
 import {configurationReferences} from './company-configuration.ts';
-import {analyzeDocumentActionMeaning,documentCoverageQuestionEvidence,hasFutureReportInquiry,investigationThenDocumentDelivery,requestsDocumentProductCoverage} from './document-product-evidence.ts';
+import {analyzeDocumentActionMeaning,documentActionGroups,documentCoverageQuestionEvidence,hasFutureReportInquiry,investigationThenDocumentDelivery,requestsDocumentProductCoverage} from './document-product-evidence.ts';
 import {buyerIdentifierConfirmation,buyerIdentifierConfirmationProblems} from './buyer-identifier-confirmation.ts';
 import {buyerReleaseState,isAwaitingBuyerDocumentReceipt,reportDeliveryCondition} from './turn-verification-policy.ts';
 import {availableDocumentActionEvidence} from './document-availability-evidence.ts';
@@ -353,11 +353,10 @@ export function onDemandSuggestionProblems(say:string,context:CoachingContext):s
  const pickup=newContactPickup(context),handoff=buyerDocumentHandoff(context),documentAddition=requestedDocumentAddition(context),transcriptState=coachingTranscriptState(context);
  const releaseRestriction=currentDocumentReleaseRestriction(context);
  const pendingCoverage=pendingReportCoverageHandoff(context);
- // Reuse the fact checker's parsed action, sentence by sentence. A courtesy
- // prefix or a later “we'll look out for your drawing” must not erase a
- // positive-result condition already established by the shared parser.
- // This is relevance only; all other sentences retain factual/release checks.
- const documentActions=say.split(/(?<=[.!?;])\s+/).map(part=>analyzeDocumentActionMeaning(part,context));
+ // Use the same closed action groups as factual and release checks. A bounded
+ // inquiry may supply the report referent for the next sentence; unrelated
+ // claims and subsequent sends retain their independent checks.
+ const documentActions=documentActionGroups(say,context).map(part=>analyzeDocumentActionMeaning(part.text,context));
  const acknowledgesCoverage=documentActions.some(meaning=>meaning.checksCoverage);
  if(pendingCoverage&&!releaseRestriction&&!acknowledgesCoverage&&!hasFutureReportInquiry(say,context))problems.push('The buyer offered the drawing to answer the still-open report-coverage question. Explicitly acknowledge checking that report’s coverage for their reference; a generic drawing/specification fit discussion loses the unanswered question.');
  if(releaseRestriction){
