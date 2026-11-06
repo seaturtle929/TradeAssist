@@ -353,12 +353,17 @@ export class LiveCoachingSession {
     const request=normalized.coachingRequest!;
     normalized.coachingRequest={...request,preparationMs:undefined,releasedAt:undefined,queuedForMs:undefined,releaseReason:undefined};
     normalized.turns=normalized.turns.map(turn=>({...turn,text:this.normalizedSpeech(turn.text)}));
-    const focus=coachingRequestFocus(normalized),instructions=liveRequestInstructionsFor(normalized,{id:request.id,text:focus.text,at:request.requestedAt});
+    // Rebuilt browser state can insert identical object fields in a different
+    // order. Canonicalize before instructions serialize nested JSON; sorting
+    // the resulting instruction string cannot remove that accidental mismatch.
+    // Arrays, literal words, source values and authority remain unchanged.
+    const canonical=stable(normalized) as LiveContext;
+    const focus=coachingRequestFocus(canonical),instructions=liveRequestInstructionsFor(canonical,{id:request.id,text:focus.text,at:request.requestedAt});
     // Compare complete model meaning plus all original evidence/authority, not
     // just the last utterance or selected excerpts. Request clocks are not
     // semantic input. The generated buyerMemory clock is already omitted by
     // the normal generation projection; original client history is retained.
-    return JSON.stringify(stable({instructions,companyConfiguration:normalized.companyConfiguration,sources:normalized.sources,clientContext:normalized.clientContext,callContext:normalized.callContext,manufacturer:normalized.manufacturer,brain:normalized.brain&&{facts:normalized.brain.facts,rules:normalized.brain.rules,learningExamples:normalized.brain.learningExamples,rejectedSignatures:normalized.brain.rejectedSignatures,decisionLog:normalized.brain.decisionLog}}));
+    return JSON.stringify(stable({instructions,companyConfiguration:canonical.companyConfiguration,sources:canonical.sources,clientContext:canonical.clientContext,callContext:canonical.callContext,manufacturer:canonical.manufacturer,brain:canonical.brain&&{facts:canonical.brain.facts,rules:canonical.brain.rules,learningExamples:canonical.brain.learningExamples,rejectedSignatures:canonical.brain.rejectedSignatures,decisionLog:canonical.brain.decisionLog}}));
   }
   private trySpeculativeGeneration(current:LiveContext):void {
     const queued=this.queued;if(!queued||this.speculative||this.speculationAttempted.has(queued.id)||!this.options.onAudioIssue||this.coordinator.state.buyerSpeaking||this.coordinator.state.serverBusy){this.speculationCandidate=undefined;return;}

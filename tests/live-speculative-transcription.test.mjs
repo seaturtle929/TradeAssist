@@ -207,3 +207,52 @@ test('Cancellation and renewed speech retire the debounce; changed partials cann
   }finally{t.session.stop();}
  }
 });
+
+// Browser state rebuilds can insert the same JSON fields in a different order.
+// Preserve array order and every value; only object insertion order changes.
+function reverseObjectKeys(value){
+ if(Array.isArray(value))return value.map(reverseObjectKeys);
+ if(value&&typeof value==='object')return Object.fromEntries(Object.entries(value).reverse().map(([key,item])=>[key,reverseObjectKeys(item)]));
+ return value;
+}
+
+for(const moment of [
+ {buyer:'Thank you, goodbye.',say:'Thank you, goodbye.'},
+ {buyer:"QZ71 is our drawing reference. I'll email the drawing. Send the inspection report only if it matches.",say:"Thanks. I'll check whether the inspection report covers QZ71 once we review your drawing, and send it only if it matches."},
+])test(`An equivalent JSON rebuild retains the same exact-final generation: ${moment.buyer}`,async()=>{
+ let rebuilt=false,t;
+ const payload=(turns=t.context.turns)=>{
+  const value={...t.context,turns,callContext:{stageId:'solution_discussion',relationship:'first_contact',background:'An inspection inquiry.',knownFacts:'',doNotGuess:'',goal:'Respect the buyer-chosen next step.'}};
+  return rebuilt?reverseObjectKeys(value):value;
+ };
+ t=fixture({payload});t.context.sources=[{id:'available',title:'Approved documents',text:'Inspection reports are available.'}];
+ try{
+  await t.speculate(moment.buyer);const id=t.created();t.finish(id,moment.say);
+  assert.equal(t.log.shown.length,0,'Even completed hidden wording must wait for final recognition');
+  rebuilt=true;t.final('buyer',moment.buyer);await sleep(10);
+  assert.equal(t.creates().length,1,'Equivalent field ordering must not cancel and regenerate');
+  assert.equal(t.log.traces.filter(event=>event.event==='speculation_accepted').length,1);
+  assert.equal(t.log.shown.length,1);assert.equal(t.log.shown[0].value.say,moment.say);
+  assert.equal(t.log.shown[0].snapshot.turns.at(-1).text,moment.buyer);
+  t.session.handle({type:'error',error:{code:'response_cancel_not_active',message:'No active response'}});
+  assert.equal(t.log.shown.length,1,'Normal cancellation notifications cannot replace published wording');
+ }finally{t.session.stop();}
+});
+
+for(const change of ['source','condition','source_order'])test(`Canonical field ordering does not hide a changed ${change}`,async()=>{
+ let rebuilt=false,t;
+ const payload=(turns=t.context.turns)=>reverseObjectKeys({...t.context,turns,
+  ...(rebuilt&&change==='source'?{sources:[{id:'available',text:'Reports require manager approval before sending.'}]}:{}),
+  ...(rebuilt&&change==='source_order'?{sources:[...t.context.sources].reverse()}:{}),
+ });
+ t=fixture({payload});t.context.sources=[{id:'available',text:'Inspection reports are available.'},{id:'identity',text:'Cedar Instruments supplies inspection instruments.'}];
+ try{
+  await t.speculate('Please send the information.');const old=t.created();t.finish(old,"I'll send the information.");
+  rebuilt=true;t.final('buyer',change==='condition'?'Do not send anything until I approve it.':'Please send the information.');await sleep(10);
+  assert.equal(t.log.shown.length,0);assert.equal(t.creates().length,2);
+  assert.equal(t.log.traces.filter(event=>event.event==='speculation_accepted').length,0);
+  assert.equal(t.log.traces.filter(event=>event.event==='speculation_discarded').length,1);
+  if(change==='condition')assert.match(t.creates().at(-1).response.instructions,/Do not send anything until I approve it/);
+  if(change==='source')assert.match(t.creates().at(-1).response.instructions,/Reports require manager approval/);
+ }finally{t.session.stop();}
+});
