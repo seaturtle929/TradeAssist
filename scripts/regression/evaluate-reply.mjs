@@ -8,8 +8,8 @@ const questionCount = line => (line.match(/\?/g) || []).length;
 const checkVerb = /\b(?:check|verify|confirm|find out|look into|review|compare|investigate|determine|establish)\b/i;
 const uncertainty = /\b(?:whether|if|scope|coverage|appl(?:y|ies)|match)\b/i;
 const outgoing = /\b(?:send|email|forward|share|reply|respond|provide|return)\b/i;
-const followup = /\b(?:follow[- ]?up|check(?:ed)? back|call(?:ed)? (?:you )?back|reconnect|contact you|speak again)\b/i;
-const permission = /\b(?:would (?:it|that|you)|could I|can I|may I|is it (?:alright|all right|okay|ok)|does that work|would that work)\b/i;
+const followup = /\b(?:follow(?:ed|ing)?[- ]?up|check(?:ed|ing)? back|call(?:ed|ing)? (?:you )?back|reconnect(?:ed|ing)?|contact(?:ed|ing)? you|(?:get|got|getting)(?: back)? in touch|touch(?:ed|ing)? base|(?:catch|caught|catching) up|speak again)\b/i;
+const permission = /\b(?:would (?:it|that|you)|(?:could|can|may) (?:I|we)|is it (?:alright|all right|okay|ok)|does that work|would that work)\b/i;
 const date = /\b(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday|tomorrow|next week|within \d|in \d|24[- ]?hour|ASAP|shortly|soon)\b/i;
 
 function referencePresent(line, reference) {
@@ -31,7 +31,7 @@ function conditionalSend(line) {
       const prefix = unit.slice(0, match.index);
       if(/\b(?:check|verify|confirm|determine|find out|look into)\s*$/i.test(prefix)) continue;
       const tail = unit.slice(match.index + match[0].length).split(/[,;]/)[0];
-      const predicate = /\b(?:covers?|matches?|applies|covered|within (?:its |the )?scope|positive (?:scope |coverage )?match|confirmed coverage)\b/i.exec(tail);
+      const predicate = /\b(?:covers?|matches?|applies|covered|included in (?:its|(?:the|our|that|this) (?:inspection |material test |test )?report's) scope|within (?:its |the )?scope|positive (?:scope |coverage )?match|confirmed coverage)\b/i.exec(tail);
       if(!predicate) continue;
       const beforePredicate = tail.slice(0, predicate.index);
       if(/\b(?:not|never|doesn't|isn't|wasn't|fails?|failed|without)\b/i.test(beforePredicate)) continue;
@@ -47,10 +47,13 @@ function presentCoverageClaim(line) {
   const clauses = line.split(/(?<=[.!?;])\s+|,?\s+\b(?:but|however|nevertheless|yet|and|because|since)\b\s*/i);
   return clauses.some(clause => {
     if(/^\s*(?:only if|if|provided(?: that)?|as long as|once|after|when)\b/i.test(clause)) return false;
+    if(/^\s*(?:then\s+)?(?:send|email|forward|share|reply|respond|provide|return)\b[^.!?]*\b(?:only if|if|provided(?: that)?|as long as)\b/i.test(clause)) return false;
     if(/\b(?:I|we)(?:'ll| will| can| would)?\s+(?:send|email|forward|share|reply|respond|provide|return)\b/i.test(clause) && /\b(?:only if|if|provided(?: that)?|as long as)\b/i.test(clause)) return false;
     if(/\b(?:I|we)(?:'ll| will| can| would| need to)?\s+(?:check|verify|confirm|find out|determine|look into|review|compare|investigate|establish)\b[^.!?]{0,50}\b(?:whether|if)\b/i.test(clause)) return false;
+    if(/^\s*let (?:me|us)\s+(?:find out|check|verify|confirm|determine|look into)\s+(?:whether|if)\b/i.test(clause)) return false;
     return /\b(?:(?:the|our|that|this) (?:material |inspection |test )*(?:report|document)|it)\b[^.!?]{0,45}\b(?:covers?|includes?|contains?|applies|certifies|proves)\b/i.test(clause)
       || /\b(?:[A-Z]{1,6}[- ]?\d+|(?:that |the |your )?(?:reference|product|model|code)|it)\s+(?:is|are|has been|was)\s+(?:fully )?(?:covered|included|certified)\b/i.test(clause)
+      || /\b(?:[A-Z]{1,6}[- ]?\d+|(?:that |the |your )?(?:reference|product|model|code)|it)\s+(?:is|falls?)\s+within\s+(?:(?:the )?scope of (?:the |our |that |this )?(?:inspection |material test |test )?report|(?:the |our |that |this )?(?:inspection |material test |test )?report's scope)\b/i.test(clause)
       || /\bit\s+(?:definitely |certainly |already )?does\b/i.test(clause);
   });
 }
@@ -129,3 +132,14 @@ export function evaluateReply(say, rubric={}) {
 }
 
 export default evaluateReply;
+
+// A safety rejection and successful recovery are separate release outcomes.
+// `identityProblems` comes from the tested build's production identity check;
+// nothing here supplies a name or corrective line to generation instructions.
+export function scoreIdentityRecovery({candidate,identityProblems,issues,publishedIdentityProblems,stableUsable,publicationCount,cardCount,providerRequests}) {
+  const rejected=issues.some(issue=>issue.status==='rejected'&&issue.originalSay?.trim()===candidate.trim()&&identityProblems.some(reason=>issue.reason.includes(reason)));
+  return {
+    identitySafety:{tested:true,pass:identityProblems.length>0&&rejected&&publishedIdentityProblems.length===0,rejectedCandidate:candidate,reasons:identityProblems,publishedViolations:publishedIdentityProblems},
+    samePressRecovery:{tested:true,pass:stableUsable&&publishedIdentityProblems.length===0&&publicationCount===1&&cardCount===1,providerRequests,publicationCount,cardCount},
+  };
+}

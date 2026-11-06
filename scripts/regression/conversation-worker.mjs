@@ -2,7 +2,7 @@ import {readFile,writeFile} from 'node:fs/promises';
 import {pathToFileURL} from 'node:url';
 import path from 'node:path';
 import {createHash,webcrypto} from 'node:crypto';
-import {evaluateReply} from './evaluate-reply.mjs';
+import {evaluateReply,scoreIdentityRecovery} from './evaluate-reply.mjs';
 
 // Provider events are deliberately SCRIPTED. All request ownership, prompt
 // construction, parsing, local checks, repairs and publication are production.
@@ -17,6 +17,7 @@ const {LiveCoachingSession}=await import(source('lib/live-coaching-session.ts'))
 const {assessReplyVerification}=await import(source('lib/turn-verification-policy.ts'));
 const {checkSuggestion}=await import(source('lib/call-purpose.ts'));
 const {defaultConfigurationStages}=await import(source('lib/sales-curriculum.ts'));
+const {representativeIdentityProblems}=await import(source('lib/representative-identity.ts'));
 const flush=()=>new Promise(resolve=>setImmediate(resolve));
 const clone=value=>structuredClone(value);
 const hash=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -104,14 +105,17 @@ for(const conversation of fixtures.conversations){
       const literalTurns=turns=>turns.map(({id,role,text})=>({id,role,text}));
       const strings=value=>typeof value==='string'?[value]:value&&typeof value==='object'?Object.values(value).flatMap(strings):[];
       const inputIntegrity=requested.length>0&&provider.length>0&&requested.every(event=>JSON.stringify(literalTurns(event.snapshot?.turns||[]))===JSON.stringify(literalTurns(context.turns)))&&
-        provider.every(event=>strings(event.response).every(value=>!/["']?(?:rubric|candidates|mustAll|mustNot|expectedBehavior)["']?\s*:/.test(value)));
+        provider.every(event=>strings(event.response).every(value=>!/["']?(?:rubric|candidates|identityProbe|mustAll|mustNot|expectedBehavior)["']?\s*:/.test(value)));
+      const identityProbe=step.press.identityProbe;
+      const identityOutcomes=identityProbe?scoreIdentityRecovery({candidate:step.press.candidates[identityProbe.candidateIndex||0],identityProblems:representativeIdentityProblems(step.press.candidates[identityProbe.candidateIndex||0],context),issues:issues.slice(before.issues),publishedIdentityProblems:newShown.flatMap(row=>representativeIdentityProblems(row.guidance.say,row.snapshot)),stableUsable,publicationCount,cardCount:publishedCardIds.length,providerRequests:provider.length}):null;
       rows.push({id:step.press.id,buyerWordsAvailable:context.turns.filter(turn=>turn.role==='buyer').map(turn=>turn.text),
         transcriptAtClick:step.press.partial||step.text,completedTranscript:step.text,requestSnapshots:requested.map(event=>event.snapshot),
         spokenPrefix:clone(context.turns),inputIntegrity,scriptedCandidates:clone(step.press.candidates),
         wording:published?.guidance.say||null,uniquePublishedWording:unique.map(row=>row.guidance.say),
         oneIntentionalPress:true,oneStableUsableReply:stableUsable,publicationCount,publishedCardIds,
         blocked:unique.length===0,expect:step.press.expect||'usable',evaluationCategory:step.press.evaluationCategory||'conversation',evaluation,
-        correct:(step.press.expect==='blocked'?unique.length===0&&publicationCount===0:stableUsable)&&inputIntegrity,
+        correct:(step.press.expect==='blocked'?unique.length===0&&publicationCount===0:stableUsable)&&inputIntegrity&&(!identityOutcomes||identityOutcomes.identitySafety.pass),
+        identityOutcomes,
         policy:assessment,conversationCheck:check,providerRequests:provider.length,
         retries:requestTraces.filter(event=>event.event==='repair_requested').length,verifierCalls:verifications.length-before.verifications,
         verifications:verifications.slice(before.verifications),issues:issues.slice(before.issues),traces:requestTraces,errors:errors.slice(before.errors),queued:queued.slice(before.queued),
@@ -120,7 +124,7 @@ for(const conversation of fixtures.conversations){
       });
     }
     // All earlier cards must remain unchanged through the entire conversation.
-    for(const row of rows){const values=new Set(shown.filter(item=>item.trigger===row.id).map(item=>item.guidance.say));row.stableThroughClose=values.size<2;row.correct&&=row.stableThroughClose;}
+    for(const row of rows){const values=new Set(shown.filter(item=>item.trigger===row.id).map(item=>item.guidance.say));row.stableThroughClose=values.size<2;row.correct&&=row.stableThroughClose;if(row.identityOutcomes)row.identityOutcomes.samePressRecovery.pass&&=row.stableThroughClose;}
   }finally{session.stop();}
   results.push({id:conversation.id,name:conversation.name,category:conversation.category||'conversation',provenance:conversation.provenance||'authored-synthetic',rows});
 }
@@ -129,4 +133,5 @@ await writeFile(outputPath,JSON.stringify({schemaVersion:1,mode:'offline-scripte
   conversations:results,groups:results.map(conversation=>({id:conversation.id,name:conversation.name,category:conversation.category,moments:conversation.rows.length,correct:conversation.rows.filter(row=>row.correct).length,unavailable:conversation.rows.filter(row=>row.expect==='usable'&&row.blocked).length})),summary:{moments:rows.length,correct:rows.filter(row=>row.correct).length,unavailable:rows.filter(row=>row.expect==='usable'&&row.blocked).length,
   brokenConditions:rows.filter(row=>row.wording&&row.evaluation.failures.some(value=>/condition|approval/i.test(value.name))),
   unstable:rows.filter(row=>!row.stableThroughClose).length,retries:rows.reduce((sum,row)=>sum+row.retries,0),verifierCalls:rows.reduce((sum,row)=>sum+row.verifierCalls,0),
+  identitySafety:{tested:rows.filter(row=>row.identityOutcomes).length,passed:rows.filter(row=>row.identityOutcomes?.identitySafety.pass).length},samePressRecovery:{tested:rows.filter(row=>row.identityOutcomes).length,passed:rows.filter(row=>row.identityOutcomes?.samePressRecovery.pass).length},
   latencyTargetMs:1800,latencyMeasuredMoments:0,latencyPass:null,estimatedCostUsd:0}},null,2));

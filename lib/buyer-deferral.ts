@@ -115,7 +115,10 @@ export function buyerDeferralSuggestionProblems(say:string,turns:readonly Deferr
   if(!same)return false;
   // Contact/scheduling permission is an action, not a demand for somebody
   // else's technical judgment. A technical subquestion still fails below.
-  const practical=/\b(?:may|can|could|would|is|what)\b.*\b(?:contact|connect|speak|include|check back|check[- ]in|follow[- ]up|reach|schedule|arrange|time|day|email address)\b/i.test(question);
+  // Permission is often phrased in the past tense ("Would it be alright if
+  // I checked back?"). Those are future contact proposals, not questions
+  // asking the buyer to supply the technical details they just deferred.
+  const practical=/\b(?:may|can|could|would|is|what)\b.*\b(?:contact(?:ed|ing)?|(?:re)?connect(?:ed|ing)?|speak|spoke|includ(?:e|ed|ing)|check(?:ed|ing)?[- ](?:back|in)|follow(?:ed|ing)?[- ]up|reach(?:ed|ing)?|schedul(?:e|ed|ing)|arrang(?:e|ed|ing)|(?:get|got|getting)(?: back)? in touch|touch(?:ed|ing)? base|catch(?:ing)? up|caught up|time|day|email address)\b/i.test(question);
   const criteria=/\b(?:what|which|how|whether|any)\b.*\b(?:needs?|requires?|requirements?|criteria|verify|confirm|checks?|test|evaluate|performance|quality|spec(?:ification)?s?|tolerances?|dimensions?|diameter|mesh count|price|budget|costs?)\b/i.test(question);
   return criteria||!practical;
  });

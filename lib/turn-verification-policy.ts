@@ -181,13 +181,20 @@ function sentences(text: string): { text: string; start: number; end: number }[]
   return result.filter(part => part.text.trim());
 }
 
+/** A closed fallback communicates an unresolved outcome without asserting a
+ * result. Preserve its conditional prefix with the action during extraction. */
+function communicatesUnconfirmedResult(text:string):boolean {
+ const line=text.trim().replace(/[’‘]/g,"'");
+ return /^(?:(?:otherwise|if it (?:isn't|is not|doesn't|does not))[\s,]+)?(?:I|we)(?:'ll| will| can)\s+(?:explain\s+(?:the gap|what (?:remains|is still) unconfirmed)|(?:explain|tell you)\s+what\s+(?:I|we)\s+(?:could not|couldn't|cannot|can't)\s+confirm)[.!]?$/i.test(line);
+}
+
 function replyClauses(text: string,context?:VerificationPolicyContext): { text: string; start: number; end: number }[] {
   return replySentences(text,context).flatMap(sentence => {
     // Preserve a closed check → (possibly result-conditional) document send.
     // Cutting “if it does, I will send it” at the second comma would invent an
     // unfinished coverage assertion; the combined action still gets source
     // availability and company-authority checks below.
-    if(investigationThenDocumentDelivery(sentence.text,context)||isBoundedEpistemicFactAction(sentence.text,context)||hasConditionalReportReplyForSemanticReview(sentence.text,context)||isBuyerIdentifierClarification(sentence.text,latestBuyerText(context||{})))return [sentence];
+    if(investigationThenDocumentDelivery(sentence.text,context)||isBoundedEpistemicFactAction(sentence.text,context)||hasConditionalReportReplyForSemanticReview(sentence.text,context)||communicatesUnconfirmedResult(sentence.text)||isBuyerIdentifierClarification(sentence.text,latestBuyerText(context||{})))return [sentence];
     const separator = /,\s*(?=but\b)|,\s*(?=(?:and\s+)?(?:can|could|would|may|what|which|how|I|we|our|it|you)\b)|\s+(?=and\s+(?:can|could|would|what|which|how|I|we|our|it|you)\b)/gi;
     const parts: { text: string; start: number; end: number }[] = [];
     let offset = 0;
@@ -275,6 +282,10 @@ function conversationalClause(text:string,context?:VerificationPolicyContext):bo
  if(isBuyerIdentifierClarification(line,latestBuyerText(context||{})))return true;
  if(/^(?:please\s+)?(?:go ahead and\s+)?(?:email|send)\s+(?:over\s+)?(?:the|that|your)\s+drawing(?:\s+over)?[.!]?$/i.test(line))return true;
  if(/^(?:(?:and\s+)?(?:I|we)(?:'ll| will| can)\s+)?wait\s+for\s+your\s+approval\s+before\s+(?:sending|emailing|sharing)\s+(?:anything|it|the report)[.!]?$/i.test(line))return true;
+ // Explaining the unresolved outcome promises communication, not a positive
+ // result. Keep the full object closed so an appended coverage/technical
+ // assertion or timing promise cannot inherit this conversational status.
+ if(communicatesUnconfirmedResult(line))return true;
  if(/^(?:(?:once|after|when|if)\s+(?:I|we)\s+(?:(?:verify|confirm) (?:that|its availability|it is available)|know for sure)|(?:I|we)(?:'ll| will)\s+(?:follow up(?: and let you know)?|let you know|report back|confirm(?: that for you)?(?: before (?:sending|emailing) (?:it|them|anything|the documents))?))[,.!]?$/i.test(line))return true;
  // An unqualified investigation promises only the rep's follow-through.
  // Restricted actions, content assertions and time promises cannot fit it.
@@ -434,13 +445,17 @@ export function reportDeliveryCondition(buyerText:string):'scope_required'|'unre
  const delivery='(?:send|email|share|forward|include|attach|reply|respond|sending|emailing|sharing|forwarding|including|attaching)';
  const patterns=[
   new RegExp('\\bonly\\s+'+delivery+'\\b[^.!?]*?\\bif\\s+([^.!?]+)','gi'),
-  new RegExp('\\b'+delivery+'\\b[^.!?]*?\\b(?:only\\s+)?(?:if|when)\\s+([^.!?]+)','gi'),
+  new RegExp('\\b'+delivery+'\\b[^.!?]*?\\b(?:only\\s+)?(?:if|when|provided(?:\\s+that)?|as long as|on condition that)\\s+([^.!?]+)','gi'),
   new RegExp("\\b(?:do not|don't|never)\\s+"+delivery+'\\b[^.!?]*?\\bunless\\s+([^.!?]+)','gi'),
-  new RegExp('(?:^|[.!?]\\s*)\\s*(?:if|once|after|when)\\s+([^,;.!?]+)[,;]\\s*[^.!?]*?\\b'+delivery+'\\b','gi'),
+  new RegExp('(?:^|[.!?]\\s*)\\s*(?:if|once|after|when|provided(?:\\s+that)?|as long as|on condition that)\\s+([^,;.!?]+)[,;]\\s*[^.!?]*?\\b'+delivery+'\\b','gi'),
   new RegExp('(?:^|[.!?]\\s*)\\s*unless\\s+([^,;.!?]+)[,;]\\s*[^.!?]*?\\b(?:do not|don\'t)\\s+'+delivery+'\\b','gi'),
   new RegExp('([^.!?]*\\b(?:needs?|must|has to|have to|requires?|required)\\b[^.!?]*?)\\bbefore\\b[^.!?]*?\\b'+delivery+'\\b','gi'),
  ];
- const matches=patterns.flatMap(pattern=>[...text.matchAll(pattern)]);
+ // “If not, explain the gap instead of attaching it” gives a no-send
+ // alternative, not a second condition authorizing an attachment. Exclude
+ // only matches whose every document action is explicitly an alternative
+ // being declined; a real send elsewhere in the match keeps normal checks.
+ const matches=patterns.flatMap(pattern=>[...text.matchAll(pattern)]).filter(match=>[...match[0].matchAll(new RegExp('\\b'+delivery+'\\b','gi'))].some(action=>! /\b(?:instead of|rather than)\s*$/i.test(match[0].slice(0,action.index))));
  const buyerOwned=matches.filter(match=>{
   const action=[...match[0].matchAll(new RegExp('\\b'+delivery+'\\b','gi'))].at(-1);if(!action)return false;
   const at=(match.index||0)+(action.index||0),start=Math.max(text.lastIndexOf('.',at),text.lastIndexOf('!',at),text.lastIndexOf('?',at))+1;
@@ -454,11 +469,20 @@ export function reportDeliveryCondition(buyerText:string):'scope_required'|'unre
   // in the buyer's turn. Unknown predicates retain semantic checking; neither
   // an available report nor “once confirmed” establishes the required result.
   const referent='(?:it|that|this|(?:(?:the|this|that|our|your)\\s+)?(?:(?:material\\s+test|inspection|test|quality)\\s+)?report)';
-  const scoped=new RegExp('^'+referent+'\\s+(?:(?:needs? to|must|has to)\\s+)?(?:covers?|matches?|applies?\\s+to)\\s+(.+)$','i');
+  const scoped=new RegExp('^(?:'+referent+'\\s+(?:(?:needs? to|must|has to)\\s+)?(?:covers?|matches?|includes?|appl(?:y|ies)\\s+to)|(?:its|'+referent+'[\x27’]s)\\s+scope\\s+(?:includes?|contains?))\\s+(.+)$','i');
+  // Coverage can put the buyer's item first: "that drawing reference is
+  // within its scope". This is a positive report result, not a hold/approval
+  // instruction. Keep this grammar closed so added terms, negation or a
+  // separate engineering approval still require their own release check.
+  const item='(?:(?:(?:the|this|that|our|your|my)\\s+)?(?:(?:selected|exact|specific)\\s+)?(?:(?:drawing|product|part|item|model|grade|mesh)(?:\\s+reference)?|reference)|[A-Z]{1,6}[- ]?\\d{1,6})';
+  const report='(?:(?:the|this|that|our|your)\\s+)?(?:(?:material\\s+test|inspection|test|quality)\\s+)?report';
+  const scope='(?:its\\s+scope|'+report+'[\x27’]s\\s+scope|the\\s+scope\\s+of\\s+'+report+')';
+  const inverseScoped=new RegExp('^'+item+'\\s+(?:(?:is|falls?)\\s+within\\s+'+scope+'|is\\s+covered\\s+by\\s+'+report+')[,. ]*(?:please|okay|ok)?$','i');
   const nominal=/^(?:we|I)\s+need\s+coverage\s+(?:of|for)\s+(.+?)\s+confirmed$/i;
   if(conditions.every(condition=>{
    condition=condition.replace(/^(?:you(?:'re| are)\s+sure\s+(?:that\s+)?|(?:I|we|you)(?:'ve| have)?\s+(?:confirmed|verified|checked)\s+that\s+)/i,'');
    if(new RegExp('^'+referent+'\\s+matches$','i').test(condition))return true;
+   if(inverseScoped.test(condition))return true;
    const object=scoped.exec(condition)?.[1]||nominal.exec(condition)?.[1];
    return !!object&&!/\b(?:not|never|no|doesn't|don't|isn't|aren't|and|or|unless|if|when|because|since|before|after|once|provided|confirms?|approves?|discount|approval|permission|authorized|certif\w*|guarantee\w*)\b|[;!?]/i.test(object);
   }))return 'scope_required';
@@ -486,7 +510,8 @@ export function buyerReleaseState(context:VerificationPolicyContext):BuyerReleas
  for(const raw of texts){
   const text=raw.replace(/[’‘]/g,"'");
   const currentCondition=reportDeliveryCondition(text);
-  const cancellation=/\b(?:cancel|forget|withdraw)\b[^.!?]{0,35}\b(?:send|request|documents?|report)\b|\b(?:do not|don't)\s+(?:send|email|share)\s+(?:anything|it|the report)[.!]?\s*$/i.test(text)&&!currentCondition&&!/\b(?:until|before|unless)\b/i.test(text);
+  const cancellation=/\b(?:cancel|forget|withdraw)\b[^.!?]{0,35}\b(?:send|request|documents?|report)\b/i.test(text)
+   ||/\b(?:do not|don't)\s+(?:send|email|share)\s+(?:anything|it|the report)[.!]?\s*$/i.test(text)&&!currentCondition&&!/\b(?:until|before|unless)\b/i.test(text);
   if(cancellation){state.scope=false;state.approval=false;state.unresolved=false;state.hold=true;continue;}
   // Approval of a drawing is distinct from permission to send it. A later
   // hold in the same buyer turn still applies even after the approval below.
@@ -576,7 +601,9 @@ function technicalSupportAssertion(clause:string,context:VerificationPolicyConte
  // An available report supports attaching it, never a newly invented claim
  // about what it proves. Check the asserted contents/outcome, not just its noun.
  const afterArtifact=artifact?clause.slice(clause.toLowerCase().indexOf(artifact.toLowerCase())+artifact.length):'';
- const artifactContent=offered&&/\b(?:prov(?:es|ing)|show(?:s|ing)|confirm(?:s|ing)|demonstrat(?:es|ing)|certif(?:ies|ying)|establish(?:es|ing)|validat(?:es|ing)|guarantee(?:s|d)?|meets?|complies|passes|ensures|certified)\b/i.test(afterArtifact);
+ const beforeArtifact=artifact?clause.slice(0,clause.toLowerCase().indexOf(artifact.toLowerCase())):'';
+ const artifactContent=offered&&(/\b(?:prov(?:es|ing)|show(?:s|ing)|confirm(?:s|ing)|demonstrat(?:es|ing)|certif(?:ies|ying)|establish(?:es|ing)|validat(?:es|ing)|guarantee(?:s|d)?|meets?|complies|passes|ensures|certified)\b/i.test(afterArtifact)
+  ||/\b(?:certified|accredited|guaranteed|compliant)\s+(?:[a-z-]+\s+){0,2}$/i.test(beforeArtifact));
  const productAssertion=affirmativeProductAssertion(clause,context);
  if(!method&&!offered&&!productAssertion)return;
  const subjects=[...clause.matchAll(IDENTITY)].map(item=>normalize(item[0]));
@@ -818,7 +845,8 @@ export function assessReplyVerification(say: string, context: VerificationPolicy
     if(conflicts.length)add(text,part.start,'supplier_claim',{supported:false,reason:conflicts.join(' ')});
     const commercial=commercialActionSupport(text,context);
     if(commercial)add(text,part.start,'supplier_claim',commercial);
-    const temporalText=text.replace(/\bwithin(?=\s+(?:(?:the|that|this|our|your)\s+)?(?:(?:material test|inspection|test)\s+)?report(?:['’]s)?\s+(?:scope|coverage)\b)/gi,'inside');
+    const temporalText=text.replace(/\bwithin(?=\s+(?:(?:the|that|this|our|your)\s+)?(?:(?:material test|inspection|test)\s+)?report(?:['’]s)?\s+(?:scope|coverage)\b)/gi,'inside')
+      .replace(/\bwithin(?=\s+(?:the\s+)?scope\s+of\s+(?:(?:the|that|this|our|your)\s+)?(?:(?:material test|inspection|test)\s+)?report\b)/gi,'inside');
     const responseTiming = /\b(?:I|we)(?:['’]ll|\s+(?:will|can|would))\b.{0,85}\b(?:soon|shortly|ASAP|quickly|in\s+a\s+bit|right\s+away|promptly|immediately|within|by\s+(?:\d|tomorrow|today|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)|in\s+\d+\s+(?:hours?|days?)|tomorrow|today)\b/i.exec(temporalText);
     if (responseTiming&&!declinesResponseDeadline(text)) add(text, part.start, 'timing', { supported: timingAgreed(text, context), reason: 'A rep response deadline requires an explicitly agreed specific day/time; document facts do not authorize it.' });
     // A bounded inquiry followed by a result-conditional document send still
