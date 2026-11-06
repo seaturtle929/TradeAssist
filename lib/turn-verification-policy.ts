@@ -488,15 +488,12 @@ export function isAwaitingBuyerDocumentReceipt(text:string):boolean {
  return /^(?:I|we)(?:['’]ll|\s+(?:will|can))\s+(?:be\s+)?(?:(?:look(?:ing)? out|watch(?:ing)?|wait(?:ing)?)\s+for|await(?:ing)?)\s+(?:your|the)\s+(?:email|e-mail|message|drawing|documents?|reply)(?:\s+(?:from you|when ready))?[.!]?$/i.test(line)
   ||/^(?:(?:I am|I'm|we are|we're)\s+)?looking\s+forward\s+to\s+(?:receiving\s+)?(?:your|the)\s+(?:email|e-mail|message|drawing|documents?|reply)(?:\s+(?:from you|when ready))?[.!]?$/i.test(line);
 }
-function preservesBuyerApproval(say:string,approver:BuyerReleaseState['approver']='buyer'):boolean {
- if(/\b(?:regardless|anyway|without (?:your )?approval|even if you (?:do not|don't) approve)\b/i.test(say))return false;
- if(approver==='engineering'&&!/\b(?:engineer|engineering)\b/i.test(say))return false;
- if(approver==='manager'&&!/\bmanager\b/i.test(say))return false;
- const line=say.replace(/[’‘]/g,"'").replace(/your (?:engineer|engineering team|team|manager)(?:'s)? approval/ig,'your approval').replace(/your (?:engineer|engineering team|team|manager)\s+approv/ig,'you approv');
- return /\b(?:wait|hold)\b[^.!?]{0,35}\byour approval\b[^.!?]{0,25}\bbefore\s+(?:sending|emailing|sharing|forwarding|including|attaching)/i.test(line)
-  ||/\b(?:won't|will not|do not|don't)\s+(?:send|email|share|forward|include|attach)\b[^.!?]{0,60}\buntil\s+(?:you|your team)\s+(?:approv|sign)/i.test(line)
-  ||/\b(?:send|email|share|forward|include|attach|reply|respond)\b[^.!?]{0,50}\b(?:after|once|when)\s+(?:you|your team)\s+(?:approv|sign)/i.test(line)
-  ||/^\s*(?:once|after|when)\s+(?:you|your team)\s+(?:approv|sign)[^,;.!?]*,\s*(?:I|we)(?:['’]ll|\s+(?:will|can))\s+(?:send|email|share|forward|include|attach|reply|respond)\b/i.test(line);
+function preservesBuyerApproval(say:string,approver:BuyerReleaseState['approver'],context:VerificationPolicyContext):boolean {
+ const meaning=analyzeDocumentActionMeaning(say,context);
+ // Use the same closed release interpretation as factual/coverage checks.
+ // Approval mentioned anywhere else in the sentence is not document release,
+ // and one approved action cannot license another unconditioned send.
+ return meaning.outgoing.length>0&&meaning.outgoing.every(action=>action.approvals.includes(approver));
 }
 
 /** Offering a technical method or qualified artifact asserts support exists.
@@ -759,7 +756,7 @@ export function assessReplyVerification(say: string, context: VerificationPolicy
    for(const action of actions)if(!isAwaitingBuyerDocumentReceipt(action)&&hasAffirmativeOutgoingDocumentAction(action)){
     const start=sentence.start+sentence.text.indexOf(action);
     if(release.hold)add(action,start,'supplier_claim',{supported:false,reason:'The buyer cancelled or withheld this send and has not released it again. A company document being available does not override that instruction.'});
-    if(buyerApproval&&!preservesBuyerApproval(action,release.approver))add(action,start,'supplier_claim',{supported:false,reason:'The buyer withheld permission to send until they approve. Preserve the buyer’s stated approver before every promised document send; confirming report coverage or mentioning approval for a different action does not release the documents.'});
+    if(buyerApproval&&!preservesBuyerApproval(action,release.approver,context))add(action,start,'supplier_claim',{supported:false,reason:'The buyer withheld permission to send until they approve. Preserve the buyer’s stated approver before every promised document send; confirming report coverage or mentioning approval for a different action does not release the documents.'});
     const meaning=analyzeDocumentActionMeaning(action.trim(),context);
     if(buyerScope&&meaning.weakensPositiveMatch)add(action,start,'supplier_claim',{supported:false,reason:'This send explicitly permits delivery without the buyer’s required positive report match. An alternative approval, regardless clause, or sending whether it matches or not cannot release that condition.'});
     else if(buyerScope&&meaning.outgoing.some(send=>send.condition!=='coverage_positive'))add(action,start,'supplier_claim',{supported:false,reason:'The buyer made delivery conditional on a positive report match. Preserve that condition for every promised send; completing a check or conditioning a different action does not authorize this delivery.'});

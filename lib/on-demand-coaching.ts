@@ -363,8 +363,13 @@ export function onDemandSuggestionProblems(say:string,context:CoachingContext):s
  if(releaseRestriction){
   const line=say.replace(/[’‘]/g,"'");
   const sharedHold=documentActions.find(meaning=>meaning.withholding)?.withholding;
-  const acknowledgesHold=!!sharedHold||/\b(?:wait|hold|won't\s+(?:send|email|share)|will not\s+(?:send|email|share)|not\s+(?:send|email|share|sending|emailing|sharing))\b/i.test(line);
-  const acknowledgesApproval=sharedHold?.approval===releaseRestriction.approver||/\b(?:approval|approv\w*|sign[- ]?off)\b/i.test(line)&&(!releaseRestriction.approval||releaseRestriction.approver==='buyer'||new RegExp('\\b(?:'+(releaseRestriction.approver==='manager'?'manager':'engineer|engineering')+')\\b','i').test(line));
+  const outgoing=documentActions.flatMap(meaning=>meaning.outgoing);
+  // A closed promise gated on BOTH the actual positive match and the stated
+  // approver already respects the hold. Reuse the factual checker's action
+  // meaning; requiring an extra "wait" phrase rejects the same safe action.
+  const gatedSend=!releaseRestriction.hold&&!releaseRestriction.unresolved&&outgoing.length>0&&outgoing.every(action=>(!releaseRestriction.scope||action.condition==='coverage_positive')&&(!releaseRestriction.approval||action.approvals.includes(releaseRestriction.approver)));
+  const acknowledgesHold=gatedSend||!!sharedHold||/\b(?:wait|hold|won't\s+(?:send|email|share)|will not\s+(?:send|email|share)|not\s+(?:send|email|share|sending|emailing|sharing))\b/i.test(line);
+  const acknowledgesApproval=outgoing.length?gatedSend:sharedHold?.approval===releaseRestriction.approver||/\b(?:approval|approv\w*|sign[- ]?off)\b/i.test(line)&&(!releaseRestriction.approval||releaseRestriction.approver==='buyer'||new RegExp('\\b(?:'+(releaseRestriction.approver==='manager'?'manager':'engineer|engineering')+')\\b','i').test(line));
   if(!acknowledgesHold||releaseRestriction.approval&&!acknowledgesApproval)problems.push('Acknowledge the buyer’s current restriction on sending and the stated approver. A promise to check coverage alone misses the changed request; do not imply that a coverage match releases this hold.');
  }
  const conditionalReply=conditionalReportReply(context);
