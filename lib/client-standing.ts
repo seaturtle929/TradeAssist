@@ -1,9 +1,10 @@
+import {documentStateFromReviewedRecap,deriveDocumentState,type DocumentState} from './document-state.ts';
 import type {ClientRecord,ClientContextEntry} from './client-records';
 import type {CallRecord} from './trade';
 import type {PreparationStage} from './client-preparation';
 import {isDocumentRequest} from './document-call-evidence.ts';
 
-export type ClientStanding={version:1;companyId:string;clientId:string;source?:{callId:string;at:number;reviewedAt:number};summary:string;reached:string;buyerRequested:string[];repOwes:string[];buyerOwes:string[];unknowns:string[];sendStatus:'pending'|'sent'|'unknown';receiptStatus:'confirmed'|'unconfirmed';reviewStatus:'confirmed'|'unconfirmed';contact?:{name:string;role?:string;email?:string};documents:string[];outsideUpdate?:string;evidence:{callId:string;at:number;text:string;kind:'reviewed_recap'|'quote'|'rep_update'}[]};
+export type ClientStanding={documentState?:DocumentState;version:1;companyId:string;clientId:string;source?:{callId:string;at:number;reviewedAt:number};summary:string;reached:string;buyerRequested:string[];repOwes:string[];buyerOwes:string[];unknowns:string[];sendStatus:'pending'|'sent'|'unknown';receiptStatus:'confirmed'|'unconfirmed';reviewStatus:'confirmed'|'unconfirmed';contact?:{name:string;role?:string;email?:string};documents:string[];outsideUpdate?:string;evidence:{callId:string;at:number;text:string;kind:'reviewed_recap'|'quote'|'rep_update'}[]};
 const clean=(text:string)=>text.replace(/\\r\\n|\\n/g,'\n').replace(/[‘’]/g,"'").replace(/[\t ]+/g,' ').trim();
 const plain=(text:string)=>clean(text).replace(/\s+/g,' ').trim();
 const unique=(values:string[])=>[...new Set(values.filter(Boolean))];
@@ -123,7 +124,29 @@ export function buildClientStanding(input:{client:ClientRecord;calls:CallRecord[
  const usePattern=new RegExp('\\b(?:buyer|contact|customer|we|I|'+clientNames.join('|')+')\\b.{0,40}\\b(?:uses?|buy|buys|need|needs|require|requires)\\b.{0,100}\\b(?:for|in)\\b','i');
  const useKnown=parts.some(part=>!uncertain.test(part)&&!/^Salesperson|^Reason for calling/i.test(part)&&usePattern.test(part));
  if(!useKnown)base.unknowns.push('Product usage and requirements are unconfirmed.');
- const semantic=[base.reached,...base.buyerRequested,base.sendStatus==='sent'?`The salesperson reports sending the ${joined(documents)}. Receipt is ${base.receiptStatus}; review is ${base.reviewStatus}.`:base.repOwes[0]];
+ // The editable reviewed account is authoritative. Its paired structured
+ // handoffs carry the same action states as live coaching, never raw omitted
+ // speech or a previous unchecked extraction. Coverage needs source authority,
+ // so reviewed speech alone leaves it unknown.
+ const documentState=call.wrapUp?.documentState&&call.wrapUp.documentStateRecap===rawRecap?structuredClone(call.wrapUp.documentState):documentStateFromReviewedRecap(recap,{buyerNames:contact?[contact.name]:client.contacts.filter(row=>row.kind!=='main_line'&&!row.review?.required).map(row=>row.name)});
+ if(documentState.transfers.length){
+  const update=deriveDocumentState({seed:documentState,turns:outsideUpdate?[{id:'reviewed-rep-update',role:'you',text:outsideUpdate,source:'rep_update'}]:[]});
+  base.documentState=update;
+  const outgoing=update.transfers.filter(row=>row.sender==='you'&&row.phase!=='cancelled'&&row.events.some(event=>['requested','promised','offered','sent','received'].includes(event.kind))),checks=update.transfers.filter(row=>row.sender==='you'&&row.phase==='checking'),incoming=update.transfers.filter(row=>row.sender==='buyer'&&row.phase!=='cancelled');
+  base.documents=outgoing.map(row=>row.document);
+  const requested=outgoing.filter(row=>row.events.some(event=>event.kind==='requested'));
+  base.buyerRequested=requested.length?[`${contact?.name||'The buyer'} requested the ${joined(requested.map(row=>row.document))}${requested.some(row=>row.condition)?'; subject to '+requested.filter(row=>row.condition).map(row=>row.condition!.text).join(' and '):''}.`]:[];
+  base.repOwes=outgoing.map(row=>row.sendStatus==='reported_sent'?`The salesperson reports sending the ${row.document}; receipt remains ${row.receiptStatus}.`:`${row.events.some(event=>event.kind==='promised')?'Promised to send':'Requested follow-up: send'} the ${row.document}${row.condition?'; only after '+(row.condition.kind==='coverage_positive'?'positive report coverage is confirmed':'the buyer’s stated condition is satisfied'):''}; sending is pending.`);
+  if(outgoing.length>1&&outgoing.every(row=>!row.condition&&row.sendStatus!=='reported_sent'))base.repOwes=[`Send the ${joined(outgoing.map(row=>row.document))}; sending remains pending.`];
+  if(!outgoing.length&&update.transfers.some(row=>row.phase==='cancelled'))base.repOwes=['The document request was cancelled; no remaining document-send obligation is recorded.'];
+  base.repOwes.push(...checks.map(row=>`Check whether the ${row.label||row.document} covers the buyer’s reference; coverage remains unknown.`));
+  base.buyerOwes=incoming.map(row=>row.receiptStatus==='confirmed'?`The salesperson confirmed receipt of the buyer’s ${row.document}.`:row.sendStatus==='reported_sent'?`The buyer reports sending the ${row.document}; salesperson receipt remains unconfirmed.`:`The buyer ${row.phase==='offered'?'offered':'promised'} to send the ${row.document}; it remains pending and receipt is unconfirmed.`);
+  base.sendStatus=outgoing.length?outgoing.every(row=>row.sendStatus==='reported_sent')?'sent':'pending':'unknown';
+  base.receiptStatus=outgoing.length&&outgoing.every(row=>row.receiptStatus==='confirmed')?'confirmed':'unconfirmed';
+  for(const row of update.transfers)if(row.document==='test reports'&&row.coverage==='unknown')base.unknowns.push('Report coverage remains unknown; the buyer’s reference and a promise to check are not source evidence.');
+  for(const row of incoming)if(row.receiptStatus!=='confirmed')base.unknowns.push(`The buyer’s ${row.document} has not been confirmed received by the salesperson.`);
+ }
+ const semantic=[base.reached,...base.buyerRequested,base.sendStatus==='sent'?`The salesperson reports sending the ${joined(base.documents)}. Receipt is ${base.receiptStatus}; review is ${base.reviewStatus}.`:base.repOwes[0]];
  // A handwritten account is preserved verbatim as the current summary. Only
  // old extractive recaps are presented through their concise structured view.
  const extractive=/^(?:Participants|Reason for calling|Discussed|Salesperson)[^\n]*:/i.test(recap);

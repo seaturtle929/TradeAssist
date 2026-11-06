@@ -1,3 +1,5 @@
+import {configurationReferences} from './company-configuration.ts';
+import {deriveDocumentState,isBuyerOwnedDocumentSend,type DocumentState} from './document-state.ts';
 import {reviewedClientStateFacts,reviewedClientNeedSeed} from './client-coaching-context.ts';
 import {fieldEvidence,emailEvidenceFor,currentContactEmailEvidence,type BuyerFactTurn} from "./buyer-facts.ts";
 import {deriveCallParticipant,isParticipantIntroduction,isCurrentParticipantIntroduction,preparedPurchasingParticipant,type CallParticipant} from "./call-participant.ts";
@@ -9,8 +11,8 @@ export {hasClearConversationRefusal} from './conversation-boundary.ts';
 export type StateFact={value:string;turnId:string;quote:string;source:"transcript"|"memory"|"context"};
 export type CallCommitment={id:string;action:string;owner:"you"|"buyer";status:"needs_email"|"ready"|"blocked"|"fulfilled"|"cancelled";missing:string[];evidence:{turnId:string;quote:string}[]};
 export type ImmediateBuyerObjective={kind:'respond_to_question'|'address_objection'|'clarify_uncertainty'|'acknowledge_correction'|'respect_refusal'|'complete_commitment'|'continue_conversation';purpose:string;buyerTurnId?:string;suspendedCommitmentIds:string[]};
-export type ConversationState={callId?:string;stageId:string;stageName?:string;stagePurpose:string;moment:string;participant:CallParticipant;buyerNeeds?:BuyerNeeds;facts:Record<string,StateFact>;missingFacts:string[];commitments:CallCommitment[];sequence:{id:string;label:string;owner:"you"|"buyer";status:string}[];lastAgreedNextStep:string;nextAction:{kind:string;gap:string;purpose:string;easyToAnswer:boolean;unlocks:string;alreadyAnswered:boolean};immediateObjective?:ImmediateBuyerObjective;deferredCommitments?:{id:string;reason:string;resumeWhen:string}[];movedPastDiscovery:boolean;processedTurnIds?:string[]};
-export type StateInput={clientContext?:import('./client-coaching-context').ClientCoachingContext;clientId?:string;contactId?:string;manufacturer?:{id?:string};companyConfiguration?:import("./company-configuration").CallConfigurationBinding;callId?:string;turns?:BuyerFactTurn[];callContext?:{stageId?:string;knownFacts?:string;doNotGuess?:string};stageMap?:{id:string;name:string;purpose:string}[];buyerMemory?:{callId?:string;participant?:CallParticipant;buyerNeeds?:BuyerNeeds;facts?:Record<string,StateFact>;commitments?:CallCommitment[];lastAgreedNextStep?:string;sequence?:ConversationState["sequence"];processedTurnIds?:string[]}};
+export type ConversationState={callId?:string;stageId:string;stageName?:string;stagePurpose:string;moment:string;participant:CallParticipant;buyerNeeds?:BuyerNeeds;documents?:DocumentState;facts:Record<string,StateFact>;missingFacts:string[];commitments:CallCommitment[];sequence:{id:string;label:string;owner:"you"|"buyer";status:string}[];lastAgreedNextStep:string;nextAction:{kind:string;gap:string;purpose:string;easyToAnswer:boolean;unlocks:string;alreadyAnswered:boolean};immediateObjective?:ImmediateBuyerObjective;deferredCommitments?:{id:string;reason:string;resumeWhen:string}[];movedPastDiscovery:boolean;processedTurnIds?:string[]};
+export type StateInput={sources?:import('./document-product-evidence').DocumentProductSource[];clientContext?:import('./client-coaching-context').ClientCoachingContext;clientId?:string;contactId?:string;manufacturer?:{id?:string};companyConfiguration?:import("./company-configuration").CallConfigurationBinding;callId?:string;turns?:BuyerFactTurn[];callContext?:{stageId?:string;knownFacts?:string;doNotGuess?:string};stageMap?:{id:string;name:string;purpose:string}[];buyerMemory?:{callId?:string;participant?:CallParticipant;buyerNeeds?:BuyerNeeds;facts?:Record<string,StateFact>;commitments?:CallCommitment[];lastAgreedNextStep?:string;sequence?:ConversationState["sequence"];processedTurnIds?:string[];documents?:DocumentState}};
 /** A familiar buyer name never establishes continuity with a previous phone call. */
 export function currentCallMemory<T extends {callId?:string}>(callId:string|undefined,memory:T|undefined):T|undefined {return callId&&memory?.callId===callId?memory:undefined;}
 const norm=(value:string)=>value.replace(/[’‘]/g,"'").toLowerCase();
@@ -64,9 +66,35 @@ const materialRefusal=(line:string)=>{
 };
 const conditionalOffer=(line:string)=>/\b(?:if|unless|maybe|perhaps)\b/.test(line);
 const conditionalMaterialRequest=(line:string)=>/\b(?:i|we)(?:'ll| will| would| might| may) (?:ask|request)\b.{0,70}\b(?:send|email|share|forward|attach)\b/.test(line)||/\b(?:if|unless|once|when|after)\b.{0,100}\b(?:send|email|share|forward|attach)\b/.test(line)&&!/^\s*if (?:possible|you can|it's possible|it is possible)\b/.test(line);
-const affirmativeMaterialClause=(line:string)=>!materialRefusal(line)&&!conditionalMaterialRequest(line)&&materialRequest.test(line);
-const definiteSendingPromise=(line:string)=>/\b(?:i|we)(?:'ll| will) (?:send|email|share|forward)\b/.test(line)&&materialRequest.test(line)&&!conditionalOffer(line)&&!/\b(?:not|never|didn't|did not|don't|do not|won't|will not)\b/.test(line)&&!line.includes('?');
-const sendingOffer=(line:string)=>materialRequest.test(line)&&!materialRefusal(line)&&(/\b(?:i|we)(?:'ll| will| can| could| might| may) (?:send|email|share|forward)\b|\b(?:can|could|may|should) (?:i|we) (?:send|email|share|forward)\b|\bwould you (?:like|want)\b.{0,30}\b(?:send|email|share|forward)\b/.test(line));
+const deliveryVerb='(?:send|email|share|forward|attach|include)';
+const independentDeliveryMove=new RegExp('^(?:'+deliveryVerb+'\\b|you\\s+(?:(?:can|could|should|may|will)\\s+)?'+deliveryVerb+'\\b|(?:can|could|would|will|may|should)\\s+(?:you|i|we)\\s+(?:(?:please|also|just)\\s+)*'+deliveryVerb+'\\b|(?:i|we)(?:\\x27ll|\\s+(?:will|can|could|would|may|might))\\s+(?:(?:please|also|just)\\s+)*'+deliveryVerb+'\\b|(?:i|we)(?:\\x27d|\\s+would)?\\s+(?:like|want|need)\\s+(?:you\\s+)?to\\s+'+deliveryVerb+'\\b|would you (?:like|want)\\b)');
+/** A mentioned delivery is not an independent request or promise. Keep a
+ * dependent lead-in as context, then inspect the actual main move. Returning
+ * that main clause also prevents its earlier document nouns from becoming
+ * newly requested materials. No word/name/code from a saved call is special. */
+function independentMaterialAction(line:string,repOwnedOnly=false):string|undefined {
+  const courtesy=(value:string)=>value.trim().replace(/^(?:(?:well|okay|ok|yes|yeah|sure|great|thanks|thank you|actually|instead|also|just|only|please|now)[,:]?\s+(?:and\s+)?)*/,'').replace(/^(?:how about|what about)(?: (?:this|that))?[: ,]*\s*/,'').replace(/^if (?:possible|you can|it's possible|it is possible)[, ]*/,'');
+  let main=courtesy(line);
+  if(/^(?:before|after|while|when|once|until|unless|if|whenever|as soon as|as long as)\b/.test(main)&&!/^if (?:possible|you can|it's possible|it is possible)\b/.test(main)){
+    const comma=main.indexOf(',');
+    if(comma>=0)main=main.slice(comma+1).trim();
+    else {
+      // ASR may omit a comma: a separate modal request is still identifiable.
+      const request=new RegExp('\\b(?:can|could|would|will|may|should)\\s+(?:you|i|we)\\s+(?:(?:please|also|just)\\s+)*'+deliveryVerb+'\\b').exec(main);
+      if(!request)return;main=main.slice(request.index);
+    }
+  }
+  const coordinatedRequest=new RegExp('\\b(?:and|then)\\s+(?=(?:(?:please|also|just)\\s+)*(?:'+deliveryVerb+'\\b|you\\s+(?:(?:can|could|should|may|will)\\s+)?'+deliveryVerb+'\\b|(?:can|could|would|will|may|should)\\s+you\\s+(?:(?:please|also|just)\\s+)*'+deliveryVerb+'\\b))','g');
+  const coordinated=[...main.matchAll(coordinatedRequest)];
+  const starts=[0,...[...main.matchAll(/,\s*/g),...coordinated].map(match=>(match.index||0)+match[0].length)];
+  const candidates=starts.map(start=>main.slice(start,coordinated.find(match=>(match.index||0)>=start)?.index));
+  const actions=[...new Set(candidates.map(courtesy).filter(value=>independentDeliveryMove.test(value)&&materialRequest.test(value)&&(!repOwnedOnly||!isBuyerOwnedDocumentSend(value))))];
+  return actions.length?actions.join(' '):undefined;
+}
+const affirmativeMaterialAction=(line:string,repOwnedOnly=false)=>!materialRefusal(line)&&!conditionalMaterialRequest(line)?independentMaterialAction(line,repOwnedOnly):undefined;
+const affirmativeMaterialClause=(line:string)=>!!affirmativeMaterialAction(line);
+const definiteSendingPromise=(line:string)=>{const main=independentMaterialAction(line);return !!main&&/^(?:i|we)(?:'ll| will) (?:send|email|share|forward)\b/.test(main)&&!conditionalOffer(line)&&!/\b(?:not|never|didn't|did not|don't|do not|won't|will not)\b/.test(main)&&!line.includes('?');};
+const sendingOffer=(line:string)=>{const main=independentMaterialAction(line);return !!main&&!materialRefusal(main)&&(/\b(?:i|we)(?:'ll| will| can| could| might| may) (?:send|email|share|forward)\b|\b(?:can|could|may|should) (?:i|we) (?:send|email|share|forward)\b|\bwould you (?:like|want)\b.{0,30}\b(?:send|email|share|forward)\b/.test(main));};
 const acceptsOffer=(line:string)=>/^(?:(?:okay|ok)[, ]*)?(?:yes|yeah|yep|sure|please do|go ahead|that (?:works|would be (?:useful|helpful|good|great)))(?:[, ]*(?:please|thanks|thank you|go ahead|send it(?: over)?|do that))?[.!\s]*$/.test(line.trim());
 const incompleteReview=(line:string)=>/\b(?:not|never|hasn't|has not|haven't|have not|isn't|is not|aren't|are not|didn't|did not|don't know|do not know|not sure|still waiting)\b.{0,55}\b(?:review\w*|check\w*|evaluat\w*|finish\w*|approv\w*|complete\w*|done)\b|\b(?:review|evaluation)\b.{0,25}\b(?:not|pending|incomplete|unfinished)\b/.test(line);
 const conditionalReview=(line:string)=>/\b(?:if|once|when|after|before|until)\b.{0,70}\b(?:review\w*|check\w*|evaluat\w*|finish\w*|approv\w*|complete\w*|done)\b/.test(line);
@@ -75,7 +103,7 @@ const completedReview=(line:string)=>/\b(?:engineer\w*|technical team|engineerin
 export const hasAffirmativeMaterialsRequest=(raw:string)=>clauses(norm(raw)).some(affirmativeMaterialClause);
 export const hasMaterialsRefusal=(raw:string)=>clauses(norm(raw)).some(materialRefusal);
 export const materialsNamed=(raw:string)=>materialNames(norm(raw));
-export const affirmativeMaterialsNamed=(raw:string)=>[...new Set(clauses(norm(raw)).filter(affirmativeMaterialClause).flatMap(materialNames))];
+export const affirmativeMaterialsNamed=(raw:string)=>[...new Set(clauses(norm(raw)).flatMap(line=>materialNames(affirmativeMaterialAction(line)||'')))];
 
 /** Address receipt may share a turn with a new stakeholder/need constraint.
  * Strip only ordinary receipt wording, not the buyer's additional clauses. */
@@ -188,18 +216,21 @@ export function deriveConversationState(input:StateInput):ConversationState {
     if(scoped.current){facts.email={...scoped.current,source:'transcript'};delete facts.email_withdrawn;}
     else if(scoped.withdrawn||!sameContact||!memory?.facts?.email){delete facts.email;if(scoped.withdrawal)facts.email_withdrawn={...scoped.withdrawal,source:'transcript'};}
   }
-  const commitments=(memory?.commitments||[]).map(item=>structuredClone(item));
+  const fullCommitmentHistory=!!memory?.processedTurnIds?.length&&memory.processedTurnIds.every(id=>turnIds.has(id));
+  const commitmentSeed=fullCommitmentHistory?undefined:memory;
+  const documents=deriveDocumentState({turns,seed:commitmentSeed?.documents||input.clientContext?.standing?.documentState,sources:input.companyConfiguration?configurationReferences(input.companyConfiguration.snapshot):input.sources});
+  const commitments=(commitmentSeed?.commitments||[]).map(item=>structuredClone(item));
   let send=commitments.find(item=>item.id==="send_materials"),review=false,prices=false;
   let reviewType:'engineer'|'buyer'|undefined=commitments.some(item=>item.id==='engineer_review')?'engineer':commitments.some(item=>item.id==='buyer_review')?'buyer':undefined;
   let reviewed=commitments.find(item=>['engineer_review','buyer_review'].includes(item.id))?.status==="fulfilled";
   let pricesDiscussed=commitments.find(item=>item.id==="prices_after_review")?.status==="fulfilled";
-  let sequence=structuredClone(memory?.sequence||[]),lastAgreedNextStep=memory?.lastAgreedNextStep||"";
+  let sequence=structuredClone(commitmentSeed?.sequence||[]),lastAgreedNextStep=commitmentSeed?.lastAgreedNextStep||"";
   for(let i=0;i<turns.length;i++) {
-    const turn=turns[i];if(turn.id&&memory?.processedTurnIds?.includes(turn.id))continue;
+    const turn=turns[i];if(turn.id&&commitmentSeed?.processedTurnIds?.includes(turn.id))continue;
     const line=norm(turn.text),evidence={turnId:turn.id||`turn-${i}`,quote:turn.text};
     const buyer=turn.role==="buyer",rep=turn.role==="you";
     const parts=clauses(line),refused=buyer?parts.filter(materialRefusal):[];
-    const requestParts=buyer?parts.filter(affirmativeMaterialClause):[];
+    const requestParts=buyer?parts.map(part=>affirmativeMaterialAction(part,true)).filter((part):part is string=>!!part):[];
     const globalRefusal=buyer&&hasClearConversationRefusal(line);
     const existingMaterials=send?materialNames(norm(send.action)):[];
     const refusedMaterials=refused.flatMap(materialNames);
@@ -216,9 +247,10 @@ export function deriveConversationState(input:StateInput):ConversationState {
     const suppliesRequestedAddress=!!fieldEvidence('Email',[turn])&&!!previousRep&&previousRep.text.includes('?')&&/\b(?:email|address)\b/i.test(previousRep.text);
     const accepted=buyer&&(acceptsOffer(line)||suppliesRequestedAddress)&&previousRep&&sendingOffer(norm(previousRep.text))&&turns.slice(previousRepIndex+1,i).every(item=>item.role==='buyer'&&/^(?:uh+|um+|hmm+|one moment|one second|hold on)[.!\s]*$/.test(norm(item.text).trim()));
     const request=!!requestParts.length||!!accepted;
-    const promise=rep&&parts.some(definiteSendingPromise);
+    const promiseParts=rep?parts.filter(definiteSendingPromise).map(part=>independentMaterialAction(part)!):[];
+    const promise=promiseParts.length>0;
     if(request||promise) {
-      const requestedLine=accepted?norm(previousRep!.text):promise?line:requestParts.join(' ');
+      const requestedLine=accepted?independentMaterialAction(norm(previousRep!.text))||norm(previousRep!.text):promise?promiseParts.join(' '):requestParts.join(' ');
       const requestedGroups=materialGroups(requestedLine),materials=describeMaterialGroups(requestedGroups);
       if(!send||send.status==="cancelled"||send.status==="fulfilled") {
         send={id:"send_materials",action:`Send ${materials}`,owner:"you",status:"needs_email",missing:["email"],evidence:[]};
@@ -263,7 +295,17 @@ export function deriveConversationState(input:StateInput):ConversationState {
     lastAgreedNextStep=sequence.map(step=>step.label).join(" → ");
   }
   const configured=map.find(stage=>stage.id===context.stageId)||map[0]||{id:context.stageId||"cold_call",name:"Cold call",purpose:"Understand the buyer and agree a next step"};
-  const advanced=send&&send.status!=="cancelled";
+  // Incoming buyer-owned documents and conditionally released reports have
+  // their own owner/status. They must not become the rep’s generic email gap.
+  const ledgerCommitments=documents.transfers.filter(item=>item.document==='drawings'&&item.sender==='buyer'&&item.events.some(event=>['offered','promised','sent','received'].includes(event.kind))||item.document==='test reports').map(item=>{
+    const delivery=item.events.some(event=>['requested','promised','offered','sent','received'].includes(event.kind));
+    const unmetCondition=!!item.condition&&(item.condition.kind!=='coverage_positive'||item.coverage!=='verified');
+    return {id:`document:${item.id}`,action:!delivery?`Check ${item.label||item.document} coverage`:`${item.sender==='buyer'?'Buyer sends':'Send'} ${item.label||item.document}${item.condition?` only after ${item.condition.kind==='coverage_positive'?'positive report coverage is confirmed':'the buyer’s stated condition is satisfied'}`:''}`,owner:item.sender,status:(item.phase==='cancelled'?'cancelled':!delivery?item.coverage==='verified'?'fulfilled':'ready':item.sendStatus==='reported_sent'?'fulfilled':item.sender==='buyer'?'blocked':unmetCondition?'blocked':facts.email?'ready':'needs_email') as CallCommitment['status'],missing:!delivery||item.sendStatus==='reported_sent'?[]:item.sender==='buyer'?['buyer document']:unmetCondition?[item.condition!.kind==='coverage_positive'?'verified report coverage':'buyer condition']:facts.email?[]:['email'],evidence:item.events.map(event=>({turnId:event.turnId,quote:event.quote}))};
+  });
+  for(const item of ledgerCommitments){const index=commitments.findIndex(old=>old.id===item.id);if(index>=0)commitments[index]=item;else commitments.push(item);}
+  if(!send&&ledgerCommitments.length){sequence=ledgerCommitments.map(item=>({id:item.id,label:item.action,owner:item.owner,status:item.status}));lastAgreedNextStep=sequence.map(step=>step.label).join(' → ');}
+  const canonicalFollowThrough=documents.transfers.some(row=>row.phase!=='cancelled'&&(row.sender==='buyer'&&['offered','promised','sent'].includes(row.phase)||row.sender==='you'&&row.events.some(event=>['requested','promised','check_promised'].includes(event.kind))));
+  const advanced=!!(send&&send.status!=="cancelled")||canonicalFollowThrough;
   const reviewStage=map.find(stage=>/spec|review|qualif/i.test(stage.id+" "+stage.name));
   const advanceStage=!input.companyConfiguration&&advanced&&reviewStage&&map.indexOf(configured)<map.indexOf(reviewStage)?reviewStage:configured;
   const latest=[...turns].reverse().find(turn=>turn.role!=="you")?.text||"";
@@ -278,16 +320,18 @@ export function deriveConversationState(input:StateInput):ConversationState {
       return /^(?:yes|yeah|yep|sure|okay|ok|please do|that (?:works|would be (?:useful|helpful|good|great)))[,.!\s]*$/i.test(turn.text.trim())&&/\b(?:send|email|share|review|receive)\b/i.test(previous)&&/\b(?:profile|specs?|information|materials|documents)\b/i.test(previous);
     });
   }
-  const confirmHandoffPlan=participant.afterTransfer&&!participant.transferPending&&!!advanced&&send?.status!=="fulfilled"&&!participant.handoffPlanAccepted;
+  const confirmHandoffPlan=participant.afterTransfer&&!participant.transferPending&&!!advanced&&!!send&&send.status!=="fulfilled"&&!participant.handoffPlanAccepted;
   const stagePurpose=advanced?`${advanceStage.purpose}. Agreed sequence retained: ${lastAgreedNextStep}. New questions or concerns can be addressed without losing this agreement.`:advanceStage.purpose;
   const routingAction=participant.transferPending?{
     kind:participant.transfer?.status==='intended'?'transfer_intended':'transfer_pending',gap:participant.transfer?.status==='intended'&&!facts.email?'alternative contact route':'',
     purpose:participant.transfer?.status==='intended'?"The routing contact has offered a conditional transfer; the target has not joined. Answer any current question, then choose a brief acknowledgment, an uncollected alternative contact route or a callback when useful. Do not re-ask for known information.":"The transfer is actively underway; acknowledge and give it room. The target has not joined, and a current routing-contact question still deserves an answer.",
     easyToAnswer:true,unlocks:'Reach the intended contact without assuming a completed handoff',alreadyAnswered:!!facts.email,
   }:participant.transfer?.status==='unavailable'?{kind:'contact_unavailable',gap:facts.email?'callback availability':'alternative contact route',purpose:'The intended contact was unavailable; use any known email and ask only for a useful missing contact route or callback opportunity.',easyToAnswer:true,unlocks:'An appropriate way to reach the absent contact',alreadyAnswered:!!facts.email}:undefined;
-  const interrupt=introduceContact||routingAction?undefined:immediateBuyerObjectiveFor(turns);
+  const currentObjective=introduceContact||routingAction?undefined:immediateBuyerObjectiveFor(turns);
+  const interrupt=canonicalFollowThrough&&currentObjective?.kind==='continue_conversation'?undefined:currentObjective;
+  const canonicalAction=canonicalFollowThrough&&!send?{kind:documents.transfers.some(row=>row.sender==='you'&&row.condition)?'confirm_conditional_send':documents.transfers.some(row=>row.sender==='buyer'&&row.receiptStatus!=='confirmed')?'await_buyer_document':'check_report_coverage',gap:'',purpose:'Respect the agreed document handoff: '+lastAgreedNextStep+'. Keep pending sending, receipt and unknown coverage distinct; do not reopen discovery or assume a positive check result.',easyToAnswer:true,unlocks:'The buyer’s chosen document follow-through',alreadyAnswered:true}:undefined;
   const deferredCommitments=interrupt?commitments.filter(item=>!['fulfilled','cancelled'].includes(item.status)).map(item=>({id:item.id,reason:interrupt.purpose,resumeWhen:'After responding to the current buyer concern, when the buyer is ready; do not assume the concern is resolved.'})):[];
-  const nextAction=routingAction|| (introduceContact?{kind:"introduce_contact",gap:"introduction",purpose:"Introduce yourself to the newly reached person; an earlier contact's agreement is not theirs.",easyToAnswer:true,unlocks:"A conversation with the newly reached contact",alreadyAnswered:false}:interrupt?{kind:interrupt.kind,gap:interrupt.kind==='respect_refusal'?'':"current buyer concern",purpose:interrupt.purpose,easyToAnswer:true,unlocks:"A useful response to the buyer's immediate concern",alreadyAnswered:false}:confirmHandoffPlan?{kind:"confirm_handoff_plan",gap:"current contact's agreement",purpose:"Check whether this newly reached person wants the earlier contact's suggested review before asking for an email.",easyToAnswer:true,unlocks:"Confirm the review plan with the newly reached person",alreadyAnswered:false}:send?.status==="needs_email"?{kind:"capture_email",gap:"email",purpose:"Complete the agreed sending commitment",easyToAnswer:true,unlocks:lastAgreedNextStep||"Send the requested materials",alreadyAnswered:false}
+  const nextAction=routingAction|| (introduceContact?{kind:"introduce_contact",gap:"introduction",purpose:"Introduce yourself to the newly reached person; an earlier contact's agreement is not theirs.",easyToAnswer:true,unlocks:"A conversation with the newly reached contact",alreadyAnswered:false}:interrupt?{kind:interrupt.kind,gap:interrupt.kind==='respect_refusal'?'':"current buyer concern",purpose:interrupt.purpose,easyToAnswer:true,unlocks:"A useful response to the buyer's immediate concern",alreadyAnswered:false}:confirmHandoffPlan?{kind:"confirm_handoff_plan",gap:"current contact's agreement",purpose:"Check whether this newly reached person wants the earlier contact's suggested review before asking for an email.",easyToAnswer:true,unlocks:"Confirm the review plan with the newly reached person",alreadyAnswered:false}:canonicalAction?canonicalAction:send?.status==="needs_email"?{kind:"capture_email",gap:"email",purpose:"Complete the agreed sending commitment",easyToAnswer:true,unlocks:lastAgreedNextStep||"Send the requested materials",alreadyAnswered:false}
     :send?.status==="ready"?{kind:"confirm_send",gap:"",purpose:"Confirm the agreed sending and review sequence",easyToAnswer:true,unlocks:"Send the requested materials",alreadyAnswered:true}
     :send?.status==="fulfilled"?{kind:reviewed?"discuss_prices":"follow_review",gap:reviewed?"approved_quote":"review_result",purpose:reviewed?"Advance to the agreed price discussion using verified terms":"Follow the agreed review before prices",easyToAnswer:true,unlocks:"Engineering feedback and a relevant quotation",alreadyAnswered:false}
     :{kind:"discovery",gap:/(?:pric|negotiat)/i.test(advanceStage.id)?"target_price":facts.specs?"priority_or_interest":"application",purpose:advanceStage.purpose,easyToAnswer:true,unlocks:"One relevant next action",alreadyAnswered:false});
@@ -295,7 +339,7 @@ export function deriveConversationState(input:StateInput):ConversationState {
   const turnMoment=buyerMomentFor(latest,freshGreeting);
   const moment=routingAction?"gatekeeper":introduceContact||confirmHandoffPlan&&!interrupt?"opening":interrupt?turnMoment:advanced?"agreed_next_step":participant.role==="routing"&&!["price_test","spec_question","polite_stall","contact_handoff"].includes(turnMoment)?"gatekeeper":turnMoment;
   const immediateObjective:ImmediateBuyerObjective=interrupt?{...interrupt,suspendedCommitmentIds:deferredCommitments.map(item=>item.id)}:{kind:['capture_email','confirm_send','follow_review','discuss_prices'].includes(nextAction.kind)?'complete_commitment':'continue_conversation',purpose:nextAction.purpose,buyerTurnId:turns.findLast(turn=>turn.role==='buyer')?.id,suspendedCommitmentIds:[]};
-  return {callId:input.callId,stageId:advanceStage.id,stageName:advanceStage.name,stagePurpose,moment,participant,buyerNeeds,facts,missingFacts:Object.keys(fields).filter(key=>!facts[key]),commitments,sequence,lastAgreedNextStep,nextAction,immediateObjective,deferredCommitments,movedPastDiscovery:!!advanced,processedTurnIds:[...new Set([...(memory?.processedTurnIds||[]),...turns.flatMap(turn=>turn.id?[turn.id]:[])])].slice(-600)};
+  return {callId:input.callId,stageId:advanceStage.id,stageName:advanceStage.name,stagePurpose,moment,participant,buyerNeeds,documents,facts,missingFacts:Object.keys(fields).filter(key=>!facts[key]),commitments,sequence,lastAgreedNextStep,nextAction,immediateObjective,deferredCommitments,movedPastDiscovery:!!advanced,processedTurnIds:[...new Set([...(memory?.processedTurnIds||[]),...turns.flatMap(turn=>turn.id?[turn.id]:[])])].slice(-600)};
 }
 
 /** Retain item names in the actual agreed document offer/request, not just its document category. */

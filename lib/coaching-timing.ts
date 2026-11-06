@@ -7,6 +7,8 @@ export type CoachingPhaseTiming={
  dispatchPreparationMs?:number; queueWaitMs?:number; providerSlotWaitMs?:number; continuedDrafts?:number;
  speculativeGenerations?:number; discardedSpeculations?:number; speculationEligibleAtMs?:number; speculationOverlapMs?:number;
  providerFirstDeltaMs?:number; providerRawWordingMs?:number; providerWordingMs?:number; providerCompleteMs?:number;
+ /** Exact candidate/context assessment reuse, separate from full move checks. */
+ replyAssessmentRuns?:number;replyAssessmentCacheHits?:number;replyAssessmentMs?:number;
  validationMs?:number; verificationDurationMs?:number; repairMs?:number; repairCount:number;
  firstUsableMs?:number; stableSuggestionMs?:number; requestCharacters?:number;
 };

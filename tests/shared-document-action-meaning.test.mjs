@@ -43,6 +43,8 @@ for(const company of companies){
   assert.equal(checkSuggestion({say:sequence},context,{factChecked:true}).ok,false,'Knowing the answer is not the buyer’s positive-match condition.');assert.equal(checkSuggestion({say:condition},context).ok,true);
  });
  for(const say of [
+  `Once we've checked that the ${company.report} covers ${company.reference}, I'll send it over to you. Looking forward to your drawing.`,
+  `Once we confirm the ${company.report} covers ${company.reference}, we'll forward it along to you for review.`,
   `Once we confirm whether the ${company.report} covers ${company.reference}, we'll send it only if it matches.`,
   `Once I have reviewed your drawing, I'll confirm whether the ${company.report} covers ${company.reference}. If it does, I'll reply with it.`,
   `I'll review your drawing when it arrives and check whether the ${company.report} covers ${company.reference}; I'll send it only if it does.`,
@@ -55,12 +57,15 @@ for(const company of companies){
   {kind:'mixed scoped-existence claim',say:`We have a ${company.report} for ${company.reference}, and I'll check its details.`},
   {kind:'buyer reference turned into company product',say:`I'll check whether the ${company.report} covers our ${company.reference}.`},
   {kind:'check completion rather than a positive match',say:`Once I've checked whether the ${company.report} covers ${company.reference}, I'll send it.`},
+  {kind:'check completion with a composed delivery complement',say:`Once we've checked whether the ${company.report} covers ${company.reference}, we'll send it over to you.`},
+  {kind:'delivery complement cannot hide an unsupported benefit',say:`Once we confirm the ${company.report} covers ${company.reference}, we'll send it over to you and guarantee suitability.`},
   {kind:'second unconditional send',say:`I'll check whether the ${company.report} covers ${company.reference} and send it only if it matches. I'll email the report regardless.`},
   {kind:'positive-match gate weakened by alternative approval',say:`I'll send the ${company.report} if it covers ${company.reference} or your engineer approves.`},
   {kind:'positive-match gate weakened by alternative request',say:`I'll check whether the ${company.report} covers ${company.reference}, and I'll send it if it matches or you ask for it.`},
   {kind:'unsupported shipment',say:reply(company)+' We will ship your order tomorrow.'},
   {kind:'unapproved certification',say:reply(company)+' Our products are certified for medical use.'},
   {kind:'drawing receipt invented from a promise',say:`I've received your drawing. ${reply(company)}`},
+  {kind:'anticipation cannot hide claimed report coverage',say:`Looking forward to your drawing, which the ${company.report} already covers. ${reply(company)}`},
  ];
  for(const probe of unsafe)test(`${company.name}: block ${probe.kind}, then recover usefully on the SAME press`,async()=>{
   const input=fixture(company);assert.equal(checkSuggestion({say:probe.say},input,{factChecked:true}).ok,false,'An approving source verdict cannot override a concrete company/condition/receipt violation.');

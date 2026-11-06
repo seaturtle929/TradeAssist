@@ -1,9 +1,10 @@
+import {deriveDocumentState,documentStateReviewLines,type DocumentState} from './document-state.ts';
 import type {Turn} from './trade';
 import {deriveCallParticipant} from './call-participant.ts';
 import {deriveCallAccomplishment,reviewedPurchasingContact,type ReviewCall} from './call-accomplishment.ts';
 import {deriveSpokenDocumentEvidence,isRepContactDetailRequest} from './document-call-evidence.ts';
 
-export type CallReview={recap:string;outcome:string;sourceTurnIds:string[];unknowns:string[]};
+export type CallReview={documentState?:DocumentState;recap:string;outcome:string;sourceTurnIds:string[];unknowns:string[]};
 const clean=(text:string)=>text.replace(/[’‘]/g,"'").replace(/\s+/g,' ').trim();
 const email=/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/ig;
 const message=/\b(?:message|note|pass (?:that|it|this) along|relay|callback|call(?:ing)? back)\b/i;
@@ -70,7 +71,7 @@ export function deriveCallReview(call:ReviewCall):CallReview {
  if(repAction&&!documents.agreements.some(item=>item.turnId===repAction.id)){markEvidence(repAction);lines.push('Salesperson’s stated next step: '+quote(repAction));}
  const repEmails=new Set(rep.flatMap(turn=>clean(turn.text).match(email)||[]).map(value=>value.toLowerCase()));
  const buyerEmails=buyer.flatMap(turn=>clean(turn.text).match(email)||[]).filter(address=>!repEmails.has(address.toLowerCase()));
- const documentLines:string[]=[],documentUnknowns:string[]=[];
+ const documentState=deriveDocumentState({turns:captured}),documentLines:string[]=documentStateReviewLines(documentState),documentUnknowns:string[]=[];
  for(const request of documents.requests){used.add(request.turnId);documentLines.push(`Buyer requested the ${request.documents.join(' and ')}: “${excerpt(request.quote)}”`);}
  for(const agreement of documents.agreements){used.add(agreement.turnId);documentLines.push(`Salesperson’s stated next step: agreed to send the ${agreement.documents.join(' and ')}. Spoken: “${excerpt(agreement.quote)}”`);}
  for(const cancellation of documents.cancellations){used.add(cancellation.turnId);documentLines.push(`Buyer cancelled the ${cancellation.documents.join(' and ')}: “${excerpt(cancellation.quote)}”`);}
@@ -96,8 +97,8 @@ export function deriveCallReview(call:ReviewCall):CallReview {
  if(unknowns.length)lines.push('Still unconfirmed: '+unknowns.join(' '));
  const accomplished=deriveCallAccomplishment(call,participant,knownContact);
  if(accomplished&&!noThanks){
-  return {recap:[accomplished.recap,...documentLines,...documentUnknowns,...uncertain.length?[captureWarning]:[]].join('\n\n'),outcome:assignedOutcome(call.outcome)?call.outcome:accomplished.outcome,sourceTurnIds:[...new Set([...accomplished.sourceTurnIds,...documents.requests.map(item=>item.turnId),...documents.agreements.map(item=>item.turnId),...documents.cancellations.map(item=>item.turnId)])],unknowns:[...accomplished.unknowns,...documentUnknowns,...uncertain.length?[captureWarning]:[]]};
+  return {documentState,recap:[accomplished.recap,...documentLines,...documentUnknowns,...uncertain.length?[captureWarning]:[]].join('\n\n'),outcome:assignedOutcome(call.outcome)?call.outcome:accomplished.outcome,sourceTurnIds:[...new Set([...accomplished.sourceTurnIds,...documents.requests.map(item=>item.turnId),...documents.agreements.map(item=>item.turnId),...documents.cancellations.map(item=>item.turnId)])],unknowns:[...accomplished.unknowns,...documentUnknowns,...uncertain.length?[captureWarning]:[]]};
  }
  const derivedOutcome=noThanks?'Contact declined further discussion':routing&&!purchasingReached?messageAccepted?`Message left with routing contact — ${target||'purchasing contact'} not reached`:offer?`Follow-up offered — ${target||'purchasing contact'} not reached`:transfer?.status==='intended'?`Conditional transfer offered — ${target||'purchasing contact'} not reached`:transfer?.status==='pending'?`Transfer attempted — ${target||'purchasing contact'} connection unconfirmed`:`${target||'Purchasing contact'} not reached`:documents.agreements.length?'Document follow-up agreed':documents.requests.length?'Document request captured':buyerAction?'Next step stated — completion not confirmed':repAction?'Salesperson follow-up promised':targetPickup&&participant.role!=='purchasing'&&!knownContact?'New contact reached — purchasing responsibility unconfirmed':knownContact?'Existing purchasing contact reached — no agreed next step':buyer.length?'Talked, no agreed next step':'No buyer speech captured';
- return {recap:lines.join('\n\n').slice(0,12000),outcome:assignedOutcome(call.outcome)?call.outcome:derivedOutcome,sourceTurnIds:turns.filter(turn=>used.has(turn.id)).map(turn=>turn.id),unknowns};
+ return {documentState,recap:lines.join('\n\n').slice(0,12000),outcome:assignedOutcome(call.outcome)?call.outcome:derivedOutcome,sourceTurnIds:turns.filter(turn=>used.has(turn.id)).map(turn=>turn.id),unknowns};
 }

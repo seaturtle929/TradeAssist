@@ -17,7 +17,7 @@ import {includeLookupSources,type KnowledgeReference} from './live-knowledge.ts'
 import { fastRouteFor, checkSuggestion, safePurposeReply } from "./call-purpose.ts";
 import { isUnfinishedBuyerThought } from "./buyer-thought.ts";
 import { assessBuyerTranscript, audioIssueFor, type BuyerAudioIssue } from "./buyer-audio-quality.ts";
-import {assessReplyVerification,classifyBuyerTurn} from './turn-verification-policy.ts';
+import {assessReplyVerification,classifyBuyerTurn,type ReplyVerificationAssessment} from './turn-verification-policy.ts';
 import {analyzeBuyerText,spokenReplyBudget} from './buyer-turn-intent.ts';
 import {hasClearConversationRefusal} from './conversation-boundary.ts';
 import {LiveLatencyClock,type LiveLatencySnapshot,type AcousticEnd} from './live-latency.ts';
@@ -35,7 +35,7 @@ export type LiveRequestReceipt=LiveReplyTicket|{queued:true;id:string;requestedA
 type QueuedRequest={id:string;requestedAt:number;started:number;queuedAt:number;queueWaitMs:number;preparationMs:number;continuedDrafts:number;context:LiveContext;status?:QueuedCoachingRequest['status'];stoppedAt?:number;timer?:ReturnType<typeof setTimeout>;waitExpired?:boolean;waitFailed?:boolean;speechIds:Set<string>;partials:CoachingSpeechSnapshot['partials'];pending:CoachingSpeechSnapshot['pendingSpeech']};
 type Work={phaseClock:CoachingPhaseClock;ticket:LiveReplyTicket;context:LiveContext;library:KnowledgeReference[];lookupSources?:KnowledgeReference[];id:string;started:number;timer?:ReturnType<typeof setTimeout>;fallback?:AbortController;rescued:boolean;answered:boolean;ready:boolean;toolRounds:number;verifier:LiveVerification<Guidance>;
   purpose:boolean;route:ReturnType<typeof fastRouteFor>;cached?:Guidance;checking:boolean;archived:boolean;superseded:boolean;published?:Guidance;publishedAt?:number;proposedSay?:string;representativeText?:string;analysis?:Partial<Guidance>;analysisTimer?:ReturnType<typeof setTimeout>;analysisShown:boolean;metadataComplete:boolean;
-  awaitingTranscript?:boolean;deferredResponse?:Record<string,unknown>;repairCount:number;repairPending:boolean;repairReason?:string;rejected?:boolean;candidateAttempt?:number;
+  awaitingTranscript?:boolean;deferredResponse?:Record<string,unknown>;replyAssessments?:{context:LiveContext;values:Map<string,ReplyVerificationAssessment>};repairCount:number;repairPending:boolean;repairReason?:string;rejected?:boolean;candidateAttempt?:number;
   firstDisplayAt?:number;verificationAt?:number;verificationCandidate?:string;verificationGuidance?:Guidance;unverifiedDisplayed?:string;lastDisplayedSay?:string;verificationFailure?:string;replacementLogged?:boolean;contextReplacement?:{originalSay:string;reason:string;originalWasDisplayed:boolean}};
 type ResponseBuffer={work:Work;text:string;checked:Guidance|null;checkedSay:string;primed:string;firstShown:boolean;previewSay?:string;attempt?:number;formatRecovered?:boolean;providerDoneRecorded?:boolean;rawWordingRecorded?:boolean};
 type RealtimeOutputItem={type?:string;name?:string;arguments?:string;call_id?:unknown;content?:{text?:string}[]};
@@ -950,8 +950,24 @@ export class LiveCoachingSession {
     // reason to rewrite an otherwise clean spoken confirmation.
     return {...value,missing:[buyer.slice(0,500)],caution:value.caution||"The requested quotation is not an approved figure."};
   }
+  /** Reuse only a completed assessment of these exact words against this
+   * request's immutable pinned context. Revised speech or lookup evidence
+   * replaces the context object; repair attempts explicitly retire the cache.
+   * No validation rule or cross-request result is bypassed. */
+  private assessReply(work:Work,say:string):ReplyVerificationAssessment {
+    if(work.replyAssessments?.context!==work.context)work.replyAssessments={context:work.context,values:new Map()};
+    const cache=work.replyAssessments.values,cached=cache.get(say),phases=work.phaseClock.phases;
+    if(cached){phases.replyAssessmentCacheHits=(phases.replyAssessmentCacheHits||0)+1;return cached;}
+    const start=performance.now();
+    const assessment=assessReplyVerification(say,work.context);
+    phases.replyAssessmentRuns=(phases.replyAssessmentRuns||0)+1;
+    phases.replyAssessmentMs=(phases.replyAssessmentMs||0)+performance.now()-start;
+    // Per-work bound, including any changed/sanitized candidate forms.
+    if(cache.size>=8)cache.clear();cache.set(say,assessment);
+    return assessment;
+  }
   private guardSalesMove(value:Guidance,work:Work):Guidance {
-    const assessment=assessReplyVerification(value.say,work.context);
+    const assessment=this.assessReply(work,value.say);
     // Keep the rejected claim intact for the explicit request's bounded repair.
     // Sanitizing this into a generic acknowledgment would hide a failed move.
     if(work.context.coachingRequest&&assessment.unsupportedClaims.length)return value;
@@ -971,7 +987,7 @@ export class LiveCoachingSession {
     // Plain speech and labeled SAY use the same unbudgeted safety input. An
     // unsupported opening must not consume a sentence slot and hide the valid
     // final question. Factual paragraph/stream completion remains unchanged.
-    if(assessReplyVerification(rawSay,buffer.work.context).classification.kind!=='fact_request'){
+    if(this.assessReply(buffer.work,rawSay).classification.kind!=='fact_request'){
       const guarded=this.guardSalesMove({...main,say:rawSay},buffer.work);
       const budget=spokenReplyBudget(buffer.work.context);
       return {...guarded,say:limitScript(guarded.say,budget.words,budget.sentences)};
@@ -1037,7 +1053,7 @@ export class LiveCoachingSession {
     main=this.guardSalesMove(this.quoteMetadata(main,buffer.work),buffer.work);
     buffer.primed=main.say;buffer.work.proposedSay=main.say;
     buffer.work.phaseClock.wordingComplete();
-    const assessment=buffer.work.phaseClock.validate(()=>assessReplyVerification(main.say,buffer.work.context));
+    const assessment=buffer.work.phaseClock.validate(()=>this.assessReply(buffer.work,main.say));
     if(buffer.work.context.coachingRequest&&assessment.unsupportedClaims.length){
       this.repairDemand(buffer,assessment.unsupportedClaims.map(claim=>'Unsupported claim '+JSON.stringify(claim.text)+': '+claim.reason).join('; ')+' Rewrite the full useful move with the supported broad company category or applicable original evidence. Do not delete the subject and leave a vague question or repeat the unsupported predicate.',main.say);return;
     }
@@ -1095,8 +1111,8 @@ export class LiveCoachingSession {
     const work=buffer.work;if(!this.current(work)||work.ready)return;
     value=this.guardSalesMove(value,work);
     if(!work.purpose){this.publish(buffer,value,true);return;}
-    const immediateMove=assessReplyVerification(value.say,work.context).classification.kind!=='fact_request';
-    if(immediateMove&&!assessReplyVerification(value.say,work.context).requiresVerification)factChecked=true;
+    const assessment=this.assessReply(work,value.say),immediateMove=assessment.classification.kind!=='fact_request';
+    if(immediateMove&&!assessment.requiresVerification)factChecked=true;
     const landing=!immediateMove&&(work.route.verificationRequired||work.checking||!!work.cached);
     let next={...this.quoteMetadata(value,work),backup:"",phase:landing?"landing" as const:"answer" as const,questionEcho:coachingRequestFocus(work.context).displayText,analysisReady:false};
     let verdict=work.phaseClock.validate(()=>checkSuggestion(next,work.context,{landing,factChecked}));
@@ -1127,7 +1143,7 @@ export class LiveCoachingSession {
     work.phaseClock.repairStarted();work.repairCount=1;work.repairPending=true;work.repairReason=JSON.stringify({rejectedSay:say,reason});
     this.trace(work,'repair_requested',{say,reason});
     work.verifier.invalidate();work.checking=false;work.verificationCandidate=undefined;work.verificationGuidance=undefined;
-    work.metadataComplete=false;work.analysis=undefined;work.analysisShown=false;
+    work.metadataComplete=false;work.analysis=undefined;work.analysisShown=false;work.replyAssessments=undefined;
     if(work.timer)clearTimeout(work.timer);work.timer=undefined;
     this.options.onChecking(false);this.options.onThinking(true);
     // Reuse this ticket and its frozen context on the same Realtime connection.

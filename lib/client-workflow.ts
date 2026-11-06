@@ -1,3 +1,4 @@
+import {deriveDocumentState,documentStateFromReviewedRecap,type DocumentState} from './document-state.ts';
 import type {CallRecord,Turn} from './trade';
 import type {CompanyBrainRecord} from './company-brain';
 import {deriveCallReview} from './call-review.ts';
@@ -9,7 +10,7 @@ import {attachCallToClient,updateClientRecord,upsertClientContact,upsertClientCa
 export type WrapUpMemoryKind='discussed'|'agreed'|'completed'|'uncertain'|'decision';
 export type WrapUpMemory={id:string;text:string;kind:WrapUpMemoryKind;source:'buyer'|'rep_update'|'inference';sourceTurnId?:string;quote?:string;at:number;contactId?:string;confirmed:boolean};
 export type WrapUpContact={source?:'speech'|'rep_update'|'reviewed_recap';id:string;name:string;email?:string;emailLabel?:string;phone?:string;role?:string;sourceTurnId:string;quote:string;confirmed:boolean;reviewDecision?:'include'|'exclude'};
-export type CallWrapUp={version:1;callId:string;companyId:string;clientId:string;recap:string;outcome:string;notes:string;memory:WrapUpMemory[];contacts:WrapUpContact[];categoryUpdate?:{category?:ClientCategory;inactiveReason?:string;reopenOpportunity?:string};reviewedAt?:number};
+export type CallWrapUp={documentState?:DocumentState;documentStateRecap?:string;version:1;callId:string;companyId:string;clientId:string;recap:string;outcome:string;notes:string;memory:WrapUpMemory[];contacts:WrapUpContact[];categoryUpdate?:{category?:ClientCategory;inactiveReason?:string;reopenOpportunity?:string};reviewedAt?:number};
 export type ClientCallWrapUp=CallWrapUp;
 const clone=<T>(value:T):T=>structuredClone(value);
 // A routing contact repeating/requesting the rep's details is not offering a buyer contact.
@@ -22,7 +23,7 @@ const conditional=/\b(?:if|once|when|unless|might|maybe|perhaps|not|never|haven'
 const relevant=/\b(?:needs?|require\w*|uses?|suppliers?|grades?|spec(?:s|ifications?)?|volumes?|quantit\w*|applications?|tests?|criteria|evaluation|engineer\w*|defer|decision|purchasing|budget|cost|prices?|concern|problem|risk|timeline|schedule|send|email|review|approval|interested|plan|sent|emailed|message|callback|unavailable)\b|@/i;
 function kindFor(turn:Turn):WrapUpMemoryKind {
  if(possibleAction.test(turn.text))return 'uncertain';
- if(promise.test(turn.text)&&conditional.test(turn.text))return 'uncertain';
+ if(promise.test(turn.text)&&conditional.test(turn.text))return deriveDocumentState({turns:[turn]}).transfers.some(row=>row.events.some(event=>event.kind==='promised'||event.kind==='check_promised'))?'agreed':'uncertain';
  if(promise.test(turn.text))return 'agreed';
  if(uncertainty.test(turn.text))return 'uncertain';
  if(completed.test(turn.text)&&!conditional.test(turn.text))return 'completed';
@@ -132,8 +133,8 @@ export function proposeCallWrapUp(call:CallRecord,client:ClientRecord):CallWrapU
  if(routing)memory.push({id:'routing-status',text:routing.summary,kind:'uncertain',source:'inference',at:call.turns.at(-1)?.at||call.startedAt,confirmed:false});
  for(const decision of call.decisionsNeeded||[])memory.push({id:`decision:${decision.id}`,text:decision.text,kind:'decision',source:'inference',at:call.startedAt,confirmed:false});
  const contacts=proposeReviewedCallContacts(call,client);
- const draft:CallWrapUp={version:1,callId:call.id,companyId:client.companyId,clientId:client.id,recap:review.recap,outcome:review.outcome,notes:call.notes,memory,contacts};
- return {...draft,recap:conciseWrapUpDraft(call,client,draft)};
+ const draft:CallWrapUp={documentState:review.documentState,documentStateRecap:review.recap,version:1,callId:call.id,companyId:client.companyId,clientId:client.id,recap:review.recap,outcome:review.outcome,notes:call.notes,memory,contacts};
+ const recap=conciseWrapUpDraft(call,client,draft);return {...draft,recap,documentStateRecap:recap};
 }
 /** One idempotent session save, preserving participant IDs and historical turns.
  * A proposed category/contact/memory item never applies without rep confirmation. */
@@ -157,7 +158,8 @@ export function saveClientCallWrapUp(brain:CompanyBrainRecord,calls:CallRecord[]
  client=contactResult.brain.clients!.find(row=>row.id===client!.id)!;
  if(wrapUp.categoryUpdate)client=updateClientRecord(client,{...wrapUp.categoryUpdate,category:wrapUp.categoryUpdate.category??null},now);
  const review=deriveCallReview({...call,outcome:wrapUp.outcome});
- const savedWrapUp:CallWrapUp={...clone(wrapUp),contacts:contactResult.contacts,recap:wrapUp.recap.trim()?wrapUp.recap:review.recap,outcome:review.outcome,memory:wrapUp.memory.map(item=>({...clone(item),...item.source==='buyer'&&item.text.trim()!==item.quote?.trim()?{source:'rep_update' as const}:{}})),reviewedAt:now};
+ const reviewedRecap=wrapUp.recap.trim()?wrapUp.recap:review.recap;
+ const savedWrapUp:CallWrapUp={...clone(wrapUp),documentState:wrapUp.documentState&&wrapUp.documentStateRecap===reviewedRecap?clone(wrapUp.documentState):documentStateFromReviewedRecap(reviewedRecap,{buyerNames:client.contacts.filter(row=>row.kind!=='main_line'&&!row.review?.required).map(row=>row.name)}),documentStateRecap:reviewedRecap,contacts:contactResult.contacts,recap:wrapUp.recap.trim()?wrapUp.recap:review.recap,outcome:review.outcome,memory:wrapUp.memory.map(item=>({...clone(item),...item.source==='buyer'&&item.text.trim()!==item.quote?.trim()?{source:'rep_update' as const}:{}})),reviewedAt:now};
  const saved:CallRecord={...clone(call),derivedReviewStale:false,wrapUp:savedWrapUp,notes:wrapUp.notes,outcome:savedWrapUp.outcome};
  // Earlier imports of this same session may already have extracted memory. The
  // reviewed selection replaces only this session's derived entries; no other
