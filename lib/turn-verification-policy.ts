@@ -512,6 +512,7 @@ function technicalSupportAssertion(clause:string,context:VerificationPolicyConte
   // report happens to be available in the catalog or a previous company.
   const reportRequest=[buyer,...[...(context.turns||[])].reverse().filter(turn=>turn.role==='buyer').map(turn=>turn.text)].find(text=>/\b(?:(?:material\s+)?test|inspection|certification|quality)\s+reports?\b/i.test(text))||buyer;
   const requestedReports=[...new Set((reportRequest.match(/\b(?:(?:material\s+)?test|inspection|certification|quality)\s+reports?\b/gi)||[]).map(value=>value.toLowerCase().replace(/reports$/,'report')))];
+  if(delivery.document==='report'&&requestedReports.length!==1)return {supported:false,pending:true,reason:'The generic report reference is not unambiguous in the buyer’s request. Establish which document is intended before treating its availability as confirmed.'};
   const document=delivery.document==='report'&&requestedReports.length===1?requestedReports[0]:delivery.document;
   // The parsed action already identifies the exact artifact. Re-proving its
   // existence through a synthetic reply and a second noun vocabulary can lose
