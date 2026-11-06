@@ -1,4 +1,5 @@
 import type {Turn} from './trade';
+import {analyzeDocumentActionSyntax,directDocumentActionObject,documentActionIsEmbedded} from './document-action-syntax.ts';
 
 type SpokenTurn=Pick<Turn,'id'|'role'|'text'|'at'|'transcriptionUncertainty'>;
 export type SpokenDocumentRequest={turnId:string;documents:string[];quote:string;at:number};
@@ -69,10 +70,19 @@ export function deriveSpokenDocumentEvidence(turns:SpokenTurn[]):{requests:Spoke
   for(const part of parts){
    if(part.includes('?')||negative.test(part)||uncertain.test(part)||internalDestination.test(part))continue;
    const promise=/\b(?:I|we)(?:'ll| will)\s+(?:(?:be sure to|make sure to)\s+)?(?:send|email|share|forward|provide|include|attach|get)\b/i.exec(part);
-   if(!promise||/\b(?:said|says|asked|told|quoted|suppose|imagine|think|believe)\b/i.test(part.slice(0,promise.index)))continue;
+   if(!promise||documentActionIsEmbedded(part,promise.index||0))continue;
+   const verb=promise[0].match(/\b(send|email|share|forward|provide|include|attach|get)$/i)![1];
+   const verbStart=(promise.index||0)+promise[0].length-verb.length;
+   const ordinary=/^(?:send|email|share|forward|include|attach)$/i.test(verb);
+   const action=ordinary?analyzeDocumentActionSyntax(part,{speaker:'salesperson'}).find(value=>value.start===verbStart):undefined;
+   // The canonical ledger and review must not disagree about a normal
+   // delivery predicate. Contextual “get both over” and direct “provide” keep
+   // their existing bounded grammar, with the same shared parent-speech check.
+   if(ordinary&&(!action||action.actor!=='salesperson'||!action.documentDelivery||action.speechAct!=='commitment'))continue;
    const referential=/\b(?:get\s+(?:that|it|those|them|both)\s+(?:over|sent|emailed)|(?:send|email|share|forward|provide|include|attach)\s+(?:that|it|those|them|both))\b/i.test(part);
    if(/\b(?:include|attach)\b/i.test(promise[0])&&!previousRequest&&!buyerDeliveryChannel.test(part))continue;
-   const named=documentKinds(part),documents=referential&&previousRequest?previousRequest.documents:named;
+   const object=action?.object||directDocumentActionObject(part,verbStart+verb.length,part.length,verb);
+   const named=object.kind==='document'?documentKinds(object.text):[],documents=referential&&previousRequest?previousRequest.documents:named;
    // "Get" is a send promise only in its explicit contextual sending phrase.
    if(!documents.length||/\bget\b/i.test(promise[0])&&(!referential||!previousRequest))continue;
    agreements.push({turnId:turn.id,...previousRequest?{requestTurnId:previousRequest.turnId}:{},documents:[...documents],quote:turn.text,at:turn.at});

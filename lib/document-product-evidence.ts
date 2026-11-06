@@ -277,12 +277,13 @@ function investigationAcknowledgment(text:string,context?:Context):boolean {
  if(!acknowledgmentVocativesKnown(text,context))return false;
  return isConversationalAcknowledgment(text,context)||/^[Yy]es(?:,\s*[A-Z][A-Za-z'-]*(?:\s+[A-Z][A-Za-z'-]*){0,2})?[.!]$/.test(text);
 }
-/** A drawing review is a prerequisite, not a finding about report scope.
+/** Receipt or review of an incoming drawing can be a prerequisite, never a
+ * completed receipt or a finding about report scope.
  * Consume only this closed action and leave the ENTIRE remaining predicate
  * to the ordinary inquiry/delivery parser. A named comparison artifact still
  * needs availability; a drawing reference must come from this conversation. */
 function afterDrawingReview(text:string,context?:Context):string|undefined {
- const review=/^(?:once|after|when)\s+(?:I|we)(?:'ve| have)?\s+(?:review(?:ed)?|check(?:ed)?|seen|receiv(?:e|ed))\s+(?:it|(?:the|that|your)\s+drawing)(?:\s+(?:with|against)\s+([^,;.!?]+))?\s*,\s*(.+)$/i.exec(text);
+ const review=/^(?:once|after|when)\s+(?:I|we)(?:'ve| have)?\s+(?:review(?:ed)?|check(?:ed)?|seen|receiv(?:e|ed)|get|got)\s+(?:it|(?:the|that|your)\s+drawing)(?:\s+(?:with|against)\s+([^,;.!?]+))?\s*,\s*(.+)$/i.exec(text);
  if(!review)return;
  if(review[1]){
   const target=review[1],reference=target.replace(/^(?:(?:that|the|your)\s+)?/i,'').replace(/\s+reference$/i,'');
@@ -432,7 +433,10 @@ type ParsedDocumentDelivery={investigation:string;document:string;deliveryCondit
 const deliveryActor="(?:I|we)(?:'ll|\\s+(?:will|can|could))\\s+";
 const deliveryAction='(?:(?:reply|respond)\\s+and\\s+(?:send|email|share|forward|include|attach)\\s+|(?:send|email|share|forward|include|attach)\\s+|(?:reply|respond)\\s+with\\s+)';
 const deliveryArtifact='(?:it|(?:that|the)\\s+(?:(?:material test|inspection|test)\\s+)?report|the documents|the details)';
-const deliveryTail='(?:\\s+(?:over|along))?(?:\\s+(?:to you|your way|back to you|right back to you))?(?:\\s+for review)?';
+// Interpret the complete dispatch even when its directional complement is
+// intensified. A separate shared timing check rejects unagreed speed; losing
+// the action here would falsely report a missing coverage prerequisite.
+const deliveryTail='(?:\\s+(?:(?:right|straight)\\s+)?(?:over|along))?(?:\\s+(?:to you|your way|back to you|right back to you))?(?:\\s+for review)?';
 
 /** An approval is a release prerequisite only inside a closed conditional
  * predicate. Keep its actual owner; mentioning another person's approval or
