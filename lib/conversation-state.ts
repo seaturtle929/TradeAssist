@@ -1,3 +1,4 @@
+import {materialClauses as clauses,materialRefusal,independentMaterialAction,affirmativeMaterialAction} from './material-request-meaning.ts';
 import {configurationReferences} from './company-configuration.ts';
 import {deriveDocumentState,isBuyerOwnedDocumentSend,type DocumentState} from './document-state.ts';
 import {reviewedClientStateFacts,reviewedClientNeedSeed} from './client-coaching-context.ts';
@@ -17,8 +18,6 @@ export type StateInput={sources?:import('./document-product-evidence').DocumentP
 export function currentCallMemory<T extends {callId?:string}>(callId:string|undefined,memory:T|undefined):T|undefined {return callId&&memory?.callId===callId?memory:undefined;}
 const norm=(value:string)=>value.replace(/[’‘]/g,"'").toLowerCase();
 const fields={email:"Email",specs:"Specs",volumes:"Volumes",current_supplier:"Current supplier",decision_maker:"Decision maker",right_person:"Right person"};
-const materialTarget=/\b(?:profile|specs?|specifications?|drawings?|information|info|catalog\w*|brochure|documents?|materials|website|link|product (?:details|range)|technical data sheets?|copy of what (?:you|we) (?:produce|make))\b/;
-const materialRequest=new RegExp('(?:\\b(?:send|email|share|forward|attach)\\b|(?:^|\\bplease\\s+)(?:also\\s+)?include\\b).{0,100}'+materialTarget.source);
 const materialMatches=(line:string)=>[
   ['company profile',/\bprofile\b|\bcompany introduction\b/],
   ['product specs',/\bspec(?:ification)?s?\b|\btechnical data sheets?\b/],
@@ -57,41 +56,7 @@ function mergeMaterialGroups(previous:string[][],incoming:string[][]):string[][]
 /** Canonical material wording retains an actual either/or choice, not a promise
  * to send every mentioned option. It also renders older stored send actions. */
 export const materialDescriptionFor=(raw:string)=>describeMaterialGroups(materialGroups(raw));
-const clauses=(line:string)=>line.split(/(?<=[.!?])\s+|;\s*|\s+(?:but|instead|rather)\s+|,\s*(?=(?:please )?(?:send|email|share|forward|attach)\b)/).filter(Boolean);
-const materialRefusal=(line:string)=>{
-  const negativeDelivery=/\b(?:don't|do not|won't|will not|can't|cannot|never|no need to|not to|shouldn't|should not) (?:send|email|share|forward|attach|include)\b|\b(?:don't|do not) (?:have|need) to (?:send|email|share|forward|attach|include)\b|\bnot (?:asking|asking you|asking you to|wanting|wanting you to) (?:send|email|share|forward|attach|include)\b/.test(line);
-  // "I cannot share that" may decline the buyer's own commercial details. It
-  // does not cancel a supplier-document plan without a materials/send reference.
-  return negativeDelivery&&(materialTarget.test(line)||/\b(?:send|email)\b/.test(line))||new RegExp('\\b(?:don\'t|do not) (?:want|need)\\b.{0,50}'+materialTarget.source+'|\\bno need for\\b.{0,40}'+materialTarget.source).test(line);
-};
 const conditionalOffer=(line:string)=>/\b(?:if|unless|maybe|perhaps)\b/.test(line);
-const conditionalMaterialRequest=(line:string)=>/\b(?:i|we)(?:'ll| will| would| might| may) (?:ask|request)\b.{0,70}\b(?:send|email|share|forward|attach)\b/.test(line)||/\b(?:if|unless|once|when|after)\b.{0,100}\b(?:send|email|share|forward|attach)\b/.test(line)&&!/^\s*if (?:possible|you can|it's possible|it is possible)\b/.test(line);
-const deliveryVerb='(?:send|email|share|forward|attach|include)';
-const independentDeliveryMove=new RegExp('^(?:'+deliveryVerb+'\\b|you\\s+(?:(?:can|could|should|may|will)\\s+)?'+deliveryVerb+'\\b|(?:can|could|would|will|may|should)\\s+(?:you|i|we)\\s+(?:(?:please|also|just)\\s+)*'+deliveryVerb+'\\b|(?:i|we)(?:\\x27ll|\\s+(?:will|can|could|would|may|might))\\s+(?:(?:please|also|just)\\s+)*'+deliveryVerb+'\\b|(?:i|we)(?:\\x27d|\\s+would)?\\s+(?:like|want|need)\\s+(?:you\\s+)?to\\s+'+deliveryVerb+'\\b|would you (?:like|want)\\b)');
-/** A mentioned delivery is not an independent request or promise. Keep a
- * dependent lead-in as context, then inspect the actual main move. Returning
- * that main clause also prevents its earlier document nouns from becoming
- * newly requested materials. No word/name/code from a saved call is special. */
-function independentMaterialAction(line:string,repOwnedOnly=false):string|undefined {
-  const courtesy=(value:string)=>value.trim().replace(/^(?:(?:well|okay|ok|yes|yeah|sure|great|thanks|thank you|actually|instead|also|just|only|please|now)[,:]?\s+(?:and\s+)?)*/,'').replace(/^(?:how about|what about)(?: (?:this|that))?[: ,]*\s*/,'').replace(/^if (?:possible|you can|it's possible|it is possible)[, ]*/,'');
-  let main=courtesy(line);
-  if(/^(?:before|after|while|when|once|until|unless|if|whenever|as soon as|as long as)\b/.test(main)&&!/^if (?:possible|you can|it's possible|it is possible)\b/.test(main)){
-    const comma=main.indexOf(',');
-    if(comma>=0)main=main.slice(comma+1).trim();
-    else {
-      // ASR may omit a comma: a separate modal request is still identifiable.
-      const request=new RegExp('\\b(?:can|could|would|will|may|should)\\s+(?:you|i|we)\\s+(?:(?:please|also|just)\\s+)*'+deliveryVerb+'\\b').exec(main);
-      if(!request)return;main=main.slice(request.index);
-    }
-  }
-  const coordinatedRequest=new RegExp('\\b(?:and|then)\\s+(?=(?:(?:please|also|just)\\s+)*(?:'+deliveryVerb+'\\b|you\\s+(?:(?:can|could|should|may|will)\\s+)?'+deliveryVerb+'\\b|(?:can|could|would|will|may|should)\\s+you\\s+(?:(?:please|also|just)\\s+)*'+deliveryVerb+'\\b))','g');
-  const coordinated=[...main.matchAll(coordinatedRequest)];
-  const starts=[0,...[...main.matchAll(/,\s*/g),...coordinated].map(match=>(match.index||0)+match[0].length)];
-  const candidates=starts.map(start=>main.slice(start,coordinated.find(match=>(match.index||0)>=start)?.index));
-  const actions=[...new Set(candidates.map(courtesy).filter(value=>independentDeliveryMove.test(value)&&materialRequest.test(value)&&(!repOwnedOnly||!isBuyerOwnedDocumentSend(value))))];
-  return actions.length?actions.join(' '):undefined;
-}
-const affirmativeMaterialAction=(line:string,repOwnedOnly=false)=>!materialRefusal(line)&&!conditionalMaterialRequest(line)?independentMaterialAction(line,repOwnedOnly):undefined;
 const affirmativeMaterialClause=(line:string)=>!!affirmativeMaterialAction(line);
 const definiteSendingPromise=(line:string)=>{const main=independentMaterialAction(line);return !!main&&/^(?:i|we)(?:'ll| will) (?:send|email|share|forward)\b/.test(main)&&!conditionalOffer(line)&&!/\b(?:not|never|didn't|did not|don't|do not|won't|will not)\b/.test(main)&&!line.includes('?');};
 const sendingOffer=(line:string)=>{const main=independentMaterialAction(line);return !!main&&!materialRefusal(main)&&(/\b(?:i|we)(?:'ll| will| can| could| might| may) (?:send|email|share|forward)\b|\b(?:can|could|may|should) (?:i|we) (?:send|email|share|forward)\b|\bwould you (?:like|want)\b.{0,30}\b(?:send|email|share|forward)\b/.test(main));};
@@ -230,7 +195,7 @@ export function deriveConversationState(input:StateInput):ConversationState {
     const line=norm(turn.text),evidence={turnId:turn.id||`turn-${i}`,quote:turn.text};
     const buyer=turn.role==="buyer",rep=turn.role==="you";
     const parts=clauses(line),refused=buyer?parts.filter(materialRefusal):[];
-    const requestParts=buyer?parts.map(part=>affirmativeMaterialAction(part,true)).filter((part):part is string=>!!part):[];
+    const requestParts=buyer?parts.map(part=>affirmativeMaterialAction(part,isBuyerOwnedDocumentSend)).filter((part):part is string=>!!part):[];
     const globalRefusal=buyer&&hasClearConversationRefusal(line);
     const existingMaterials=send?materialNames(norm(send.action)):[];
     const refusedMaterials=refused.flatMap(materialNames);
