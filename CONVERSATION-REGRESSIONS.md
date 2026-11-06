@@ -11,6 +11,11 @@ For the reviewed-send, deferral and report-condition follow-up, use the explicit
 regressions, not unseen evidence; author a fresh private variation only after the
 patch freezes, and retain its first result even if it fails.
 
+For cross-sentence report-release validation, use `--baseline=050f40c` with
+`--holdouts`. The lifecycle preflight also exercises shared action/prerequisite
+grouping and paired safe/unsafe controller repairs; these are authored scripted
+fixtures, not fresh model results or audio-to-screen measurements.
+
 This command is offline, uses existing dependencies, and does not read credentials,
 start listening, make API requests, or touch browser storage. Reports go to ignored
 `outputs/conversation-regression/run-<timestamp>/REPORT.private.html` and
