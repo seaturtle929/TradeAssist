@@ -7,7 +7,8 @@ import {applyCoachingConfiguration,configurationSuggestionProblems,configuration
 import {literalSpecificationEvidence,specificationNumberEvidence} from './scoped-specification-evidence.ts';
 import {buyerConversationIdentifierReferences,buyerProductIdentifierReferences,buyerSpelledIdentifierClarificationReferences,isBuyerIdentifierClarification,canonicalizeKnownProductIdentifiers,productIdentityReferences} from './product-identity-evidence.ts';
 import {availableDocumentActionEvidence} from './document-availability-evidence.ts';
-import {hasAffirmativeOutgoingDocumentAction} from './document-action-syntax.ts';
+import {analyzeDocumentActionSyntax,hasAffirmativeOutgoingDocumentAction} from './document-action-syntax.ts';
+import {immediateDocumentDispatchClaims} from './document-dispatch-timing.ts';
 export {hasAffirmativeOutgoingDocumentAction} from './document-action-syntax.ts';
 import {analyzeDocumentActionMeaning,documentActionGroups,assessDocumentProductCoverage,documentIdentifierReferences,documentIdentifierSource,hasConditionalReportReplyForSemanticReview,hasFutureReportInquiry,investigationThenDocumentDelivery,isConversationalAcknowledgment,literalDocumentScopeEvidence,literalDocumentStatementEvidence,requestsDocumentProductCoverage} from './document-product-evidence.ts';
 export type BuyerTurnKind = 'fact_request' | 'sales_move' | 'confirmation';
@@ -354,6 +355,11 @@ function concreteSupplierAssertion(clause: string): boolean {
   // A relative tail remains an asserted guarantee after clause splitting;
   // grounded numerical wording before it cannot authorize the new outcome.
   if(/^\s*(?:which|that)\s+(?:guarantees?|ensures?|proves?|certifies?)\b/i.test(clause))return true;
+  // Asking permission to send is not an asserted send, but a factual relative
+  // clause still presupposes document contents ("the report that proves ...").
+  // Keep that claim separate from a genuine question about whether it proves
+  // something, or a relative clause about the buyer's requested next step.
+  if(analyzeDocumentActionSyntax(clause).some(action=>['document','pronoun','result','unresolved'].includes(action.object.kind)&&/^\s*,?\s*(?:that|which)\s+(?:guarantees?|ensures?|proves?|certifies?|confirms?|shows?|demonstrates?|validates?|contains?|includes?|records?|lists?|describes?|covers?|matches?|appl(?:y|ies)(?:\s+to)?|meets?|complies)\b/i.test(clause.slice(action.object.end,action.scope.end))))return true;
   if ((!own&&!documentSubject) || /^\s*(?:and\s+)?(?:is|are|do|does|would|could|can|what|how|when)\b/i.test(clause) || /^\s*which\s+(?!(?:is|are|has|have)\b)/i.test(clause)) return false;
   if (/\b(?:free\s+samples?|guarantee(?:s|d)?|in\s+stock|(?:is|are|have)\s+available|certif(?:y|ies|ying|ied|ication|icates?)|ISO\s?\d+|best\s+(?:quality|performance|products?|materials?|grades?|prices?|supply|service)|superior|more\s+reliable|faster\s+delivery|better\s+(?:quality|performance)|(?:good|high|consistent|stable|premium)[-\s]+(?:quality|performance)|(?:is|are)\s+(?:consistent|reliable)|performs?\s+well|based\s+in|protected\s+payment|quality\s+(?:products|materials)|(?:meet|exceed)\w*\s+(?:\w+\s+){0,3}standards|competitive\s+pric(?:e|es|ing)|lowest\s+pric(?:e|es)|sample\s+policy)\b/i.test(clause)||/\b(?:our|we|it)\b.{0,50}\b(?:is|are|offer|offers)\s+(?:the\s+)?best\b/i.test(clause)) return true;
   if (CONDITIONAL_PROPOSAL.test(clause) && !/\b(?:guarantee|free|in\s+stock|certified)\b/i.test(clause)) return false;
@@ -808,6 +814,7 @@ export function assessReplyVerification(say: string, context: VerificationPolicy
     if(commercial)add(text,part.start,'supplier_claim',commercial);
     const temporalText=text.replace(/\bwithin(?=\s+(?:(?:the|that|this|our|your)\s+)?(?:(?:material test|inspection|test)\s+)?report(?:['’]s)?\s+(?:scope|coverage)\b)/gi,'inside')
       .replace(/\bwithin(?=\s+(?:the\s+)?scope\s+of\s+(?:(?:the|that|this|our|your)\s+)?(?:(?:material test|inspection|test)\s+)?report\b)/gi,'inside');
+    if(immediateDocumentDispatchClaims(text).length)add(text,part.start,'timing',{supported:false,reason:'This document-send action adds an unagreed assurance of prompt dispatch. Its coverage or approval prerequisite does not establish when it will be sent. Keep the conditional send, but remove the speed assurance; only repeat a specific response time actually agreed with the buyer.'});
     const responseTiming = /\b(?:I|we)(?:['’]ll|\s+(?:will|can|would))\b.{0,85}\b(?:soon|shortly|ASAP|quickly|in\s+a\s+bit|right\s+away|promptly|immediately|within|by\s+(?:\d|tomorrow|today|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)|in\s+\d+\s+(?:hours?|days?)|tomorrow|today)\b/i.exec(temporalText);
     if (responseTiming&&!declinesResponseDeadline(text)) add(text, part.start, 'timing', { supported: timingAgreed(text, context), reason: 'A rep response deadline requires an explicitly agreed specific day/time; document facts do not authorize it.' });
     // A bounded inquiry followed by a result-conditional document send still

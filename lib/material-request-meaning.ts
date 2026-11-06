@@ -18,7 +18,7 @@ const independentDeliveryMove=new RegExp('^(?:'+deliveryVerb+'\\b|you\\s+(?:(?:c
  * dependent lead-in as context, then inspect the actual main move. Returning
  * that main clause also prevents its earlier document nouns from becoming
  * newly requested materials. No word/name/code from a saved call is special. */
-export function independentMaterialAction(raw:string,excludeAction?:(value:string)=>boolean):string|undefined {
+export function independentMaterialAction(raw:string,excludeAction?:(value:string)=>boolean,targetMatches?:(value:string)=>boolean):string|undefined {
   const line=normalize(raw);
   const courtesy=(value:string)=>value.trim().replace(/^(?:(?:well|okay|ok|yes|yeah|sure|great|thanks|thank you|actually|instead|also|just|only|please|now)[,:]?\s+(?:and\s+)?)*/,'').replace(/^(?:how about|what about)(?: (?:this|that))?[: ,]*\s*/,'').replace(/^if (?:possible|you can|it's possible|it is possible)[, ]*/,'');
   let main=courtesy(line);
@@ -35,7 +35,7 @@ export function independentMaterialAction(raw:string,excludeAction?:(value:strin
   const coordinated=[...main.matchAll(coordinatedRequest)];
   const starts=[0,...[...main.matchAll(/,\s*/g),...coordinated].map(match=>(match.index||0)+match[0].length)];
   const candidates=starts.map(start=>main.slice(start,coordinated.find(match=>(match.index||0)>=start)?.index));
-  const actions=[...new Set(candidates.map(courtesy).filter(value=>independentDeliveryMove.test(value)&&materialRequest.test(value)&&(!excludeAction||!excludeAction(value))))];
+  const actions=[...new Set(candidates.map(courtesy).filter(value=>independentDeliveryMove.test(value)&&(targetMatches?targetMatches(value):materialRequest.test(value))&&(!excludeAction||!excludeAction(value))))];
   return actions.length?actions.join(' '):undefined;
 }
-export const affirmativeMaterialAction=(raw:string,excludeAction?:(value:string)=>boolean)=>{const line=normalize(raw);return !materialRefusal(line)&&!conditionalMaterialRequest(line)?independentMaterialAction(line,excludeAction):undefined;};
+export const affirmativeMaterialAction=(raw:string,excludeAction?:(value:string)=>boolean,targetMatches?:(value:string)=>boolean)=>{const line=normalize(raw);return !materialRefusal(line)&&!conditionalMaterialRequest(line)?independentMaterialAction(line,excludeAction,targetMatches):undefined;};

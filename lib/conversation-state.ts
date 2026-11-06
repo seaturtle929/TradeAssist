@@ -1,12 +1,13 @@
 import {materialClauses as clauses,materialRefusal,independentMaterialAction,affirmativeMaterialAction} from './material-request-meaning.ts';
 import {configurationReferences} from './company-configuration.ts';
-import {deriveDocumentState,isBuyerOwnedDocumentSend,type DocumentState} from './document-state.ts';
+import {deriveDocumentState,isBuyerOwnedDocumentSend,acceptedDocumentOfferAt,attributedDocumentCompletions,type DocumentState} from './document-state.ts';
 import {reviewedClientStateFacts,reviewedClientNeedSeed} from './client-coaching-context.ts';
 import {fieldEvidence,emailEvidenceFor,currentContactEmailEvidence,type BuyerFactTurn} from "./buyer-facts.ts";
 import {deriveCallParticipant,isParticipantIntroduction,isCurrentParticipantIntroduction,preparedPurchasingParticipant,type CallParticipant} from "./call-participant.ts";
 import {deriveBuyerNeeds,type BuyerNeeds} from './buyer-needs.ts';
 import {isCompanyChoiceQuestion,substantiveBuyerQuestions} from './buyer-turn-intent.ts';
 import {hasClearConversationRefusal} from './conversation-boundary.ts';
+import {analyzeDocumentActionSyntax} from './document-action-syntax.ts';
 export {hasClearConversationRefusal} from './conversation-boundary.ts';
 
 export type StateFact={value:string;turnId:string;quote:string;source:"transcript"|"memory"|"context"};
@@ -59,8 +60,6 @@ export const materialDescriptionFor=(raw:string)=>describeMaterialGroups(materia
 const conditionalOffer=(line:string)=>/\b(?:if|unless|maybe|perhaps)\b/.test(line);
 const affirmativeMaterialClause=(line:string)=>!!affirmativeMaterialAction(line);
 const definiteSendingPromise=(line:string)=>{const main=independentMaterialAction(line);return !!main&&/^(?:i|we)(?:'ll| will) (?:send|email|share|forward)\b/.test(main)&&!conditionalOffer(line)&&!/\b(?:not|never|didn't|did not|don't|do not|won't|will not)\b/.test(main)&&!line.includes('?');};
-const sendingOffer=(line:string)=>{const main=independentMaterialAction(line);return !!main&&!materialRefusal(main)&&(/\b(?:i|we)(?:'ll| will| can| could| might| may) (?:send|email|share|forward)\b|\b(?:can|could|may|should) (?:i|we) (?:send|email|share|forward)\b|\bwould you (?:like|want)\b.{0,30}\b(?:send|email|share|forward)\b/.test(main));};
-const acceptsOffer=(line:string)=>/^(?:(?:okay|ok)[, ]*)?(?:yes|yeah|yep|sure|please do|go ahead|that (?:works|would be (?:useful|helpful|good|great)))(?:[, ]*(?:please|thanks|thank you|go ahead|send it(?: over)?|do that))?[.!\s]*$/.test(line.trim());
 const incompleteReview=(line:string)=>/\b(?:not|never|hasn't|has not|haven't|have not|isn't|is not|aren't|are not|didn't|did not|don't know|do not know|not sure|still waiting)\b.{0,55}\b(?:review\w*|check\w*|evaluat\w*|finish\w*|approv\w*|complete\w*|done)\b|\b(?:review|evaluation)\b.{0,25}\b(?:not|pending|incomplete|unfinished)\b/.test(line);
 const conditionalReview=(line:string)=>/\b(?:if|once|when|after|before|until)\b.{0,70}\b(?:review\w*|check\w*|evaluat\w*|finish\w*|approv\w*|complete\w*|done)\b/.test(line);
 const completedReview=(line:string)=>/\b(?:engineer\w*|technical team|engineering team)\b.{0,50}\b(?:reviewed|checked|evaluated|finished|approved)|\b(?:review|evaluation)\b.{0,20}\b(?:complete|finished|done)\b/.test(line)&&!incompleteReview(line)&&!conditionalReview(line);
@@ -184,6 +183,27 @@ export function deriveConversationState(input:StateInput):ConversationState {
   const fullCommitmentHistory=!!memory?.processedTurnIds?.length&&memory.processedTurnIds.every(id=>turnIds.has(id));
   const commitmentSeed=fullCommitmentHistory?undefined:memory;
   const documents=deriveDocumentState({turns,seed:commitmentSeed?.documents||input.clientContext?.standing?.documentState,sources:input.companyConfiguration?configurationReferences(input.companyConfiguration.snapshot):input.sources});
+  // Reuse attributed completed document events, rather than interpreting a
+  // past-tense word inside “check whether I sent…” as a completed handoff.
+  // Index once so every turn uses the same canonical account as generation
+  // and saved memory. A partial send completes only its own named materials.
+  const completedByTurn=new Map<string,Set<string>>(),completedMaterials=new Set<string>(),completionTurnIds=new Map(turns.map((turn,index)=>[turn.id||`document-turn-${index}`,turn.id||`turn-${index}`]));
+  for(const document of documents.transfers.filter(row=>row.sender==='you')){
+    const names=materialNames(document.document);
+    for(const event of document.events.filter(event=>event.kind==='sent'&&event.actor==='you'||event.kind==='received'&&event.actor==='buyer')){
+      const currentId=completionTurnIds.get(event.turnId);
+      if(!currentId){if(document.sendStatus==='reported_sent')for(const name of names)completedMaterials.add(name);continue;}
+      const completed=completedByTurn.get(currentId)||new Set<string>();for(const name of names)completed.add(name);completedByTurn.set(currentId,completed);
+    }
+  }
+  // Some already-supported generic materials have no stored DocumentKind.
+  // Reuse the canonical completed-action interpretation for their direct
+  // objects rather than losing a real send or reviving the old word search.
+  for(const [index,turn] of turns.entries()){
+    const named=attributedDocumentCompletions(turn).filter(action=>(action.kind==='sent'&&action.actor==='you'||action.kind==='received'&&action.actor==='buyer')&&['document','result'].includes(action.object.kind)).flatMap(action=>materialNames(norm(action.object.text)));
+    const turnId=turn.id||`turn-${index}`;
+    if(named.length){const completed=completedByTurn.get(turnId)||new Set<string>();for(const name of named)completed.add(name);completedByTurn.set(turnId,completed);}
+  }
   const commitments=(commitmentSeed?.commitments||[]).map(item=>structuredClone(item));
   let send=commitments.find(item=>item.id==="send_materials"),review=false,prices=false;
   let reviewType:'engineer'|'buyer'|undefined=commitments.some(item=>item.id==='engineer_review')?'engineer':commitments.some(item=>item.id==='buyer_review')?'buyer':undefined;
@@ -207,17 +227,18 @@ export function deriveConversationState(input:StateInput):ConversationState {
     }else if(refused.length&&send&&send.status!=='fulfilled')send.action=`Send ${describeMaterialGroups(materialGroups(send.action).map(group=>group.filter(name=>!refusedMaterials.includes(name))))}`;
     // A suggestion or conditional offer is not an agreement. A short acceptance
     // can accept the preceding actual offer, including when a request is windowed.
-    const previousRepIndex=turns.findLastIndex((item,index)=>index<i&&item.role==='you');
-    const previousRep=previousRepIndex>=0?turns[previousRepIndex]:undefined;
-    const suppliesRequestedAddress=!!fieldEvidence('Email',[turn])&&!!previousRep&&previousRep.text.includes('?')&&/\b(?:email|address)\b/i.test(previousRep.text);
-    const accepted=buyer&&(acceptsOffer(line)||suppliesRequestedAddress)&&previousRep&&sendingOffer(norm(previousRep.text))&&turns.slice(previousRepIndex+1,i).every(item=>item.role==='buyer'&&/^(?:uh+|um+|hmm+|one moment|one second|hold on)[.!\s]*$/.test(norm(item.text).trim()));
+    const acceptedOffer=buyer?acceptedDocumentOfferAt(turns,i):undefined;
+    const previousRepIndex=acceptedOffer?.index??-1,previousRep=acceptedOffer?.turn;
+    const acceptedObjects=acceptedOffer?.objects.map(object=>object.text).join(' and ')||'';
+    const accepted=!!acceptedOffer&&materialNames(norm(acceptedObjects)).length>0;
     const request=!!requestParts.length||!!accepted;
-    const promiseParts=rep?parts.filter(definiteSendingPromise).map(part=>independentMaterialAction(part)!):[];
+    const promiseParts=rep?parts.filter(definiteSendingPromise).flatMap(part=>analyzeDocumentActionSyntax(part,{speaker:'salesperson'}).filter(action=>action.actor==='salesperson'&&action.documentDelivery&&action.speechAct==='commitment').map(action=>action.object.text)):[];
     const promise=promiseParts.length>0;
     if(request||promise) {
-      const requestedLine=accepted?independentMaterialAction(norm(previousRep!.text))||norm(previousRep!.text):promise?promiseParts.join(' '):requestParts.join(' ');
+      const requestedLine=accepted?norm(acceptedObjects):promise?promiseParts.join(' '):requestParts.join(' ');
       const requestedGroups=materialGroups(requestedLine),materials=describeMaterialGroups(requestedGroups);
       if(!send||send.status==="cancelled"||send.status==="fulfilled") {
+        completedMaterials.clear();
         send={id:"send_materials",action:`Send ${materials}`,owner:"you",status:"needs_email",missing:["email"],evidence:[]};
         const index=commitments.findIndex(item=>item.id===send!.id);if(index<0)commitments.push(send);else commitments[index]=send;
         review=false;reviewType=undefined;prices=false;reviewed=false;pricesDiscussed=false;sequence=[];
@@ -234,9 +255,13 @@ export function deriveConversationState(input:StateInput):ConversationState {
       if(buyer&&/\b(?:engineer\w*|technical team|engineering team)\b.{0,70}\b(?:look|review|check|evaluate|take)|\b(?:look|review|check|evaluate)\b.{0,70}\bengineer\w*\b/.test(line)){review=true;reviewType='engineer';}
       else if(buyer&&/\b(?:i|we)(?:'ll| will| can| could)? (?:take a look|review|check|evaluate)\b|\bfor (?:me|us) to (?:review|check|evaluate)\b/.test(line)){review=true;reviewType||='buyer';}
       if(buyer&&(/\b(?:then|after|next|later|get back|come back)\b.{0,90}\b(?:pric\w*|quot\w*)\b/.test(line)||review&&/\byou can (?:give|send|provide)\b.{0,50}\bquot\w*\b/.test(line)))prices=true;
-      const sent=rep&&/\b(?:i|we) (?:have |already )?(?:sent|emailed|shared|forwarded)\b.{0,80}\b(?:profile|specs?|documents?|materials|information|it|them)\b/.test(line);
-      const received=buyer&&/\b(?:i|we) (?:have |already )?(?:received|got)\b.{0,70}\b(?:profile|specs?|documents?|materials|information|it|them)\b/.test(line);
-      if(sent||received){send.status="fulfilled";send.missing=[];send.evidence.push(evidence);}
+      const completed=completedByTurn.get(evidence.turnId);
+      if(completed?.size){
+        for(const material of completed)completedMaterials.add(material);
+        const required=materialGroups(send.action);
+        if(required.length&&required.every(group=>group.some(material=>completedMaterials.has(material)))){send.status="fulfilled";send.missing=[];}
+        if(!send.evidence.some(item=>item.turnId===evidence.turnId))send.evidence.push(evidence);
+      }
       if(buyer)for(const part of parts){
         if(incompleteReview(part)&&/\b(?:engineer\w*|technical team|engineering team|review|evaluation)\b/.test(part))reviewed=false;
         else if(completedReview(part)||reviewType==='buyer'&&!incompleteReview(part)&&/\b(?:i|we)(?:'ve| have| already)? (?:reviewed|checked|evaluated)\b/.test(part)&&!conditionalReview(part))reviewed=true;

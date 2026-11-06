@@ -7,6 +7,7 @@ import {deriveCallParticipant} from './call-participant.ts';
 import {gentleBoundaryReply,needsQuestionPlan} from './needs-guidance.ts';
 import {buyerQuestionAgendaFor,isCompanyChoiceQuestion,spokenReplyBudget,substantiveBuyerQuestions} from './buyer-turn-intent.ts';
 import {assessReplyVerification,classifyBuyerTurn,isNonAssertiveReply} from './turn-verification-policy.ts';
+import {immediateDocumentDispatchClaims} from './document-dispatch-timing.ts';
 import {applyCoachingConfiguration,configurationNeedsInterpretation,configurationSuggestionProblems,configuredSafeReply,selectedConfigurationStage,authorizedCurrentOfferStatement} from './coaching-configuration.ts';
 
 const STAGES = {
@@ -407,6 +408,7 @@ export function agreedResponseTimeSpans(line:string,context:CoachingContext):{st
 /** A requested or representative-only deadline is not a buyer agreement.
  * Vague speed language and duration promises never stand in for an agreed day. */
 export function unapprovedResponseDeadline(line:string,context:CoachingContext) {
+  if(immediateDocumentDispatchClaims(line).length)return true;
   return line.replace(/\b(a|p)\.\s*m\./gi,'$1m').split(/(?<=[.!?;])\s+|\b(?:but|however)\b/i).some(clause=>{
     if(authorizedCurrentOfferStatement(clause,context))return false;
     if(contactFollowUpPermission(clause))return false;

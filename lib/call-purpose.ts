@@ -434,7 +434,7 @@ export function checkSuggestion(guidance:Partial<Guidance>,context:PurposeContex
     ? needsFactCheck(say,context) || numbers.some(number=>!contextNumbers.has(numericKey(number)))
     : turnCheck.requiresVerification;
   if(needsVerification && !options.factChecked)reasons.push("Supplier claims require the source check before display");
-  if(unapprovedResponseDeadline(say,context))reasons.push("An unapproved follow-up deadline was added");
+  if(unapprovedResponseDeadline(say,context))reasons.push("An unapproved follow-up deadline or dispatch-speed assurance was added");
   const lowerLatest=normalized(latest),declined=/cannot share|can't share|won't share|rather not|not comfortable|will not share/.test(lowerLatest);
   if(declined && /\?/.test(say)&&/current price|current supplier|what.*(?:volume|quantity|grade)|share.*(?:volume|price)|pricing range/i.test(say))reasons.push("Repeated a discovery request the buyer declined");
   if(context.callContext) {

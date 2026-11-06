@@ -132,7 +132,8 @@ export function buildClientStanding(input:{client:ClientRecord;calls:CallRecord[
  if(documentState.transfers.length){
   const update=deriveDocumentState({seed:documentState,turns:outsideUpdate?[{id:'reviewed-rep-update',role:'you',text:outsideUpdate,source:'rep_update'}]:[]});
   base.documentState=update;
-  const outgoing=update.transfers.filter(row=>row.sender==='you'&&row.phase!=='cancelled'&&row.events.some(event=>['requested','promised','offered','sent','received'].includes(event.kind))),checks=update.transfers.filter(row=>row.sender==='you'&&row.phase==='checking'),incoming=update.transfers.filter(row=>row.sender==='buyer'&&row.phase!=='cancelled');
+  const outgoing=update.transfers.filter(row=>row.sender==='you'&&row.phase!=='cancelled'&&row.events.some(event=>['requested','promised','sent','received'].includes(event.kind))),checks=update.transfers.filter(row=>row.sender==='you'&&row.phase==='checking'),incoming=update.transfers.filter(row=>row.sender==='buyer'&&row.phase!=='cancelled');
+  const offers=update.transfers.filter(row=>row.sender==='you'&&row.phase==='offered'&&!row.events.some(event=>['requested','promised','sent','received'].includes(event.kind)));
   base.documents=outgoing.map(row=>row.document);
   const requested=outgoing.filter(row=>row.events.some(event=>event.kind==='requested'));
   base.buyerRequested=requested.length?[`${contact?.name||'The buyer'} requested the ${joined(requested.map(row=>row.document))}${requested.some(row=>row.condition)?'; subject to '+requested.filter(row=>row.condition).map(row=>row.condition!.text).join(' and '):''}.`]:[];
@@ -145,6 +146,7 @@ export function buildClientStanding(input:{client:ClientRecord;calls:CallRecord[
   base.receiptStatus=outgoing.length&&outgoing.every(row=>row.receiptStatus==='confirmed')?'confirmed':'unconfirmed';
   for(const row of update.transfers)if(row.document==='test reports'&&row.coverage==='unknown')base.unknowns.push('Report coverage remains unknown; the buyer’s reference and a promise to check are not source evidence.');
   for(const row of incoming)if(row.receiptStatus!=='confirmed')base.unknowns.push(`The buyer’s ${row.document} has not been confirmed received by the salesperson.`);
+  for(const row of offers)base.unknowns.push(`The salesperson offered to send the ${row.document}; buyer acceptance and a sending obligation remain unconfirmed.`);
  }
  const semantic=[base.reached,...base.buyerRequested,base.sendStatus==='sent'?`The salesperson reports sending the ${joined(base.documents)}. Receipt is ${base.receiptStatus}; review is ${base.reviewStatus}.`:base.repOwes[0]];
  // A handwritten account is preserved verbatim as the current summary. Only

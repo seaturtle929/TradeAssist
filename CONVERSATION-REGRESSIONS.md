@@ -16,6 +16,12 @@ For cross-sentence report-release validation, use `--baseline=050f40c` with
 grouping and paired safe/unsafe controller repairs; these are authored scripted
 fixtures, not fresh model results or audio-to-screen measurements.
 
+For grounded action/commitment checks, use `--baseline=b0c0a1f` with
+`--holdouts`. The preflight distinguishes conversational movement from document
+delivery, offers from promises, and completed handoffs from questions about
+completion. It also checks that timing diagnostics retain the real coverage
+condition and do not turn courtesy into a supplier claim.
+
 This command is offline, uses existing dependencies, and does not read credentials,
 start listening, make API requests, or touch browser storage. Reports go to ignored
 `outputs/conversation-regression/run-<timestamp>/REPORT.private.html` and

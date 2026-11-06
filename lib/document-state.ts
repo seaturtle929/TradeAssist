@@ -1,6 +1,9 @@
 import {deriveSpokenDocumentEvidence} from './document-call-evidence.ts';
 import {reportDeliveryCondition} from './document-delivery-condition.ts';
 import {analyzeDocumentActionMeaning,literalDocumentScopeEvidence,type DocumentProductSource} from './document-product-evidence.ts';
+import {analyzeDocumentActionSyntax,directDocumentActionObject,type DocumentActionSyntax} from './document-action-syntax.ts';
+import {affirmativeMaterialAction,materialRefusal} from './material-request-meaning.ts';
+import {fieldEvidence} from './buyer-facts.ts';
 
 export type DocumentActor='you'|'buyer';
 export type DocumentKind='company profile'|'spec sheets'|'test reports'|'drawings'|'catalog'|'brochure'|'website link';
@@ -19,8 +22,47 @@ export function isBuyerOwnedDocumentSend(text:string):boolean {const s=normalize
 const request=/\b(?:please\s+(?:send|email|share|forward|attach|include)|(?:can|could|would|will) you\s+(?:please\s+)?(?:send|email|share|forward|attach|include)|(?:send|email|share|forward)\s+(?:me|us)|you\s+(?:can|could|should)\s+(?:send|email|share|forward))\b|^(?:(?:okay|ok|sure|yes)[,. ]+)?(?:send|email|share|forward|attach|include)\b/i;
 const negated=/\b(?:I|we)\s+(?:haven't|have not|didn't|did not|won't|will not|cannot|can't)\s+(?:send|sent|email|emailed|receive|received|get|got)\b/i;
 const pastSend=/^\s*(?:(?:yes|okay|ok|sure)[,.!]\s*)?(?:I|we)(?:'ve| have)?\s+(?:already\s+)?(?:sent|emailed|forwarded|shared)\b/i;
-const receipt=/^\s*(?:(?:yes|okay|ok|great)[,.!]\s*)?(?:I|we)(?:'ve| have)?\s+(?:already\s+)?(?:received|got)\s+(?:your|the|that|this|those|these)\b/i;
+const receipt=/^\s*(?:(?:yes|okay|ok|great)[,.!]\s*)?(?:I|we)(?:'ve| have)?\s+(?:already\s+)?(?:received\s+|got\s+(?=(?:your|the|that|this|those|these|both|them)\b))/i;
 const other=(actor:DocumentActor):DocumentActor=>actor==='you'?'buyer':'you';
+const documentActionClauses=(text:string)=>normalize(text).split(/(?<=[.!?;])\s+|\s+(?=(?:Once|When|After|Before)\b)/)
+ .flatMap(part=>part.split(/\s+(?:and|but)\s+(?=(?:(?:can|could|would|will|may|should)\s+(?:you|I|we)\s+(?:(?:please|also|just)\s+)*(?:send|email|forward|share|attach|include)|please\s+(?:send|email|forward|share|attach|include))\b)/i)).filter(Boolean);
+type DocumentCompletion={actor:DocumentActor;kind:'sent'|'received';object:DocumentActionSyntax['object'];quote:string};
+function completedDocumentAction(part:string,actor:DocumentActor):DocumentCompletion|undefined{
+ if(part.includes('?')||negated.test(part))return;
+ const sent=pastSend.exec(part),received=!sent&&receipt.exec(part),match=sent||received;if(!match)return;
+ return {actor,kind:sent?'sent':'received',object:directDocumentActionObject(part,match[0].length,part.length,sent?'send':'receive'),quote:part};
+}
+/** Completed main actions use the same anchored assertion and direct object
+ * as the canonical ledger. This also represents an existing generic material
+ * such as “product information” without inventing a new stored document kind. */
+export function attributedDocumentCompletions(turn:DocumentTurn):DocumentCompletion[]{
+ if(turn.transcriptionUncertainty||!['buyer','customer','you'].includes(turn.role))return [];
+ const actor=turn.role==='you'?'you':'buyer';return documentActionClauses(turn.text).map(part=>completedDocumentAction(part,actor)).filter((action):action is DocumentCompletion=>!!action);
+}
+/** Only the direct object belongs to a delivery. A document mentioned in a
+ * recipient, purpose or an indirect inquiry is not another promised item. */
+function ownActionDocuments(action:DocumentActionSyntax,part:string):DocumentKind[]{
+ if(action.object.kind==='document')return documentKindsForState(action.object.text);
+ if(action.object.kind!=='pronoun')return [];
+ const preceding=[...part.slice(0,action.start).matchAll(/\b(?:(?:material test|inspection|quality|test) reports?|drawings?|specification sheets?|spec sheets?|profiles?|catalog(?:ue)?s?|brochures?)\b/gi)].filter(match=>!action.conditions.some(condition=>condition.start<=(match.index||0)&&condition.end>=(match.index||0)+match[0].length));
+ return preceding.length===1?documentKindsForState(preceding[0][0]):[];
+}
+/** The buyer can accept the immediately preceding actual offer, not a
+ * historical example or a proposal separated by substantive conversation. */
+export function acceptedDocumentOfferAt(turns:DocumentTurn[],index:number):{turn:DocumentTurn;index:number;objects:DocumentActionSyntax['object'][]}|undefined{
+ const current=turns[index];if(!current||!['buyer','customer'].includes(current.role)||current.transcriptionUncertainty||materialRefusal(normalize(current.text).toLowerCase()))return;
+ const accepts=/^(?:(?:okay|ok)[, ]*)?(?:yes|yeah|yep|sure|please do|go ahead|that (?:works|would be (?:useful|helpful|good|great)))(?:[, ]*(?:please|thanks|thank you|go ahead|send it(?: over)?|do that))?[.!\s]*$/i.test(current.text.trim());
+ const suppliedAddress=!!fieldEvidence('Email',[current]);if(!accepts&&!suppliedAddress)return;
+ const previous=turns.findLastIndex((turn,position)=>position<index&&turn.role==='you');if(previous<0)return;
+ const offer=turns[previous];if(offer.transcriptionUncertainty||!turns.slice(previous+1,index).every(turn=>turn.role==='buyer'&&/^(?:uh+|um+|hmm+|one moment|one second|hold on)[.!\s]*$/i.test(turn.text.trim())))return;
+ const questionOffer=ownSendQuestion.exec(normalize(offer.text));
+ const own=analyzeDocumentActionSyntax(offer.text,{speaker:'salesperson'}).filter(action=>action.actor==='salesperson'&&action.documentDelivery&&(['offer','commitment'].includes(action.speechAct)||questionOffer&&action.speechAct==='permission_question'));
+ const objects=own.map(action=>action.object);
+ if(questionOffer&&!objects.length)objects.push(directDocumentActionObject(offer.text,questionOffer[0].length,offer.text.length,questionOffer[0].match(/\w+$/)![0]));
+ if(!objects.length)return;
+ const address=suppliedAddress&&offer.text.includes('?')&&/\b(?:email|address)\b/i.test(offer.text);
+ return accepts||address?{turn:offer,index:previous,objects}:undefined;
+}
 /** Actual attributed actions only. Promises never become sending or receipt;
  * a buyer reference/condition never becomes original company coverage evidence. */
 export function deriveDocumentState(input:{turns?:DocumentTurn[];seed?:DocumentState;sources?:DocumentProductSource[]}):DocumentState{
@@ -37,15 +79,21 @@ export function deriveDocumentState(input:{turns?:DocumentTurn[];seed?:DocumentS
   const actor:DocumentActor=turn.role==='you'?'you':'buyer',text=normalize(turn.text),turnId=turn.id||`document-turn-${index}`;
   const condition=actor==='buyer'?reportDeliveryCondition(text):undefined;
   const event=(record:DocumentTransfer,kind:DocumentEvent['kind'],quote:string)=>{record.events.push({kind,actor,turnId,quote,source:turn.source||'transcript'});record.events=record.events.slice(-64);};
-  let parts=text.split(/(?<=[.!?;])\s+|\s+(?=(?:Once|When|After|Before)\b)/)
-   .flatMap(part=>part.split(/\s+(?:and|but)\s+(?=(?:(?:can|could|would|will|may|should)\s+(?:you|I|we)\s+(?:(?:please|also|just)\s+)*(?:send|email|forward|share|attach|include)|please\s+(?:send|email|forward|share|attach|include))\b)/i)).filter(Boolean);
+  const accepted=acceptedDocumentOfferAt(turns,index);
+  if(accepted)for(const record of result.transfers.filter(row=>row.sender==='you'&&row.phase==='offered'&&row.events.some(prior=>prior.kind==='offered'&&prior.turnId===(accepted.turn.id||`document-turn-${accepted.index}`)))){
+   record.phase='requested';record.sendStatus='pending';event(record,'requested',text);
+  }
+  let parts=documentActionClauses(text);
   if(!parts.length)parts=[text];
   for(const part of parts){
    const labelFor=(kind:DocumentKind)=>kind==='test reports'?part.match(/\b((?:material test|inspection|quality|test) report)\b/i)?.[1].toLowerCase():undefined;
    let kinds=documentKindsForState(part);
-   if(!kinds.length&&/\b(?:it|them|both|those|that)\b/i.test(part)&&/\b(?:send|email|reply|receive|received|got|sent|emailed)\b/i.test(part)){
+   if(!kinds.length&&/\b(?:it|them|both|those|that)\b/i.test(part)&&/\b(?:send|email|reply|receive|received|got|sent|emailed|shared|forwarded)\b/i.test(part)){
     const relevant=result.transfers.filter(t=>t.sender===(receipt.test(part)?other(actor):actor==='buyer'&&request.test(part)?'you':actor));
+    // An actual plural completion can complete its explicit prior bundle;
+    // one ambiguous singular pronoun must not complete several documents.
     if(relevant.length===1)kinds=[relevant[0].document];
+    else if((pastSend.test(part)||receipt.test(part))&&/\b(?:them|both|those|these)\b/i.test(part))kinds=[...new Set(relevant.filter(row=>row.phase!=='cancelled').map(row=>row.document))];
    }
    const ownOffer=ownSendQuestion.exec(part);
    const plain=part.trim().replace(/^(?:(?:please|sorry|actually|instead)[,:]?\s+)*/i,'');
@@ -75,22 +123,57 @@ export function deriveDocumentState(input:{turns?:DocumentTurn[];seed?:DocumentS
     if(/\b(?:I|we)\s+(?:haven't|have not|didn't|did not)\s+(?:received?|got)\b/i.test(part)&&!part.includes('?'))for(const kind of kinds){const r=get(kind,other(actor),labelFor(kind));r.receiptStatus='unconfirmed';r.phase=r.sendStatus==='reported_sent'?'sent':r.events.some(e=>e.kind==='promised')?'promised':'inquiry';event(r,'restricted',part);}
     continue;
    }
-   const ownSend=isBuyerOwnedDocumentSend(part),meaning=analyzeDocumentActionMeaning(part,{turns:turns.slice(0,index+1),sources:input.sources}),promise=senderPrefix.exec(part),sent=!part.includes('?')&&pastSend.test(part),received=!part.includes('?')&&receipt.test(part);
+   const ownSend=isBuyerOwnedDocumentSend(part),meaning=analyzeDocumentActionMeaning(part,{turns:turns.slice(0,index+1),sources:input.sources}),completion=completedDocumentAction(part,actor),sent=completion?.kind==='sent',received=completion?.kind==='received';
+   const completedObject=completion?.object;
+   const completedKinds=new Set(completedObject?.kind==='document'?documentKindsForState(completedObject.text):[]);
+   if(completedObject?.kind==='pronoun')for(const kind of kinds)completedKinds.add(kind);
    // Bind each outgoing predicate to its object, not every document mentioned
    // in a review/check prerequisite in the same sentence.
-   const outgoingKinds=new Set(meaning.outgoing.flatMap((action,actionIndex)=>documentKindsForState(part.slice(action.end,meaning.outgoing[actionIndex+1]?.start).split(/\b(?:if|when|once|provided|before|after|and (?:check|review|verify|confirm))\b/i,1)[0])));
-   for(const action of meaning.outgoing){const object=part.slice(action.end).split(/[.!?;]/,1)[0];if(/^\s+(?:with\s+)?(?:it|that|this|them)\b/i.test(object)){const nearest=[...part.slice(0,action.start).matchAll(/\b(?:(?:material test|inspection|quality|test) reports?|drawings?|specification sheets?|spec sheets?|profiles?)\b/gi)].at(-1);if(nearest)for(const kind of documentKindsForState(nearest[0]))outgoingKinds.add(kind);}}
-   if(meaning.delivery)for(const kind of documentKindsForState(meaning.delivery.document))outgoingKinds.add(kind);
-   if(!kinds.length&&outgoingKinds.size)kinds=[...outgoingKinds];
+   const speaker=actor==='you'?'salesperson':'buyer';
+   const ownActions=analyzeDocumentActionSyntax(part,{speaker}).filter(action=>action.actor===speaker&&action.documentDelivery&&['commitment','offer'].includes(action.speechAct));
+   const outgoingActions=new Map<DocumentKind,DocumentActionSyntax>();
+   for(const action of ownActions){
+    let targets:DocumentKind[];
+    if(action.object.kind==='pronoun'){
+     const relevant=result.transfers.filter(row=>row.sender===actor&&row.phase!=='cancelled'&&row.events.some(event=>['requested','offered','promised','sent','received'].includes(event.kind)));
+     if(relevant.length===1)targets=[relevant[0].document];
+     else if(/^(?:them|both|those|these)$/i.test(action.object.text))targets=[...new Set(relevant.map(row=>row.document))];
+     else targets=relevant.length?[]:ownActionDocuments(action,part);
+    }else targets=ownActionDocuments(action,part);
+    for(const target of targets)outgoingActions.set(target,action);
+   }
+   const outgoingKinds=new Set(outgoingActions.keys());
+   const requestedMain=actor==='buyer'?affirmativeMaterialAction(part,isBuyerOwnedDocumentSend,value=>documentKindsForState(value).length>0):undefined;
+   const requestedKinds=new Set<DocumentKind>();
+   if(requestedMain){
+    const verbs=[...requestedMain.matchAll(/\b(?:send|email|share|forward|attach|include)\b/gi)];
+    for(const [verbIndex,verb] of verbs.entries()){
+     const before=requestedMain.slice(0,verb.index);
+     if(verbIndex&&!/\b(?:and|then|please)\s+(?:(?:can|could|would|will|may|should)\s+you\s+|you\s+(?:(?:can|could|should|may|will)\s+)?)?$/i.test(before))continue;
+     const object=directDocumentActionObject(requestedMain,(verb.index||0)+verb[0].length,requestedMain.length,verb[0]);
+     if(object.kind==='document')for(const kind of documentKindsForState(object.text))requestedKinds.add(kind);
+    }
+   }
+   kinds=[...new Set([...kinds,...outgoingKinds])];
    for(const kind of kinds){
-    if(received){const r=get(kind,other(actor),labelFor(kind));r.receiptStatus='confirmed';r.sendStatus='reported_sent';r.phase='received';event(r,'received',part);continue;}
-    if(sent){const r=get(kind,actor,labelFor(kind));r.sendStatus='reported_sent';r.phase='sent';event(r,'sent',part);continue;}
-    if((promise||meaning.outgoing.length&&/\b(?:I|we)(?:'ll|\s+(?:will|can|would))\b/i.test(part))&&outgoingKinds.has(kind)){
-     const r=get(kind,actor,labelFor(kind)),tentative=/\b(?:can|could|would)\b/i.test(promise?.[0]||part);r.phase=tentative?'offered':'promised';r.sendStatus='pending';event(r,tentative?'offered':'promised',part);
-     if(actor==='you'){if(meaning.delivery?.deliveryCondition==='stated_condition')r.condition={kind:'coverage_positive',text:meaning.delivery.conditionText||part,turnId};}
+    if(received&&completedKinds.has(kind)){const r=get(kind,other(actor),labelFor(kind));r.receiptStatus='confirmed';r.sendStatus='reported_sent';r.phase='received';event(r,'received',part);continue;}
+    if(sent&&completedKinds.has(kind)){const r=get(kind,actor,labelFor(kind));r.sendStatus='reported_sent';r.phase='sent';event(r,'sent',part);continue;}
+    const action=outgoingActions.get(kind);
+    if(action){
+     const r=get(kind,actor,labelFor(kind)),tentative=action.speechAct==='offer';r.phase=tentative?'offered':'promised';r.sendStatus='pending';event(r,tentative?'offered':'promised',part);
+     if(actor==='you'){
+      if(meaning.delivery?.deliveryCondition==='stated_condition')r.condition={kind:'coverage_positive',text:meaning.delivery.conditionText||part,turnId};
+      else if(action.conditions.length){
+       // Retain an actual action prerequisite even when the more specific
+       // report/reference matcher cannot resolve it. This grants no coverage
+       // or permission: unresolved conditions continue to block sending.
+       const scoped=kind==='test reports'&&reportDeliveryCondition(part.slice(action.start,action.scope.end))==='scope_required';
+       r.condition={kind:scoped?'coverage_positive':'unresolved',text:action.conditions.map(condition=>condition.text).join(' and '),turnId};
+      }
+     }
      continue;
     }
-    if(actor==='buyer'&&!ownSend&&(request.test(part)||condition&&kind==='test reports')){const r=get(kind,'you',labelFor(kind));r.phase=r.phase!=='cancelled'&&r.events.some(e=>e.kind==='promised')?'promised':'requested';r.sendStatus='pending';event(r,'requested',part);}
+    if(actor==='buyer'&&!ownSend&&(requestedKinds.has(kind)||condition&&kind==='test reports')){const r=get(kind,'you',labelFor(kind));r.phase=r.phase!=='cancelled'&&r.events.some(e=>e.kind==='promised')?'promised':'requested';r.sendStatus='pending';event(r,'requested',part);}
     if(actor==='you'&&kind==='test reports'&&/\b(?:I|we)(?:'ll| will| can)\s+(?:check|verify|confirm)\s+(?:whether|if)\b/i.test(part)){const r=get(kind,'you',labelFor(kind));if(!r.events.some(event=>['requested','promised','offered','sent','received'].includes(event.kind)))r.phase='checking';event(r,'check_promised',part);}
    }
   }
@@ -116,22 +199,39 @@ export function deriveDocumentState(input:{turns?:DocumentTurn[];seed?:DocumentS
  * omitted raw speech or override a salesperson's correction. */
 export function documentStateReviewLines(state:DocumentState):string[]{return state.transfers.filter(r=>r.events.length).map(r=>{
  const label=r.label||r.document;
+ const conditionEvent=r.condition?([...r.events].reverse().find(event=>event.kind==='restricted'&&event.actor==='buyer')||[...r.events].reverse().find(event=>event.turnId===r.condition!.turnId)):undefined;
+ const conditionMarker=conditionEvent?`\nThe ${conditionEvent.actor==='buyer'?'buyer':'salesperson'} stated next step: “${conditionEvent.quote.replace(/\s*\n\s*/g,' ')}”`:'';
  if(r.phase==='cancelled')return `${r.events.findLast(event=>event.kind==='cancelled')?.actor==='you'?'The salesperson withdrew the proposed handoff of':'The buyer cancelled the request for'} the ${label}; no sending obligation remains.`;
  if(r.sender==='buyer')return r.receiptStatus==='confirmed'?`The salesperson confirmed receipt of the buyer’s ${label}.`:r.sendStatus==='reported_sent'?`The buyer reported sending the ${label}; the salesperson has not confirmed receipt.`:`The buyer ${r.phase==='offered'?'offered':'promised'} to send the ${label}; sending and salesperson receipt remain unconfirmed.`;
  const check=r.events.some(e=>e.kind==='check_promised')?'The salesperson will check the report coverage. ':'';
  const hasSend=r.events.some(event=>event.kind==='requested'||event.kind==='promised'||event.kind==='offered');
  if(!hasSend)return check||`The buyer asked about the ${label} coverage; it remains unknown until supported by approved evidence.`;
- const send=r.sendStatus==='reported_sent'?`The salesperson reported sending the ${label}; buyer receipt remains ${r.receiptStatus}.`:`${r.events.some(e=>e.kind==='promised')?'The salesperson promised to send':'The buyer requested'} the ${label}${r.condition?`; ${r.condition.kind==='coverage_positive'?'sending is conditional on confirmed positive report coverage':'the buyer’s stated release condition must be satisfied'}`:''}. Sending remains pending.`;
- return check+send+(r.document==='test reports'?' Report coverage remains unknown until supported by approved evidence.':'');
+ const action=r.events.some(e=>e.kind==='promised')?'The salesperson promised to send':r.events.some(e=>e.kind==='requested')?'The buyer requested':'The salesperson offered to send';
+ const send=r.sendStatus==='reported_sent'?`The salesperson reported sending the ${label}; buyer receipt remains ${r.receiptStatus}.`:`${action} the ${label}${r.condition?`; ${r.condition.kind==='coverage_positive'?'sending is conditional on confirmed positive report coverage':'the buyer’s stated release condition must be satisfied'}`:''}. Sending remains pending.`;
+ return check+send+(r.document==='test reports'?' Report coverage remains unknown until supported by approved evidence.':'')+conditionMarker;
 });}
 /** Reviewed edits are authoritative. Do not re-import raw speech omitted or
  * corrected by the salesperson. Attribute only explicit reviewed statements;
  * ambiguous prose stays in the recap rather than becoming a completed event. */
 export function documentStateFromReviewedRecap(recap:string,options:{buyerNames?:string[]}={}):DocumentState{
  const turns:DocumentTurn[]=[];
- for(const [index,raw] of recap.replace(/\\n/g,'\n').split(/\n+|(?<=[.!?])\s+/).entries()){
+ const attributedQuote=(raw:string)=>{
+  const line=normalize(raw).trim(),at=line.search(/[“"]/);if(at<0)return;
+  const attributed=/^(?:The )?(?:buyer|customer|contact|salesperson|representative|rep)\b/i.test(line)||(options.buyerNames||[]).some(name=>new RegExp('^'+name.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'\\b','i').test(line));
+  if(!attributed)return;
+  const opening=line[at],closing=opening==='“'?'”':'"';let depth=1;
+  for(let index=at+1;index<line.length;index++){
+   if(opening==='“'&&line[index]===opening)depth++;
+   else if(line[index]===closing&&line[index-1]!=='\\'&&!--depth)return {text:line.slice(at+1,index),end:index};
+  }
+ };
+ const reviewedLines=recap.replace(/\\n/g,'\n').split(/\n+/).flatMap(raw=>{
+  const line=raw.trim(),quote=attributedQuote(line);
+  return quote?[line.slice(0,quote.end+1),...line.slice(quote.end+1).trim().split(/(?<=[.!?])\s+/).filter(Boolean)]:line.split(/(?<=[.!?])\s+/);
+ });
+ for(const [index,raw] of reviewedLines.entries()){
   const line=normalize(raw).trim();
-  const quote=line.match(/[“"]([^”"]+)[”"]/u)?.[1];
+  const quote=attributedQuote(line)?.text??line.match(/[“"]([^”"]+)[”"]/u)?.[1];
   const named=(options.buyerNames||[]).filter(Boolean).find(name=>new RegExp('^'+name.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'\\b','i').test(line));
   const buyer=!!named||/^(?:The )?(?:buyer|customer|contact)\b/i.test(line),rep=/^(?:The )?(?:salesperson|representative|rep)\b/i.test(line);
   if(!buyer&&!rep)continue;
