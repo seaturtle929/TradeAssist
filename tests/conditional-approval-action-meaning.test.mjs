@@ -1,3 +1,4 @@
+import {assertLocalPressCompletion} from './helpers/local-press-assertions.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {analyzeDocumentActionMeaning} from '../lib/document-product-evidence.ts';
@@ -35,14 +36,10 @@ for(const company of companies)for(const approver of approvers){
    t.request();assert.equal(t.creates()[0].response.instructions.includes(say),false,'The answer is not supplied as a generation example.');t.respond(say);await settle();assert.deepEqual(t.log.shown,[{say,trigger:context.coachingRequest.id}]);assert.equal(t.creates().length,1);assert.equal(t.log.traces.filter(event=>event.event==='repair_requested').length,0);assert.equal(t.log.remote,0);assert.equal(t.log.fallback,0);
   }finally{t.session.stop();}
  });
- test(`${company.name}/${approver.role}: wrong approver blocked then one bounded same-press repair`,async()=>{
-  const context=fixture(company,approver),wrong=approvers.find(value=>value.role!==approver.role),bad=safe(company,wrong),good=safe(company,approver),t=transport(context);
-  try{
-   assert.equal(checkSuggestion({say:bad},context,{factChecked:true}).ok,false);
-   t.request();t.respond(bad);await settle();assert.deepEqual(t.log.shown,[]);assert.equal(t.creates().length,2);
-   t.respond(good);await settle();assert.deepEqual(t.log.shown,[{say:good,trigger:context.coachingRequest.id}]);assert.equal(t.creates().length,2);assert.equal(t.log.traces.filter(event=>event.event==='repair_requested').length,1);assert.equal(t.log.remote,0);assert.equal(t.log.fallback,0);
-  }finally{t.session.stop();}
- });
+ test(`${company.name}/${approver.role}: wrong approver blocked and the original press completes locally`,async()=>{
+ const context=fixture(company,approver),wrong=approvers.find(value=>value.role!==approver.role),bad=safe(company,wrong),t=transport(context);
+ try{assert.equal(checkSuggestion({say:bad},context,{factChecked:true}).ok,false);t.request();t.respond(bad);await settle();assertLocalPressCompletion(t.log,t.creates(),bad);assert.equal(t.log.remote,0);}finally{t.session.stop();}
+});
 }
 
 for(const company of companies){
@@ -65,9 +62,9 @@ for(const company of companies){
   const restricted={...context,sources:[{id:company.id+'-restricted',text:`The ${company.report} requires company release approval.`}]};
   const assessment=assessReplyVerification(base,restricted);assert.ok(assessment.unsupportedClaims.length||assessment.requiresVerification);assert.equal(checkSuggestion({say:base},restricted,{factChecked:true}).ok,false);
  });
- test(`${company.name}: two failed gate corrections end unavailable, not generic filler`,async()=>{
-  const t=transport(context);try{t.request();t.respond(unsafe[0]);await settle();assert.equal(t.creates().length,2);t.respond(unsafe[1]);await settle();assert.deepEqual(t.log.shown,[]);assert.equal(t.creates().length,2);assert.equal(t.log.traces.filter(event=>event.event==='failed').length,1);assert.equal(t.log.fallback,0);}finally{t.session.stop();}
- });
+ test(`${company.name}: a failed gate draft completes locally and ignores late unsafe text`,async()=>{
+ const t=transport(context);try{t.request();t.respond(unsafe[0]);await settle();const spoken=assertLocalPressCompletion(t.log,t.creates(),unsafe[0]);t.respond(unsafe[1]);await settle();assert.equal(t.log.shown.length,1);assert.equal(t.log.shown[0].say,spoken,'Late provider text cannot replace the stable local line');assert.equal(t.creates().length,1);}finally{t.session.stop();}
+});
 }
 
 test('Drawing offers do not invent completed approval or company authority',()=>{

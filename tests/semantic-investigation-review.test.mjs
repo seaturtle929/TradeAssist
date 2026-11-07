@@ -1,3 +1,4 @@
+import {assertLocalPressCompletion} from './helpers/local-press-assertions.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {assessReplyVerification,hasAffirmativeOutgoingDocumentAction,isAwaitingBuyerDocumentReceipt} from '../lib/turn-verification-policy.ts';
@@ -38,13 +39,13 @@ for(const company of companies){
   for(const latest of ['Only send the report if it covers my reference. Do not send anything until my engineer approves the drawing.','Only send the report if it covers my reference. Actually, do not send it yet.']){const gated={...context,turns:[...context.turns,{id:'restriction',role:'buyer',text:latest}]};assert.ok(assessReplyVerification(say,gated).unsupportedClaims.length,latest);}
   const restricted={...context,sources:[{id:'restricted',text:`The ${company.report} is available only after manager approval.`}]};assert.ok(assessReplyVerification(say,restricted).unsupportedClaims.length,'Unparsed sending still needs original release authority.');
  });
- test(`${company.name}: an unresolved substantive capability verdict never publishes`,async()=>{
+ test(`${company.name}: an unresolved substantive capability draft never publishes and the press completes locally`,async()=>{
   // This is a substantive scope qualifier, not unfamiliar inquiry wording.
   // A removable maintenance cover does not by itself prove unrestricted access.
   const say='ZX72 supports unrestricted spring access from the side.',context=fixture(company);
   context.sources=[{id:'technical',text:'ZX72 has a removable side cover for maintenance access to the spring.'}];context.turns=[{id:'name',role:'buyer',text:'Morgan speaking.'},{id:'rep',role:'you',text:`Hello, Morgan. I am calling from ${company.name}.`},{id:'question',role:'buyer',text:'Can I get at the spring from the side of ZX72?'}];context.coachingRequest.listeningSession.currentTurnIds=context.turns.map(turn=>turn.id);
   const assessment=assessReplyVerification(say,context);assert.deepEqual(assessment.unsupportedClaims,[]);assert.ok(assessment.pendingClaims.length);assert.ok(assessment.pendingClaims.every(claim=>claim.verificationKind!=='speech_act'));assert.equal(assessment.requiresVerification,true);assert.equal(checkSuggestion({say},context,{factChecked:true}).ok,true);
-  for(const verdict of [{verified:false,verificationStatus:'unavailable',caution:'The substantive scope check is unavailable.'},{verified:false,verificationStatus:'rejected',caution:'The source does not establish unrestricted access.'}]){const run=controller(context,say,verdict);try{await new Promise(resolve=>setImmediate(resolve));assert.deepEqual(run.shown,[]);assert.equal(run.verificationCalls,1);}finally{run.session.stop();}}
+  for(const verdict of [{verified:false,verificationStatus:'unavailable',caution:'The substantive scope check is unavailable.'},{verified:false,verificationStatus:'rejected',caution:'The source does not establish unrestricted access.'}]){const run=controller(context,say,verdict);try{await new Promise(resolve=>setImmediate(resolve));assertLocalPressCompletion(run,run.sent.filter(event=>event.type==='response.create'),say);assert.equal(run.verificationCalls,1);}finally{run.session.stop();}}
  });
  test(`${company.name}: offering an available report does not prove its relative-clause contents`,()=>{
   const say=`I can send the ${company.report}, which discusses ZX72 material behavior.`,context=fixture(company),availability=context.sources[0];

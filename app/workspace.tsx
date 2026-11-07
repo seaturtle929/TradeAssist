@@ -16,6 +16,7 @@ import { Activity, ArrowRight, AudioLines, BookOpen, Check, CheckCircle2, Chevro
 import {generalStyleExamples} from "../lib/shared-speaking-style";
 import {isSuggestNextMoveShortcut} from "../lib/coaching-shortcut";
 import {readManualStream} from "../lib/manual-stream-client";
+import {makeLocalPressReply,PRESS_REPLY_DEADLINE_MS} from "../lib/local-press-reply";
 import {isUsableCoachingWording} from "../lib/coaching-timing";
 import type {ManualTiming} from "../lib/manual-timing";
 import type {LiveLatencySnapshot} from "../lib/live-latency";
@@ -35,7 +36,7 @@ import { GOALS, knowledgeFor, type Manufacturer, type Source, type Turn, type Gu
 import { DEFAULT_VOICE, type VoiceProfile } from "../lib/sales-playbook";
 import { DEFAULT_BUDGET, budgetDecision, monthSpend, formatUsd, priceRealtimeUsage, priceTranscriptionUsage, type UsageEntry, type BudgetSettings } from "../lib/costs";
 import { selectKnowledge } from "../lib/knowledge";
-import { BuyerBriefInput, VoiceProfileInput } from "../lib/coach";
+import { BuyerBriefInput, VoiceProfileInput, CoachInput } from "../lib/coach";
 import { VoiceSettings, SpendingPanel } from "../components/sales-panels";
 import { CallContextCard, PurposeHUD } from "../components/call-context";
 import {CallPreparation} from '../components/call-preparation';
@@ -864,16 +865,20 @@ export default function Workspace() {
   function requestNextMove() {
     if(queuedRequest)return;
     const buttonStartedAt=performance.now(),requestedAt=Date.now();
-    if(!configured){setError("The AI connection is not ready. Check Connection & audio.");return;}
     if(!ensurePreparationReviewed())return;
-    try{pinCallConfiguration();}catch(error){setError(error instanceof Error?error.message:"Choose a sales stage before coaching.");return;}
+    let configurationUnavailable=false;
+    try{pinCallConfiguration();}catch{configurationUnavailable=true;}
     const id=uid();
     const buyerSpeech=liveSession.current?.observedSpeechSnapshot()||{partials:[],pendingSpeech:[]};
     const repSpeech=repAudio.current?.observedSpeechSnapshot()||{partials:[],pendingSpeech:[]};
-    const snapshot=snapshotCoachingContext({...payload("coach",context.current.turns),coachingRequest:{id,requestedAt,preparationMs:0} as CoachingRequest},{partials:[...buyerSpeech.partials,...repSpeech.partials],pendingSpeech:[...buyerSpeech.pendingSpeech,...repSpeech.pendingSpeech]});
+    // If stage binding itself is unavailable, retain only this company's
+    // identity and actual speech. A local acknowledgment needs no guessed
+    // configuration, product fact or cross-company history.
+    const company=context.current.current;
+    const base=configurationUnavailable?CoachInput.parse({mode:"coach",callId:activeCallId.current||(activeCallId.current=uid()),manufacturer:{id:company?.id||"general",name:company?.name||"Your company",products:company?.products||""},sources:[],turns:context.current.turns.filter(turn=>!isTranscriptionPromptEcho(turn.text)),callContext:normalizeCallContext(context.current.callContext),stageMap:normalizeStageMap(undefined),buyer:context.current.buyer,goal:context.current.goal,callType:context.current.callType,bilingual:context.current.bilingual,voice:context.current.voice}):payload("coach",context.current.turns);
+    const snapshot=snapshotCoachingContext({...base,coachingRequest:{id,requestedAt,preparationMs:0} as CoachingRequest},{partials:[...buyerSpeech.partials,...repSpeech.partials],pendingSpeech:[...buyerSpeech.pendingSpeech,...repSpeech.pendingSpeech]});
     snapshot.coachingRequest.preparationMs=performance.now()-buttonStartedAt;
     const spend=spendState.current,decision=budgetDecision(spend.budget,spend.callUsd,spend.entries,.02);
-    if(!decision.allowed){setError(decision.reason);return;}
     // An early live request follows the current buyer turn until it is ready.
     // Once generation starts, one frozen snapshot owns the displayed wording.
     controller.current?.abort();seq.current++;
@@ -882,8 +887,9 @@ export default function Workspace() {
     setError("");setLiveTiming(undefined);setCheckingFacts(false);setLiveDraft(false);setThinking(true);setPendingBuyerText("");
     if(liveSession.current&&channel.current?.readyState==='open'){
       setManualTrace(null);
-      liveSession.current.requestNextMove(snapshot as LiveContext);
-    } else void coach(snapshot);
+      if(configurationUnavailable||!configured||!decision.allowed)liveSession.current.requestLocalNextMove(snapshot as LiveContext,configurationUnavailable?"configuration_unavailable":!configured?"not_configured":"budget_limit");
+      else liveSession.current.requestNextMove(snapshot as LiveContext);
+    } else void coach(snapshot as ReturnType<typeof payload> & {coachingRequest:CoachingRequest},configurationUnavailable?"configuration_unavailable":!configured?"not_configured":!decision.allowed?"budget_limit":undefined);
   }
   function suggestNow() {
     liveSession.current?.suggestNow();
@@ -906,58 +912,69 @@ export default function Workspace() {
     const guidance:Guidance={say:event.originalSay,ask:'',intent:'',nextStep:'',caution:event.reason,evidence:[],missing:[],verified:false,verificationStatus:event.status==='rejected'?'rejected':'unavailable',analysisReady:true,scriptComplete:false};
     setSuggestions(previous=>upsertSuggestion(previous,{id:issueId,at:event.at,triggerTurnId:event.turnId,guidance,status:'ignored',bilingual:false,pending:false,sourceSnapshot:[],coachingIssue:{status:event.status,reason:event.reason,correction:event.correction},...pinned?{learningCapture:captureFor(issueId,pinned)}:{}}));
   }
-  async function coach(snapshot:ReturnType<typeof payload> & {coachingRequest:CoachingRequest}) {
+  async function coach(snapshot:ReturnType<typeof payload> & {coachingRequest:CoachingRequest},localReason?:string) {
     controller.current?.abort();const aborter=new AbortController();controller.current=aborter;
     const id=++seq.current,generation=callGeneration.current,replyId=`request-${snapshot.coachingRequest.id}`;
     const buyerTurn=[...snapshot.turns].reverse().find(turn=>turn.role!=="you"),echo=coachingRequestFocus(snapshot).displayText||buyerTurn?.text||(snapshot.turns.length?"Conversation so far":"Opening");
     const submittedAt=snapshot.coachingRequest.requestedAt;
     setManualTrace({replyId,submittedAt,preparationMs:snapshot.coachingRequest.preparationMs,model:"Connecting…",source:"real_model"});
     setThinking(true);setCheckingFacts(false);setError("");setPendingBuyerText("");
-    let candidate:Guidance|null=null,checked=false;
+    let candidate:Guidance|null=null,checked=false,providerRequested=false;
+    let deadline:ReturnType<typeof setTimeout>|undefined;
     const present=(value:Guidance,complete:boolean,persist:boolean)=>{
       if(id!==seq.current||generation!==callGeneration.current)return;
       if(manualReplyEdits.current.has(replyId))return;
-      if(candidate?.verified&&candidate.say!==value.say){
+      if(candidate&&candidate.say!==value.say){
         retainCoachingIssue({suggestionId:replyId,at:Date.now(),status:'correction',originalSay:candidate.say,correction:value.say,reason:'A later check proposed a correction. The ready wording was not replaced.',context:snapshot});return;
       }
       const firstDisplay=!candidate;
       const next:Guidance={...value,questionEcho:echo,phase:"answer",analysisReady:complete};
-      candidate=next;
+      candidate=next;clearTimeout(deadline);
       // An editable streamed row must outlive active guidance. Keep its original
       // call snapshot before another explicit request can supersede the generation.
       if(firstDisplay){const learningCapture=captureFor(replyId,snapshot);setSuggestions(previous=>upsertSuggestion(previous,{id:replyId,at:submittedAt,triggerTurnId:buyerTurn?.id,guidance:next,status:"suggested",bilingual:snapshot.bilingual,buyerQuote:echo,sourceSnapshot:[],learningCapture}));}
       if(!manualReplyRetired.current.has(replyId)){activeGuidance.current={id:replyId,value:next};setGuidanceId(replyId);setGuidanceAt(submittedAt);setGuidance(next);setThinking(!complete);setLiveDraft(!complete);setPendingBuyerText("");if(firstDisplay)setLatency(Date.now()-submittedAt);}
       if(persist)rememberGuidance(next,replyId,buyerTurn?.id,captureFor(replyId,snapshot));
     };
+    const completeLocally=(reason:string)=>{
+      if(candidate||aborter.signal.aborted||id!==seq.current||generation!==callGeneration.current)return;
+      const value={...makeLocalPressReply(snapshot,reason),usageUnconfirmed:providerRequested};checked=true;
+      present(value,true,true);
+      setManualTrace(trace=>trace?{...trace,model:"Local response",source:"local",complete:true,verified:true,usageUnconfirmed:providerRequested}:trace);
+    };
     try {
-      const spend=spendState.current,decision=budgetDecision(spend.budget,spend.callUsd,spend.entries,.02);if(!decision.allowed)throw new Error(decision.reason);
+      const spend=spendState.current,decision=budgetDecision(spend.budget,spend.callUsd,spend.entries,.02);
+      if(localReason||!decision.allowed){completeLocally(localReason||"budget_limit");return;}
+      deadline=setTimeout(()=>{completeLocally("generation_timeout");aborter.abort();},Math.max(0,PRESS_REPLY_DEADLINE_MS-(snapshot.coachingRequest.preparationMs||0)));
+      providerRequested=true;
       const response=await fetch("/api/coach/stream",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(snapshot),signal:aborter.signal});
       await readManualStream(response,event=>{
         if(event._charges)recordCharges(event._charges,generation===callGeneration.current);
         if(id!==seq.current||generation!==callGeneration.current)return;
-        if(event.timing?.phases)setManualTrace(trace=>trace?{...trace,serverPhases:event.timing!.phases}:trace);
-        if(event.guidance)setManualTrace(trace=>trace?{...trace,lastDisplayEventAt:Date.now()}:trace);
+        if(event.timing?.phases)setManualTrace(trace=>trace?{...trace,serverPhases:event.timing!.phases,usageUnconfirmed:event.timing?.usageUnconfirmed}:trace);
+        if(event.guidance)setManualTrace(trace=>trace?{...trace,lastDisplayEventAt:Date.now(),...event.guidance?.replyOrigin==="local"?{model:"Local response",source:"local"}:{}}:trace);
         if(event.requestedServiceTier)setManualTrace(trace=>trace?{...trace,requestedServiceTier:event.requestedServiceTier}:trace);
         if(event.serviceTier)setManualTrace(trace=>trace?{...trace,serviceTier:event.serviceTier}:trace);
-        if(event.model)setManualTrace(trace=>trace?{...trace,model:event.model!}:trace);
-        if(event.type==="start")setManualTrace(trace=>trace?{...trace,model:event.model||"Unknown",source:event.source||"real_model"}:trace);
+        if(event.model)setManualTrace(trace=>trace?{...trace,model:candidate?.replyOrigin==="local"?"Local response":event.model!}:trace);
+        if(event.type==="start")setManualTrace(trace=>trace?{...trace,model:candidate?.replyOrigin==="local"?"Local response":event.model||"Unknown",source:candidate?.replyOrigin==="local"?"local":event.source||"real_model"}:trace);
         // Unchecked provider prefixes are never displayed as ready wording.
-        if(event.type==="suggestion_complete"&&event.guidance?.verified){if(!checked)present(event.guidance,true,true);setLiveDraft(false);setCheckingFacts(false);setManualTrace(trace=>trace?{...trace,complete:true}:trace);}
+        if(event.type==="suggestion_complete"&&event.guidance?.verified){if(!checked)present(event.guidance,true,true);setLiveDraft(false);setCheckingFacts(false);setManualTrace(trace=>trace?{...trace,complete:true,verified:true}:trace);}
         if(event.type==="verification_complete"&&event.guidance){
           const editProtected=manualReplyEdits.current.has(replyId);checked=true;
           if(event.guidance.verified)present(event.guidance,true,true);
-          else retainCoachingIssue({suggestionId:replyId,at:Date.now(),status:event.guidance.verificationStatus==='rejected'?'rejected':'unavailable',originalSay:event.guidance.say,reason:event.guidance.caution||'The source check did not establish this wording.',context:snapshot});
+          else {retainCoachingIssue({suggestionId:replyId,at:Date.now(),status:event.guidance.verificationStatus==='rejected'?'rejected':'unavailable',originalSay:event.guidance.say,reason:event.guidance.caution||'The source check did not establish this wording.',context:snapshot});completeLocally('validation_rejected');}
           setCheckingFacts(false);setLiveDraft(false);
           setManualTrace(trace=>trace?{...trace,complete:true,verified:event.guidance?.verified===true,verificationMs:trace.verificationMs??Date.now()-submittedAt,replaced:!!event.replaced&&!editProtected,serverVerificationMs:event.timing?.verificationFinishedMs}:trace);
           if(event.replaced){const replacement={at:Date.now(),originalSay:event.originalSay||candidate?.say||"",replacementSay:event.guidance.say,reason:"Manual draft changed before ready publication",originalWasDisplayed:false};setSuggestions(previous=>recordVerificationReplacement(previous,replyId,replacement));}
         }
         if(event.type==='self_check_rejected')retainCoachingIssue({suggestionId:replyId,at:Date.now(),status:'rejected',originalSay:event.rejectedSay||'',reason:(event.reasons||[]).join(' '),context:snapshot});
-        if(event.type==="error")throw new Error(event.error||event.message||"Manual suggestion could not finish.");
-      });
-      if(!candidate)throw new Error("The AI returned no suggested reply.");
-      if(id===seq.current&&generation===callGeneration.current)recentReplies.current=[...recentReplies.current,(candidate as Guidance).say].slice(-12);
-    } catch(error){if(!aborter.signal.aborted&&id===seq.current)setError(error instanceof Error?error.message:"Could not generate guidance.");}
-    finally{if(id===seq.current){setThinking(false);setLiveDraft(false);setCheckingFacts(false);}}
+        if(event.type==="error"&&!candidate)completeLocally(event.error||"generation_failed");
+      },aborter.signal);
+      if(!candidate)completeLocally("empty_response");
+      const ready=candidate as Guidance|null;
+      if(ready&&id===seq.current&&generation===callGeneration.current)recentReplies.current=[...recentReplies.current,ready.say].slice(-12);
+    } catch{completeLocally("generation_failed");}
+    finally{clearTimeout(deadline);if(id===seq.current){setThinking(false);setLiveDraft(false);setCheckingFacts(false);}}
   }
   function addTurn(text: string, role: Turn["role"], id = uid(), at = Date.now(), transcriptionUncertainty?:Turn["transcriptionUncertainty"]) {
     if (!text.trim()) return;
@@ -1544,7 +1561,7 @@ export default function Workspace() {
               <div className="call-controls"><div className="audio-meter" aria-label={`Call audio level ${Math.round(level*100)} percent`}>{Array.from({length:13},(_,i) => <i key={i} style={{height:`${Math.round(8+Math.sin(i*1.8)**2*17)}px`,opacity:live && !paused && level > i/15 ? 1 : .2}}/>)}</div><span className="call-clock">{durationText(elapsed)}</span>{live ? <><button className="icon-button bordered" aria-label={paused ? "Resume assistant audio" : "Pause assistant audio"} onClick={togglePause}>{paused ? <Play size={16}/> : <Pause size={16}/>}</button><button className="button stop" onClick={stopAudio}><Square size={13} fill="currentColor"/> Stop listening</button></> : <button className="button primary" onClick={startListening} disabled={connecting || micTest || !configured || !preparationConfirmed}>{connecting ? <Loader2 size={16} className="spin"/> : <Mic size={16}/>} {connecting ? "Connecting…" : "Start listening"}</button>}</div>
             </section>
 
-            <div className="guidance-column"><section className="request-coaching card" aria-label="Coaching on demand"><div className="request-coaching-action"><button type="button" className="button primary suggest-next-move" aria-keyshortcuts="Alt+Enter" onClick={requestNextMove} disabled={!configured||!preparationConfirmed||!brainsReady||!!queuedRequest}>{thinking?<Loader2 size={18} className="spin"/>:<Sparkles size={18}/>} Suggest next move</button><span className="shortcut-hint"><kbd>Alt</kbd> + <kbd>Enter</kbd><small>⌥ Enter on Mac · outside text fields</small></span></div>{queuedRequest?<div className="queued-coaching-request"><p role="status">{queuedRequest.message}</p><div><button type="button" className="button secondary small" onClick={suggestNow}>Suggest now</button><button type="button" className="text-button" onClick={cancelQueuedCoaching}>Cancel</button></div></div>:<p>{thinking?'Generating from your request. Click again to use the latest conversation.':'Request an opening or guidance at any point. Listening continues independently.'}</p>}<details className="current-coaching-objective"><summary>Current objective · {selectedManagerStage?.name||purpose.stage.name}</summary><p>{selectedManagerStage?.objective||purpose.stage.purpose}</p></details></section><BuyerAudioRecovery issue={buyerAudioIssue} onConfirm={()=>liveSession.current?.confirmBuyerAudio()}/><LiveCoachingCard waitingForBuyer={!!queuedRequest} guidance={guidance} guidanceId={guidanceId} guidanceAt={guidanceAt} pendingBuyerText={pendingBuyerText} suggestions={suggestions} thinking={thinking} checkingFacts={checkingFacts} liveDraft={liveDraft} bilingual={bilingual} latency={latency} liveTiming={liveTiming} onReplyPaint={recordLiveReplyPaint} currentStage={currentStage} repSpeaking={repSpeaking} configured={configured} onCopy={text=>{if(text || guidance)void copy(text || guidance!.say);}} onFeedback={feedbackSuggestion} onEdit={saveReplyEdit} onOpening={requestNextMove}/>
+            <div className="guidance-column"><section className="request-coaching card" aria-label="Coaching on demand"><div className="request-coaching-action"><button type="button" className="button primary suggest-next-move" aria-keyshortcuts="Alt+Enter" onClick={requestNextMove} disabled={!preparationConfirmed||!brainsReady||!!queuedRequest}>{thinking?<Loader2 size={18} className="spin"/>:<Sparkles size={18}/>} Suggest next move</button><span className="shortcut-hint"><kbd>Alt</kbd> + <kbd>Enter</kbd><small>⌥ Enter on Mac · outside text fields</small></span></div>{queuedRequest?<div className="queued-coaching-request"><p role="status">{queuedRequest.message}</p><div><button type="button" className="button secondary small" onClick={suggestNow}>Suggest now</button><button type="button" className="text-button" onClick={cancelQueuedCoaching}>Cancel</button></div></div>:<p>{thinking?'Generating from your request. Click again to use the latest conversation.':'Request an opening or guidance at any point. Listening continues independently.'}</p>}<details className="current-coaching-objective"><summary>Current objective · {selectedManagerStage?.name||purpose.stage.name}</summary><p>{selectedManagerStage?.objective||purpose.stage.purpose}</p></details></section><BuyerAudioRecovery issue={buyerAudioIssue} onConfirm={()=>liveSession.current?.confirmBuyerAudio()}/><LiveCoachingCard waitingForBuyer={!!queuedRequest} guidance={guidance} guidanceId={guidanceId} guidanceAt={guidanceAt} pendingBuyerText={pendingBuyerText} suggestions={suggestions} thinking={thinking} checkingFacts={checkingFacts} liveDraft={liveDraft} bilingual={bilingual} latency={latency} liveTiming={liveTiming} onReplyPaint={recordLiveReplyPaint} currentStage={currentStage} repSpeaking={repSpeaking} configured={configured} onCopy={text=>{if(text || guidance)void copy(text || guidance!.say);}} onFeedback={feedbackSuggestion} onEdit={saveReplyEdit} onOpening={requestNextMove}/>
             <details className="evidence-card card"><summary>Company sources and facts to confirm · {guidance?.evidence.length || 0}</summary><div className="panel-header"><div><BookOpen size={16}/><h2>Backed by your knowledge</h2></div><span className="count-badge">{guidance?.evidence.length || 0}</span></div><div className="evidence-body">{guidance?.evidence.length ? guidance.evidence.map((e,i) => <button className="evidence-item" key={i} onClick={() => { if (e.sourceId === "company-profile") openModal({type:"manufacturer",manufacturer:current}); else { const source=current?.sources.find(s => s.id === e.sourceId); if(source) openModal({type:"source",source}); } }}><div><FileText size={14}/><strong>{knowledgeFor(current!).find(s => s.id === e.sourceId)?.title || "Source"}</strong><ChevronRight size={13}/></div><p>“{e.quote}”</p></button>) : <div className="subtle-empty"><Layers3 size={23}/><p>{current ? "General sales move only — no product facts claimed." : "Add company and product information to ground your suggestions."}</p></div>}{guidance?.caution && <div className="caution"><CircleHelp size={15}/><p>{guidance.caution}</p></div>}{guidance && guidance.missing.length > 0 && <div className="missing-facts"><span>DETAILS TO CONFIRM</span>{guidance.missing.map(m => <p key={m}>· {m}</p>)}</div>}</div></details>
             </div>
           </div>

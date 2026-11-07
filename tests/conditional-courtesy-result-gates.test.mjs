@@ -1,3 +1,4 @@
+import {assertLocalPressCompletion} from './helpers/local-press-assertions.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {analyzeDocumentActionMeaning} from '../lib/document-product-evidence.ts';
@@ -34,10 +35,10 @@ for(const company of companies){
   const context=fixture(company,true),say=`We'll check whether the ${company.report} covers ${company.code} first, and once we have a match and you approve the drawing revision, we'll send it over${suffix}. Looking forward to your drawing.`;
   const meaning=analyzeDocumentActionMeaning(say.split('. ')[0]+'.',context);assert.equal(meaning.delivery?.deliveryCondition,'stated_condition');assert.ok(meaning.outgoing.every(action=>action.condition==='coverage_positive'&&action.approvals.includes('buyer')));await firstAttempt(context,say);
  });
- test(`${company.name}: unsupported first claim is blocked then the same click accepts a complete joint-gate repair`,async()=>{
-  const context=fixture(company,true),t=transport(context),safe=`We'll check whether the ${company.report} covers ${company.code} first, and once we have a match and you approve the drawing revision, we'll send it over as agreed. Looking forward to your drawing.`;
-  try{t.request();t.respond(`The ${company.report} covers ${company.code}. We'll send it.`);await settle();assert.deepEqual(t.log.shown,[]);assert.equal(t.creates().length,2);t.respond(safe);await settle();assert.deepEqual(t.log.shown,[{say:safe,trigger:context.coachingRequest.id}]);assert.equal(t.log.traces.filter(event=>event.event==='repair_requested').length,1);assert.equal(t.log.remote,0);assert.equal(t.log.fallback,0);}finally{t.session.stop();}
- });
+ test(`${company.name}: unsupported first claim is blocked and the same click completes locally`,async()=>{
+ const context=fixture(company,true),t=transport(context),bad=`The ${company.report} covers ${company.code}. We'll send it.`;
+ try{t.request();t.respond(bad);await settle();assertLocalPressCompletion(t.log,t.creates(),bad);assert.equal(t.log.remote,0);}finally{t.session.stop();}
+});
  const context=fixture(company,true),inquiry=`We'll check whether the ${company.report} covers ${company.code} first`,gate='once we have a match and you approve the drawing revision';
  const unsafe=[
   `Thanks, Avery—once we confirm the ${company.report} covers ${company.code}, we'll send it.`,

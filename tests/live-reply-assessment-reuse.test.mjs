@@ -1,3 +1,4 @@
+import {assertLocalPressCompletion} from './helpers/local-press-assertions.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {LiveCoachingSession} from '../lib/live-coaching-session.ts';
@@ -25,16 +26,8 @@ test('One stable safe reply reuses exact pinned assessments while all move/sourc
  }finally{t.session.stop();}
 });
 
-test('An unsupported coverage draft is blocked; the same press assesses and publishes its safe repair',()=>{
- const t=fixture();try{
-  t.session.requestNextMove(t.context);const bad=t.create();t.delta(bad,'The inspection report covers KM73.');
-  assert.equal(t.log.shown.length,0);assert.equal(t.log.traces.filter(e=>e.event==='repair_requested').length,1);
-  const work=[...t.session.works.values()][0];assert.equal(work.replyAssessments,undefined,'Repair retires all cached candidate assessments');
-  t.session.handle({type:'response.done',response:{id:bad,status:'cancelled'}});
-  const repaired=t.create();t.delta(repaired,safe);
-  assert.equal(t.log.shown.length,1);assert.equal(t.log.shown[0].say,safe);assert.equal(t.log.remoteChecks,0);
-  const phases=t.log.telemetry.find(e=>e.type==='complete').phases;assert.equal(phases.repairCount,1);assert.ok(phases.replyAssessmentRuns>=2);
- }finally{t.session.stop();}
+test('An unsupported coverage draft is blocked; the same press publishes locally without remote repair',()=>{
+ const t=fixture();try{t.session.requestNextMove(t.context);const bad=t.create();t.delta(bad,'The inspection report covers KM73.');assertLocalPressCompletion({shown:t.log.shown.map(value=>({value})),traces:t.log.traces},t.log.sent.filter(event=>event.type==='response.create'),'The inspection report covers KM73.');assert.equal(t.log.remoteChecks,0);const phases=t.log.telemetry.find(e=>e.type==='complete').phases;assert.equal(phases.repairCount,0);t.session.handle({type:'response.done',response:{id:bad,status:'cancelled'}});assert.equal(t.log.shown.length,1);}finally{t.session.stop();}
 });
 
 test('Assessment reuse is isolated by work, exact wording and replaced pinned evidence',()=>{

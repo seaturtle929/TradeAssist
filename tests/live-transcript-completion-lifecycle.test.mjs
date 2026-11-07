@@ -106,13 +106,16 @@ for(const phase of ['before_created','during_generation','before_publication'])t
  }finally{t.session.stop();}
 });
 
-test('A long missing-final wait reports its state once and can still recover on the original click',async()=>{
+test('A bounded missing-final wait completes the original press with a stable local clarification',async()=>{
  const t=fixture({transcriptionTimeoutMs:45});try{
   t.begin('Our engineer');await sleep(65);
-  assert.equal(t.creates().length,0);assert.equal(t.log.shown.length,0);assert.match(t.log.queued.at(-1).message,/could not finish transcribing/);
+  assert.equal(t.creates().length,0);assert.equal(t.log.shown.length,1);
+  assert.equal(t.log.shown[0].value.say,'Sorry, could you repeat that last part?');
+  assert.equal(t.log.shown[0].value.replyOrigin,'local');
+  assert.equal(t.log.shown[0].snapshot.coachingRequest.transcriptState,'partial','Missing words never become a confirmed turn');
   const warnings=t.log.warnings.length;await sleep(20);assert.equal(t.log.warnings.length,warnings,'No repeated deadline loop');
-  t.final('Our engineer will email the drawing when it is ready.');await sleep(5);assert.equal(t.creates().length,1);
-  t.finish(t.created(),"That works. I'll look at the drawing when it arrives.");assert.equal(t.log.shown.length,1);
+  t.final('Our engineer will email the drawing when it is ready.');await sleep(5);
+  assert.equal(t.creates().length,0);assert.equal(t.log.shown.length,1,'Once displayed, the clarification stays stable');
  }finally{t.session.stop();}
 });
 

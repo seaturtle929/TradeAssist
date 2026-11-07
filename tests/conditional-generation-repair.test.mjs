@@ -1,3 +1,4 @@
+import {assertLocalPressCompletion} from './helpers/local-press-assertions.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {LiveCoachingSession} from '../lib/live-coaching-session.ts';
@@ -80,36 +81,14 @@ for(const company of companies){
    const t=transport(fixture(company));try{t.request();t.respond(say);await settle();t.assertPublished(say);assert.equal(t.creates().length,1);assert.equal(t.log.traces.filter(event=>event.event==='repair_requested').length,0);}finally{t.session.stop();}
   });
  }
- test(`${company.name}: one repair retains the same authoritative contract and focuses on the actual failed condition`,async()=>{
-  const context=fixture(company),t=transport(context),rejected=bad(company);
-  try{
-   assert.equal(checkSuggestion({say:rejected},context,{factChecked:true}).ok,false);
-   t.request();t.respond(rejected);await settle();assert.deepEqual(t.log.shown,[]);assert.equal(t.creates().length,2);
-   const first=snapshot(t.creates()[0]),repair=snapshot(t.creates()[1]);
-   assert.deepEqual(repair.coachingTask.documentFollowThrough,first.coachingTask.documentFollowThrough,'A failed candidate cannot alter the source of release permission.');
-   assert.deepEqual(repair.coachingTask.finalizedTranscript,first.coachingTask.finalizedTranscript);
-   assert.deepEqual(repair.sources,first.sources);
-   const feedback=JSON.parse(repair.selfCheckFailure),trace=t.log.traces.find(event=>event.event==='repair_requested');
-   assert.equal(feedback.rejectedSay,rejected);assert.equal(feedback.reason,trace.reason);assert.match(feedback.reason,/positive report match/);
-   assert.doesNotMatch(feedback.reason,/broad company category/,'A release-condition violation needs a focused correction, not unrelated company-category instructions.');
-   const instructions=t.creates()[1].response.instructions;
-   assert.match(t.creates()[1].response.input[0].content[0].text,/Repair the rejected spoken line/);
-   assert.equal((instructions.match(/ONE SAME-REQUEST REPAIR:/g)||[]).length,1,'One shared semantic repair, not old and new wrappers appended together.');
-   assert.match(instructions,/do not repair only pronouns/i);assert.match(instructions,/OWN explicit positive-result condition/);
-   assert.match(instructions,/after checking whether[^\n]+not a repair/i);
-   const focusedRules=onDemandRepairRules({...context,selfCheckFailure:repair.selfCheckFailure});
-   assert.ok(instructions.includes(focusedRules));assert.doesNotMatch(focusedRules,/Rewrite the full useful move with the supported broad company category/,'The original reason remains diagnostic data; active repair guidance must focus on the failed meaning.');
-   t.respond(safe(company));await settle();t.assertPublished(safe(company));assert.equal(t.creates().length,2);assert.equal(t.log.traces.filter(event=>event.event==='repair_requested').length,1);
-  }finally{t.session.stop();}
- });
- test(`${company.name}: two rejected scripted drafts end unavailable without filler or another generation`,async()=>{
-  const context=fixture(company),t=transport(context);
-  try{
-   t.request();t.respond(bad(company));await settle();assert.equal(t.creates().length,2);
-   t.respond(bad(company).replace("I'll","we'll"));await settle();
-   assert.deepEqual(t.log.shown,[]);assert.equal(t.creates().length,2);assert.equal(t.log.traces.filter(event=>event.event==='repair_requested').length,1);assert.equal(t.log.traces.filter(event=>event.event==='rejected').length,2);assert.equal(t.log.traces.filter(event=>event.event==='failed').length,1);assert.ok(t.log.errors.some(message=>/could not pass|unavailable/i.test(message)));assert.equal(t.log.fallback,0);
-  }finally{t.session.stop();}
- });
+ test(`${company.name}: local completion preserves the authoritative contract and actual rejection reason`,async()=>{
+ const context=fixture(company),t=transport(context),rejected=bad(company);
+ try{assert.equal(checkSuggestion({say:rejected},context,{factChecked:true}).ok,false);t.request();const before=snapshot(t.creates()[0]);t.respond(rejected);await settle();assertLocalPressCompletion(t.log,t.creates(),rejected);
+ assert.deepEqual(snapshot(t.creates()[0]).coachingTask.documentFollowThrough,before.coachingTask.documentFollowThrough,'Rejected text cannot change the authoritative contract');const trace=t.log.traces.find(event=>event.event==='rejected');assert.match(trace.reason,/positive report match/);assert.doesNotMatch(trace.reason,/broad company category/);}finally{t.session.stop();}
+});
+ test(`${company.name}: a rejected scripted draft completes locally without another generation`,async()=>{
+ const context=fixture(company),t=transport(context);try{t.request();t.respond(bad(company));await settle();const spoken=assertLocalPressCompletion(t.log,t.creates(),bad(company));t.respond(bad(company).replace("I'll","we'll"));await settle();assert.equal(t.log.shown.length,1);assert.equal(t.log.shown[0].say,spoken);assert.equal(t.creates().length,1);}finally{t.session.stop();}
+});
 }
 
 for(const unsupported of [
@@ -117,26 +96,13 @@ for(const unsupported of [
  company=>`We have the ${company.report} for ${company.reference}, and I'll check the details.`,
  company=>`I'll check whether the ${company.report} covers our ${company.reference}.`,
  company=>`Once we've checked whether the ${company.report} covers ${company.reference}, we'll send it over to you.`,
-])test('Factual and buyer-condition checks survive generation/repair guidance: '+unsupported(companies[0]),async()=>{
- const company=companies[0],context=fixture(company),t=transport(context),say=unsupported(company);
- try{
-  assert.equal(checkSuggestion({say},context,{factChecked:true}).ok,false,'An approving factual verdict cannot waive the buyer condition or establish company ownership.');
-  t.request();t.respond(say);await settle();assert.deepEqual(t.log.shown,[]);assert.equal(t.creates().length,2);
-  t.respond(safe(company));await settle();t.assertPublished(safe(company));assert.equal(t.log.traces.filter(event=>event.event==='repair_requested').length,1);
- }finally{t.session.stop();}
+])test('Factual and buyer-condition checks survive local completion: '+unsupported(companies[0]),async()=>{
+ const company=companies[0],context=fixture(company),t=transport(context),say=unsupported(company);try{assert.equal(checkSuggestion({say},context,{factChecked:true}).ok,false,'Factual approval cannot waive buyer conditions or establish ownership.');t.request();t.respond(say);await settle();assertLocalPressCompletion(t.log,t.creates(),say);}finally{t.session.stop();}
 });
 
-test('A separate engineering approval is part of both first and repair contracts, never an alternative to coverage',async()=>{
- const company=companies[1],context=fixture(company);context.turns.push({id:'engineer-gate',role:'buyer',text:'Do not send anything until my engineer approves.',at:5});context.coachingRequest.listeningSession.currentTurnIds.push('engineer-gate');
- const contract=documentFollowThroughAtRequest(context),t=transport(context);
- try{
-  assert.equal(contract.sending.positiveMatchRequired,true);assert.deepEqual(contract.sending.additionalApproval,{required:true,approver:'engineering'});
-  t.request();assert.deepEqual(snapshot(t.creates()[0]).coachingTask.documentFollowThrough,contract);
-  t.respond(safe(company));await settle();assert.deepEqual(t.log.shown,[],'Coverage alone does not authorize the send.');assert.equal(t.creates().length,2);
-  assert.deepEqual(snapshot(t.creates()[1]).coachingTask.documentFollowThrough,contract);assert.match(t.creates()[1].response.instructions,/joined with AND, never OR/);
-  const held=`I'll check whether the ${company.report} covers ${company.reference}; I won't send it unless it matches and your engineer approves.`;
-  t.respond(held);await settle();t.assertPublished(held);
- }finally{t.session.stop();}
+test('A separate engineering approval remains required while the press completes with a check only',async()=>{
+ const company=companies[1],context=fixture(company);context.turns.push({id:'engineer-gate',role:'buyer',text:'Do not send anything until my engineer approves.',at:5});context.coachingRequest.listeningSession.currentTurnIds.push('engineer-gate');const contract=documentFollowThroughAtRequest(context),t=transport(context);
+ try{assert.equal(contract.sending.positiveMatchRequired,true);assert.deepEqual(contract.sending.additionalApproval,{required:true,approver:'engineering'});t.request();assert.deepEqual(snapshot(t.creates()[0]).coachingTask.documentFollowThrough,contract);t.respond(safe(company));await settle();assertLocalPressCompletion(t.log,t.creates(),safe(company));}finally{t.session.stop();}
 });
 
 test('Explicit hold and unresolved release review remain visible instead of document availability granting release',()=>{

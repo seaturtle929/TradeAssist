@@ -1,3 +1,4 @@
+import {assertLocalPressCompletion} from './helpers/local-press-assertions.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {analyzeDocumentActionMeaning} from '../lib/document-product-evidence.ts';
@@ -67,23 +68,20 @@ for(const company of companies){
   {kind:'drawing receipt invented from a promise',say:`I've received your drawing. ${reply(company)}`},
   {kind:'anticipation cannot hide claimed report coverage',say:`Looking forward to your drawing, which the ${company.report} already covers. ${reply(company)}`},
  ];
- for(const probe of unsafe)test(`${company.name}: block ${probe.kind}, then recover usefully on the SAME press`,async()=>{
-  const input=fixture(company);assert.equal(checkSuggestion({say:probe.say},input,{factChecked:true}).ok,false,'An approving source verdict cannot override a concrete company/condition/receipt violation.');
-  const t=controller(input);try{t.request();t.respond(probe.say);await sleep(5);assert.deepEqual(t.log.shown,[],'The unsafe draft must not appear on the spoken card.');assert.ok(t.log.issues.length||t.log.traces.some(event=>event.event==='repair_requested'),'Record the actual rejection, not only the final good line.');assert.equal(t.creates().length,2,'One bounded same-request repair, not a second button press.');t.respond(reply(company));await sleep(5);t.assertOneReply(reply(company));assert.equal(t.creates().length,2);assert.equal(t.log.traces.filter(event=>event.event==='repair_requested').length,1);}finally{t.session.stop();}
- });
+ for(const probe of unsafe)test(`${company.name}: block ${probe.kind}, then complete locally on the SAME press`,async()=>{
+ const input=fixture(company);assert.equal(checkSuggestion({say:probe.say},input,{factChecked:true}).ok,false,'Source approval cannot waive a condition, ownership or receipt violation.');const t=controller(input);try{t.request();t.respond(probe.say);await sleep(5);assertLocalPressCompletion(t.log,t.creates(),probe.say);}finally{t.session.stop();}
+});
 }
 
 test('A pure future inquiry may consider alternatives without weakening any delivery gate',()=>{
  const context=fixture(),text="I'll check whether the inspection report covers LT47 or whether we need a different report.",meaning=analyzeDocumentActionMeaning(text,context);
  assert.equal(meaning.locallyNonAssertive,true);assert.equal(meaning.weakensPositiveMatch,false);assert.equal(meaning.outgoing.length,0,'An inquiry about alternatives does not promise an alternative route for sending.');
 });
-test('Two failed candidates end visibly; a generic thanks is not useful recovery and cannot start an endless loop',async()=>{
- const company=companies[0],t=controller(fixture(company));try{t.request();t.respond(`The ${company.report} covers ${company.reference}.`);await sleep(5);assert.equal(t.creates().length,2);t.respond('Thanks.');await sleep(5);assert.equal(t.log.shown.length,0,'A filler acknowledgment loses the specific drawing/report commitment.');assert.equal(t.creates().length,2);assert.equal(t.log.traces.filter(event=>event.event==='failed').length,1);assert.ok(t.log.errors.some(message=>/could not pass|unavailable/i.test(message)));}finally{t.session.stop();}
+test('One rejected candidate completes locally; late filler cannot replace it or start a repair loop',async()=>{
+ const company=companies[0],t=controller(fixture(company)),bad=`The ${company.report} covers ${company.reference}.`;try{t.request();t.respond(bad);await sleep(5);const spoken=assertLocalPressCompletion(t.log,t.creates(),bad);t.respond('Thanks.');await sleep(5);assert.equal(t.log.shown.length,1);assert.equal(t.log.shown[0].say,spoken);assert.equal(t.creates().length,1);}finally{t.session.stop();}
 });
 test('Company document availability never transfers to another company',async()=>{
- const a=companies[0],b=companies[1],context=fixture(b);context.sources=[{id:'birch-profiles',text:'Company profiles and specification sheets are available.'}];
- assert.ok(assessReplyVerification(`I'll send the ${a.report} only if it covers ${b.reference}.`,context).unsupportedClaims.length);
- const t=controller(context);try{t.request();t.respond(`I'll send the ${a.report} only if it covers ${b.reference}.`);await sleep(5);assert.equal(t.log.shown.length,0);assert.equal(t.creates().length,2);const safe=`I'll check whether a ${b.report} is available and whether it covers ${b.reference}.`;t.respond(safe);await sleep(5);t.assertOneReply(safe);assert.equal(t.log.shown[0].say.includes(a.name),false);assert.equal(t.log.shown[0].say.includes(a.reference),false);}finally{t.session.stop();}
+ const a=companies[0],b=companies[1],context=fixture(b);context.sources=[{id:'birch-profiles',text:'Company profiles and specification sheets are available.'}];const bad=`I'll send the ${a.report} only if it covers ${b.reference}.`;assert.ok(assessReplyVerification(bad,context).unsupportedClaims.length);const t=controller(context);try{t.request();t.respond(bad);await sleep(5);const spoken=assertLocalPressCompletion(t.log,t.creates(),bad);assert.equal(spoken.includes(a.name),false);assert.equal(spoken.includes(a.reference),false);}finally{t.session.stop();}
 });
 test('Identical reply text cannot reuse another company’s source authority',()=>{
  const company=companies[0],text=reply(company),approved=fixture(company),unapproved={...fixture(company),manufacturer:{id:'other-company',name:'Cypress Testing Supply',products:'industrial components'},sources:[{id:'cypress-documents',text:'Company profiles and specification sheets are available.'}]};

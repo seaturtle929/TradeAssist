@@ -1,3 +1,4 @@
+import {assertLocalPressCompletion} from './helpers/local-press-assertions.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {immediateDocumentDispatchClaims} from '../lib/document-dispatch-timing.ts';
@@ -35,12 +36,12 @@ for(const company of companies){
   assert.equal(unapprovedResponseDeadline(safe,context),false);assert.deepEqual(assessReplyVerification(safe,context).unsupportedClaims,[]);assert.equal(assessReplyVerification(safe,context).requiresVerification,false);
   const result=await replay(context,[safe]);assert.deepEqual(result.shown,[{say:safe,trigger:context.coachingRequest.id}]);assert.equal(result.generations,1);assert.equal(result.traces.some(event=>event.event==='repair_requested'),false);
  });
- test(`${company.name}: necessary timing repair succeeds on the same press`,async()=>{
-  const result=await replay(context,[timed,safe]);assert.deepEqual(result.shown,[{say:safe,trigger:context.coachingRequest.id}]);assert.equal(result.generations,2);assert.equal(result.traces.filter(event=>event.event==='repair_requested').length,1);
- });
- test(`${company.name}: an incorrect timing repair stays blocked with an explicit terminal status`,async()=>{
-  const result=await replay(context,[timed,timed]);assert.deepEqual(result.shown,[]);assert.equal(result.generations,2);assert.equal(result.traces.filter(event=>event.event==='failed').length,1);
- });
+ test(`${company.name}: unsupported timing is blocked and the same press completes locally`,async()=>{
+ const result=await replay(context,[timed]);assertLocalPressCompletion(result,Array.from({length:result.generations}),timed);
+});
+ test(`${company.name}: an unsupported timing draft cannot create another remote repair`,async()=>{
+ const result=await replay(context,[timed]);assertLocalPressCompletion(result,Array.from({length:result.generations}),timed);
+});
  for(const verb of ['send','email','forward','share'])test(`${company.name}: ${verb} speed is attached to its actual object and remains separate from source claims`,()=>{
   const say=`If the ${company.report} covers ${company.code}, I'll ${verb} that ${company.report} right over to you.`;
   assert.equal(immediateDocumentDispatchClaims(say).length,1);assert.ok(assessReplyVerification(say,context).unsupportedClaims.some(claim=>claim.kind==='timing'));

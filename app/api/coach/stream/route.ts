@@ -31,12 +31,13 @@ export async function POST(request: Request): Promise<Response> {
         const emit = (event: ManualCoachingEvent) => { if (!closed && !signal.aborted) controller.enqueue(encoder.encode(JSON.stringify(event) + '\n')); };
         emit({ type: 'start', model: MANUAL_TEXT_MODEL, source: 'real_model',requestedServiceTier:'default', startedAt: Date.now() });
         try {
-          const generationRequest=manualRequestFor(input);
-          phaseClock.providerStarted(JSON.stringify(generationRequest).length);
-          const response = await openAI('responses', generationRequest, false, 35_000, signal);
           await streamManualCoaching({
-            input, response, signal, emit, charges, startedAt,phaseClock,
-            repair:async repairedInput=>openAI('responses',manualRequestFor(repairedInput),false,35_000,signal),
+            input,signal,emit,charges,startedAt,phaseClock,
+            createResponse:async providerSignal=>{
+              const generationRequest=manualRequestFor(input);
+              phaseClock.providerStarted(JSON.stringify(generationRequest).length);
+              return openAI('responses',generationRequest,false,35_000,providerSignal);
+            },
             charge: result => responseCharge(result, 'coach', MANUAL_TEXT_MODEL),
             verify: async (candidate, verifySignal) => {
               const headers = new Headers(request.headers);

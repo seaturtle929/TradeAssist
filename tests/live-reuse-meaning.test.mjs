@@ -1,3 +1,4 @@
+import {assertLocalPressCompletion} from './helpers/local-press-assertions.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {LiveCoachingSession} from '../lib/live-coaching-session.ts';
@@ -96,10 +97,5 @@ test('An original-source change prevents exact-text reuse despite equivalent fie
 });
 
 for(const bad of ['The inspection report covers KM73.',"I'll check whether the inspection report covers KM73. We will ship tomorrow."])test(`Reused drafts still block substantive unsupported claims: ${bad}`,async()=>{
- const t=fixture();try{
-  await t.hidden();t.finish(t.created(),bad);t.final(buyer);await sleep(5);
-  assert.equal(t.log.traces.filter(event=>event.event==='speculation_accepted').length,1,'Candidate reached normal checks after exact final');
-  assert.equal(t.log.shown.length,0);assert(t.log.traces.some(event=>event.event==='repair_requested'));
-  t.finish(t.created(),safe);await sleep(5);t.assertStable(safe);
- }finally{t.session.stop();}
+ const t=fixture();try{await t.hidden();t.finish(t.created(),bad);t.final(buyer);await sleep(5);assert.equal(t.log.traces.filter(event=>event.event==='speculation_accepted').length,1,'Checks only run after exact final');assertLocalPressCompletion(t.log,t.creates(),bad);}finally{t.session.stop();}
 });

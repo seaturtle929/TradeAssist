@@ -4,7 +4,7 @@ import {deriveCallParticipant,isParticipantIntroduction,isCurrentParticipantIntr
 import {buyerDeferralDecisionRules,buyerDeferralSuggestionProblems,deriveBuyerDeferral} from './buyer-deferral.ts';
 import {callRouteAtRequest,callRouteDecisionRules,callRouteSuggestionProblems} from './call-route.ts';
 import {emailEvidenceFor} from './buyer-facts.ts';
-import {coachingConversationAtRequest,coachingTranscriptState} from './coaching-context-snapshot.ts';
+import {coachingConversationAtRequest,coachingTranscriptState,coachingRequestFocus} from './coaching-context-snapshot.ts';
 import {representativeIdentityFor,representativeIdentityRules,representativeIdentityProblems} from './representative-identity.ts';
 import {configurationReferences} from './company-configuration.ts';
 import {analyzeDocumentActionMeaning,documentActionGroups,documentCoverageQuestionEvidence,hasFutureReportInquiry,investigationThenDocumentDelivery,requestsDocumentProductCoverage} from './document-product-evidence.ts';
@@ -259,8 +259,10 @@ export function onDemandDecisionRules(context:CoachingContext):string {
  const technical=/\b(?:specifications?|grades?|mesh count|opening size|price|MOQ|certif\w*)\b/i.test(latest);
  const routing=!technical&&(participant.role==='routing'||/what(?:'s| is) (?:this(?: call)?|your call) (?:about|regarding|in regard to)|who(?:'s| is) calling/i.test(latest));
  const rules=[representativeIdentityRules(context)];
- const routeRule=callRouteDecisionRules(context);if(routeRule)rules.push(routeRule);
  const session=context.coachingRequest?.listeningSession;
+ const focus=coachingRequestFocus(context);
+ if(focus.kind==='confirmed'&&focus.role==='conversation')return '\nCURRENT ACTION CONSTRAINTS:\n'+[...rules,'CURRENT SPEECH, SPEAKER UNASSIGNED: '+JSON.stringify(focus.text)+'. These are current completed words, not historical or missing speech. The audio does not establish who spoke them. Give one short clarification or listening acknowledgment; do not greet an absent contact, repeat an opener, or create buyer commitments/facts from these words.'].join('\n');
+ const routeRule=callRouteDecisionRules(context);if(routeRule)rules.push(routeRule);
  if(session&&!turns.some(turn=>turn.role==='buyer'&&session.currentTurnIds.includes(turn.id||''))&&!['partial','pending'].includes(coachingTranscriptState(context)))return '\nCURRENT ACTION CONSTRAINTS:\n'+[...rules,'LISTENING SESSION BOUNDARY: No new buyer words have been captured in this listening session. Earlier transcript is retained background, not a current buyer request or current-speaker identification. Do not answer its last quote again or imply the buyer just repeated an old request. On a company main line use the polite transfer request above. Otherwise use only a brief neutral opening or invitation to speak. Do not greet a historical contact, thank them for an old answer, discuss their earlier drawing/document request, or propose the old handoff again. Resume that relationship after the current person is identified.'].join('\n');
  const deferralRule=buyerDeferralDecisionRules(turns);if(deferralRule)rules.push(deferralRule);
  const incoming=incomingDrawingState({turns});
@@ -340,6 +342,12 @@ export function onDemandSuggestionProblems(say:string,context:CoachingContext):s
  const turns=reliableTurns(context),participant=deriveCallParticipant(turns),latest=[...turns].reverse().find(t=>t.role==='buyer')?.text.replace(/[’‘]/g,"'")||'';
  const routing=!/\b(?:specifications?|grades?|mesh count|opening size|price|MOQ|certif\w*)\b/i.test(latest)&&(participant.role==='routing'||/what(?:'s| is) (?:this(?: call)?|your call) (?:about|regarding|in regard to)|who(?:'s| is) calling/i.test(latest));
  const session=context.coachingRequest.listeningSession,noNewBuyer=!!session&&!turns.some(turn=>turn.role==='buyer'&&session.currentTurnIds.includes(turn.id||''));
+ const focus=coachingRequestFocus(context);
+ if(focus.kind==='confirmed'&&focus.role==='conversation'){
+  const problems=representativeIdentityProblems(say,context);
+  if(!/\b(?:clarify|repeat|say (?:that|it) again|hear|understand|sorry|last (?:part|point))\b/i.test(say))problems.push('Current words are available but their speaker is unassigned. Ask for clarification instead of an opener or assumed buyer agreement.');
+  return problems;
+ }
  const problems:string[]=[...representativeIdentityProblems(say,context),...callRouteSuggestionProblems(say,context),...(noNewBuyer?[]:[...buyerDeferralSuggestionProblems(say,turns),...buyerIdentifierConfirmationProblems(say,context)])];
  if(noNewBuyer&&!['partial','pending'].includes(coachingTranscriptState(context))){
   const historical=turns.filter(turn=>!session!.currentTurnIds.includes(turn.id||''));

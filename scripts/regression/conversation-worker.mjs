@@ -18,6 +18,9 @@ const {assessReplyVerification}=await import(source('lib/turn-verification-polic
 const {checkSuggestion}=await import(source('lib/call-purpose.ts'));
 const {defaultConfigurationStages}=await import(source('lib/sales-curriculum.ts'));
 const {representativeIdentityProblems}=await import(source('lib/representative-identity.ts'));
+// Older comparison builds do not implement local completion. Never manufacture
+// it in the runner: recognize only wording produced by that build's own factory.
+const localFactory=await import(source('lib/local-press-reply.ts')).catch(error=>{if(error.code==='ERR_MODULE_NOT_FOUND'||error.code==='ENOENT')return null;throw error;});
 const flush=()=>new Promise(resolve=>setImmediate(resolve));
 const clone=value=>structuredClone(value);
 const hash=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -98,7 +101,13 @@ for(const conversation of fixtures.conversations){
       const requestTraces=traces.slice(before.traces),provider=sent.slice(before.sent).filter(event=>event.type==='response.create');
       const publicationCount=requestTraces.filter(event=>event.event==='published').length;
       const publishedCardIds=[...new Set(newShown.map(row=>row.id))];
-      const stableUsable=unique.length===1&&publicationCount===1&&publishedCardIds.length===1&&evaluation.pass&&check?.ok===true&&!(assessment?.unsupportedClaims.length);
+      const origin=published?.guidance.replyOrigin||'generated';
+      const localCompletion=origin==='local'&&!!localFactory&&published.guidance.say===localFactory.makeLocalPressReply(published.snapshot,published.guidance.localReason).say;
+      const localSafety=localCompletion&&representativeIdentityProblems(published.guidance.say,published.snapshot).length===0;
+      const stableCard=unique.length===1&&publicationCount===1&&publishedCardIds.length===1;
+      const generatedMoveCorrect=origin!=='local'&&evaluation.pass&&check?.ok===true&&!(assessment?.unsupportedClaims.length);
+      const stableUsable=stableCard&&(generatedMoveCorrect||localSafety);
+      const rejectedOriginal=issues.slice(before.issues).some(issue=>issue.status==='rejected')&&step.press.candidates.every(candidate=>!newShown.some(row=>row.guidance.say===candidate.replace(/^SAY:\s*/,'').split(/\nMOVE:/)[0]));
       // Verify pinned input contains only this chronological prefix, and never
       // fixture rubrics, candidates, final recaps or future transcript turns.
       const requested=requestTraces.filter(event=>event.event==='requested');
@@ -113,8 +122,8 @@ for(const conversation of fixtures.conversations){
         spokenPrefix:clone(context.turns),inputIntegrity,scriptedCandidates:clone(step.press.candidates),
         wording:published?.guidance.say||null,uniquePublishedWording:unique.map(row=>row.guidance.say),
         oneIntentionalPress:true,oneStableUsableReply:stableUsable,publicationCount,publishedCardIds,
-        blocked:unique.length===0,expect:step.press.expect||'usable',evaluationCategory:step.press.evaluationCategory||'conversation',evaluation,
-        correct:(step.press.expect==='blocked'?unique.length===0&&publicationCount===0:stableUsable)&&inputIntegrity&&(!identityOutcomes||identityOutcomes.identitySafety.pass),
+        blocked:unique.length===0,replyOrigin:origin,generatedMoveCorrect,localCompletionSafe:localSafety,originalDraftBlocked:rejectedOriginal,expect:step.press.expect||'usable',evaluationCategory:step.press.evaluationCategory||'conversation',evaluation,
+        correct:(step.press.expect==='blocked'?(unique.length===0&&publicationCount===0||stableCard&&localSafety&&rejectedOriginal):stableUsable)&&inputIntegrity&&(!identityOutcomes||identityOutcomes.identitySafety.pass),
         identityOutcomes,
         policy:assessment,conversationCheck:check,providerRequests:provider.length,
         retries:requestTraces.filter(event=>event.event==='repair_requested').length,verifierCalls:verifications.length-before.verifications,
@@ -132,6 +141,7 @@ const rows=results.flatMap(conversation=>conversation.rows);
 await writeFile(outputPath,JSON.stringify({schemaVersion:1,mode:'offline-scripted-transport',fixtureSha256:hash(fixtures),sourceRoot:root,apiCalls:0,userStorageTouched:false,
   conversations:results,groups:results.map(conversation=>({id:conversation.id,name:conversation.name,category:conversation.category,moments:conversation.rows.length,correct:conversation.rows.filter(row=>row.correct).length,unavailable:conversation.rows.filter(row=>row.expect==='usable'&&row.blocked).length})),summary:{moments:rows.length,correct:rows.filter(row=>row.correct).length,unavailable:rows.filter(row=>row.expect==='usable'&&row.blocked).length,
   brokenConditions:rows.filter(row=>row.wording&&row.evaluation.failures.some(value=>/condition|approval/i.test(value.name))),
+  generatedUseful:rows.filter(row=>row.generatedMoveCorrect&&row.oneStableUsableReply).length,locallySupplied:rows.filter(row=>row.localCompletionSafe&&row.oneStableUsableReply).length,
   unstable:rows.filter(row=>!row.stableThroughClose).length,retries:rows.reduce((sum,row)=>sum+row.retries,0),verifierCalls:rows.reduce((sum,row)=>sum+row.verifierCalls,0),
   identitySafety:{tested:rows.filter(row=>row.identityOutcomes).length,passed:rows.filter(row=>row.identityOutcomes?.identitySafety.pass).length},samePressRecovery:{tested:rows.filter(row=>row.identityOutcomes).length,passed:rows.filter(row=>row.identityOutcomes?.samePressRecovery.pass).length},
   latencyTargetMs:1800,latencyMeasuredMoments:0,latencyPass:null,estimatedCostUsd:0}},null,2));

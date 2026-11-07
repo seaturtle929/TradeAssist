@@ -20,11 +20,12 @@ import { assessReplyVerification, classifyBuyerTurn } from './turn-verification-
 import {VERIFICATION_TURN_RULES} from './state-instructions.ts';
 import {immediateSalesReplyFor} from './immediate-sales-reply.ts';
 import {documentedFactReplyFor} from './documented-fact-reply.ts';
+import {makeLocalPressReply,readyNonAssertiveInquiry,PRESS_REPLY_DEADLINE_MS} from './local-press-reply.ts';
 
 export const MANUAL_TEXT_MODEL = 'gpt-6-luna';
 export type ManualCoachInput = z.output<typeof CoachInput>;
-export type ManualTiming = { firstDeltaMs?: number; fullSuggestionMs?: number; verificationFinishedMs?: number; totalMs?: number; phases?:CoachingPhaseTiming };
-type ManualReplySource='real_model'|'general_playbook'|'conversation_state'|'company_knowledge';
+export type ManualTiming = { firstDeltaMs?: number; fullSuggestionMs?: number; verificationFinishedMs?: number; totalMs?: number; phases?:CoachingPhaseTiming; usageUnconfirmed?:boolean };
+type ManualReplySource='real_model'|'general_playbook'|'conversation_state'|'company_knowledge'|'local';
 export type ManualCoachingEvent =
   | { type: 'start'; model: string; source: ManualReplySource; serviceTier?:string; requestedServiceTier?:string; startedAt: number }
   | { type: 'delta'; guidance: Guidance; timing?:ManualTiming }
@@ -118,7 +119,7 @@ export function manualRequestFor(input: ManualCoachInput) {
 }
 
 /** Read the Responses SSE envelope, including records split across byte chunks. */
-export async function* responseStreamEvents(response: Response): AsyncGenerator<Record<string, unknown>> {
+export async function* responseStreamEvents(response: Response, signal?:AbortSignal): AsyncGenerator<Record<string, unknown>> {
   if (!response.body) throw new Error('The AI returned no streaming response.');
   const reader = response.body.getReader(), decoder = new TextDecoder();
   let buffer = '';
@@ -127,9 +128,13 @@ export async function* responseStreamEvents(response: Response): AsyncGenerator<
     if (!data || data === '[DONE]') return null;
     return JSON.parse(data) as Record<string, unknown>;
   };
+  const cancel=()=>{void reader.cancel().catch(()=>{});};
+  signal?.addEventListener('abort',cancel,{once:true});
   try {
     while (true) {
+      if(signal?.aborted)throw new DOMException('Manual suggestion cancelled.','AbortError');
       const chunk = await reader.read();
+      if(signal?.aborted)throw new DOMException('Manual suggestion cancelled.','AbortError');
       buffer += decoder.decode(chunk.value, { stream: !chunk.done });
       buffer = buffer.replace(/\r\n/g, '\n');
       let boundary: number;
@@ -139,12 +144,12 @@ export async function* responseStreamEvents(response: Response): AsyncGenerator<
       }
       if (chunk.done) { const event = parse(buffer); if (event) yield event; break; }
     }
-  } finally { reader.releaseLock(); }
+  } finally { signal?.removeEventListener('abort',cancel);reader.releaseLock(); }
 }
 
 export type ManualResponseResult = { id?: string; model?: string; usage?: unknown; status?: string; service_tier?:string };
-type ManualStreamOptions = {
-  input: ManualCoachInput; response: Response; signal: AbortSignal;
+export type ManualStreamOptions = {
+  input: ManualCoachInput; response?: Response; createResponse?:(signal:AbortSignal)=>Promise<Response>; signal: AbortSignal;
   emit: (event: ManualCoachingEvent) => void;
   verify: (guidance: Guidance, signal: AbortSignal) => Promise<Guidance & { _charges?: UsageEntry[] }>;
   charge: (response: ManualResponseResult) => UsageEntry;
@@ -154,7 +159,7 @@ type ManualStreamOptions = {
 /** Publish speakable wording once, after its local and required source checks.
  * Provider deltas remain internal: an unfinished clause cannot yet be certified
  * as append-only and must not become wording a representative starts reading. */
-export async function streamManualCoaching(options: ManualStreamOptions) {
+async function streamManualCandidate(options: ManualStreamOptions & {response:Response}) {
   const { input, charges } = options, began = options.startedAt ?? performance.now();
   const phaseClock=options.phaseClock||new CoachingPhaseClock(began);
   if(!options.phaseClock)phaseClock.providerStarted(0);
@@ -173,6 +178,16 @@ export async function streamManualCoaching(options: ManualStreamOptions) {
     if (candidate||rejectedReasons) return;
     rawSay = (rawText.match(/(?:^|\n)SAY:[ \t]*([^\n]*)/i)?.[1]?.trim() || completedLiveReply(rawText,input,true)?.rawSay || value.say).split(/(?:\s+|(?<=[.!?]))(?=(?:SAY|ASK|NEXT|CAUTION|STAGE_ID|STAGE|MOMENT|MOVE|BACKUP|WHY|BUYER_INTENT|EVIDENCE|MISSING):)/i)[0].trim();
     phaseClock.wordingComplete();
+    const inquiry=input.coachingRequest?readyNonAssertiveInquiry(rawSay,input):undefined;
+    if(inquiry){
+      candidate=decorate({...value,...inquiry},true);verifiedGuidance=candidate;
+      timing.totalMs=performance.now()-began;
+      timing.firstDeltaMs=timing.totalMs;timing.fullSuggestionMs=timing.totalMs;timing.verificationFinishedMs=timing.totalMs;
+      verification=Promise.resolve();
+      emit({type:'suggestion_complete',guidance:candidate,rawSay,timing:{...timing}});
+      emit({type:'verification_complete',guidance:candidate,replaced:candidate.say!==rawSay,originalSay:rawSay,_charges:[...charges],timing:{...timing},model:providerModel,source:'real_model',serviceTier:providerTier});
+      return;
+    }
     const assessment = phaseClock.validate(()=>assessReplyVerification(cleanSpokenReply(rawSay,input), input));
     const unsupported=input.coachingRequest?assessment.unsupportedClaims:[];
     if(unsupported.length){
@@ -227,7 +242,7 @@ export async function streamManualCoaching(options: ManualStreamOptions) {
       }
     });
   };
-  for await (const event of responseStreamEvents(options.response)) {
+  for await (const event of responseStreamEvents(options.response,options.signal)) {
     if (options.signal.aborted) throw new DOMException('Manual suggestion cancelled.', 'AbortError');
     if (event.type === 'response.output_text.delta' && typeof event.delta === 'string') {
       phaseClock.firstDelta();
@@ -259,7 +274,7 @@ export async function streamManualCoaching(options: ManualStreamOptions) {
     phaseClock.repairStarted();
     const repairedInput={...input,selfCheckFailure:rejectedReasons.join('; ').slice(0,2000)};
     const response=await options.repair(repairedInput,rejectedReasons);
-    return streamManualCoaching({...options,input:repairedInput,response,repair:undefined,startedAt:began,phaseClock});
+    return streamManualCandidate({...options,input:repairedInput,response,repair:undefined,startedAt:began,phaseClock});
   }
   if (!candidate || !verification) throw new Error('The AI did not return a speakable reply.');
   await verification;
@@ -271,4 +286,88 @@ export async function streamManualCoaching(options: ManualStreamOptions) {
     timing.totalMs=performance.now()-began;
     emit({type:'verification_complete',guidance:final,replaced:final.say!==rawSay,originalSay:rawSay,_charges:[...charges],timing:{...timing},model:providerModel,source:'real_model',serviceTier:providerTier});
   }
+}
+
+
+/** A press owns one ready line. Provider failure, a rejected draft or a bounded
+ * wait completes that same press locally; neither a repair call nor a late
+ * source check may replace wording already published for the representative. */
+export async function streamManualCoaching(options:ManualStreamOptions) {
+  if(!options.input.coachingRequest){
+    const response=options.response||await options.createResponse?.(options.signal);
+    if(!response)throw new Error('No manual coaching response was supplied.');
+    return streamManualCandidate({...options,response});
+  }
+  const began=options.startedAt??performance.now(),phaseClock=options.phaseClock||new CoachingPhaseClock(began);
+  const controller=new AbortController(),signal=AbortSignal.any([options.signal,controller.signal]);
+  let published:Guidance|undefined,providerRequested=!!options.response,providerCompleted=false;
+  let finish:()=>void=()=>{};
+  const terminal=new Promise<void>(resolve=>{finish=resolve;});
+  let timer:ReturnType<typeof setTimeout>|undefined;
+  const local=(reason:string)=>{
+    if(published||options.signal.aborted)return;
+    const guidance={...makeLocalPressReply(options.input,reason),usageUnconfirmed:providerRequested&&!providerCompleted};
+    published=guidance;
+    clearTimeout(timer);
+    const elapsed=performance.now()-began;
+    phaseClock.display(guidance.say,true,true);
+    const timing:ManualTiming={firstDeltaMs:elapsed,fullSuggestionMs:elapsed,verificationFinishedMs:elapsed,totalMs:elapsed,phases:phaseClock.snapshot(),usageUnconfirmed:providerRequested&&!providerCompleted};
+    options.emit({type:'start',model:'Local response',source:'local',startedAt:Date.now()});
+    options.emit({type:'suggestion_complete',guidance,rawSay:guidance.say,timing});
+    options.emit({type:'verification_complete',guidance,replaced:false,originalSay:guidance.say,_charges:[...options.charges],timing,model:'Local response',source:'local'});
+    controller.abort();finish();
+  };
+  const emit=(event:ManualCoachingEvent)=>{
+    if(options.signal.aborted)return;
+    if(event.type==='charges')providerCompleted=true;
+    if(event.type==='self_check_rejected'){
+      options.emit(event);local('validation_rejected');return;
+    }
+    if(event.type==='error'){local(event.code||'generation_failed');return;}
+    if('guidance' in event){
+      if(published){
+        // Keep usage evidence, but never republish a checked/local line or
+        // expose a delayed verifier's competing wording.
+        if(event.type==='verification_complete'&&event._charges.length)options.emit({type:'charges',_charges:event._charges});
+        return;
+      }
+      if(!event.guidance.verified){
+        if(event.type==='verification_complete')local('validation_rejected');
+        return;
+      }
+      const guidance={...event.guidance,replyOrigin:'generated' as const};
+      published=guidance;clearTimeout(timer);phaseClock.display(guidance.say,true,true);
+      options.emit({...event,guidance,...'timing' in event?{timing:{...event.timing,phases:phaseClock.snapshot()}}:{}});
+      // Ready wording does not wait for optional MOVE/WHY or usage metadata.
+      // Give already-in-flight usage the remainder of this press's bounded
+      // window, then release a stalled stream without changing the line.
+      timer=setTimeout(()=>{
+        if(!providerCompleted)options.emit({type:'charges',_charges:[...options.charges],timing:{usageUnconfirmed:true,phases:phaseClock.snapshot()}});
+        controller.abort();finish();
+      },Math.max(0,PRESS_REPLY_DEADLINE_MS-(performance.now()-began)));
+      return;
+    }
+    options.emit(event);
+  };
+  const cancelled=()=>{clearTimeout(timer);controller.abort();finish();};
+  options.signal.addEventListener('abort',cancelled,{once:true});
+  if(options.signal.aborted){cancelled();return;}
+  timer=setTimeout(()=>local('generation_timeout'),Math.max(0,PRESS_REPLY_DEADLINE_MS-(performance.now()-began)));
+  const work=(async()=>{
+    try{
+      if(!options.phaseClock)phaseClock.providerStarted(0);
+      providerRequested=true;
+      const response=options.response||await options.createResponse?.(signal);
+      if(!response)throw new Error('No manual coaching response was supplied.');
+      if(signal.aborted)return;
+      await streamManualCandidate({...options,response,signal,emit,repair:undefined,startedAt:began,phaseClock});
+      if(!published)local('empty_response');
+    }catch(error){
+      const code=(error as {code?:string})?.code;
+      if(code==='not_configured'||code==='unauthorized')providerRequested=false;
+      if(!options.signal.aborted&&!published)local(code||'generation_failed');
+    }
+  })();
+  try{await Promise.race([work,terminal]);}
+  finally{clearTimeout(timer);options.signal.removeEventListener('abort',cancelled);}
 }

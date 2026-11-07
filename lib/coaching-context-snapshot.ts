@@ -66,6 +66,9 @@ export function coachingRequestFocus(context:CoachingContext):CoachingRequestFoc
   const speaker=role==='buyer'?'Buyer':role==='you'?'You':'Call audio';
   return {kind:text?'partial':'pending',role,text,displayText:text?`${speaker} — still transcribing: ${text}`:`${speaker} — speech is still being transcribed`,turnId:latest.id};
  }
+ // Mixed audio is available speech with an unresolved speaker, not an empty
+ // listening session. Never promote it to buyer identity or an agreement.
+ if(latest?.role==='conversation'&&'text' in latest&&latest.text?.trim())return {kind:'confirmed',role:'conversation',text:latest.text,displayText:'Call audio — speaker unassigned: '+latest.text,turnId:latest.id};
  const buyer=[...conversation].reverse().find(turn=>turn.role==='buyer'&&!turn.transcriptionPending);
  if(buyer&&'text' in buyer)return {kind:'confirmed',role:'buyer',text:buyer.text||'',displayText:buyer.text||'',turnId:buyer.id};
  if(currentIds&&all.some(turn=>!turn.transcriptionPending&&!!turn.id&&!currentIds.has(turn.id)))return {kind:'confirmed',text:'',displayText:'Listening resumed — no new buyer words captured yet.'};

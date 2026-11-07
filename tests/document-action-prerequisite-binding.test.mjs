@@ -1,3 +1,4 @@
+import {assertLocalPressCompletion} from './helpers/local-press-assertions.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {analyzeDocumentActionMeaning,documentActionGroups} from '../lib/document-product-evidence.ts';
@@ -76,12 +77,10 @@ for(const company of companies){
  for(const say of unsafe)test(`${company.name}: scope and every required prerequisite survive: ${say}`,()=>{
   const assessment=assessReplyVerification(say,context);assert.ok(assessment.unsupportedClaims.length||assessment.requiresVerification);assert.equal(checkSuggestion({say},context,{factChecked:true}).ok,false);
  });
- test(`${company.name}: a rejected weakened gate gets one bounded repair and one stable answer`,async()=>{
-  const t=controller(context),bad=`${inquiry}Once we've checked whether it matches and you approve, I'll email it.`,safe=`${inquiry}${gate}, I'll email it.`;
-  try{t.session.requestNextMove(context);t.respond(bad);await settle();assert.deepEqual(t.log.shown,[]);assert.equal(t.creates().length,2);t.respond(safe);await settle();assert.deepEqual(t.log.shown,[{say:safe,trigger:context.coachingRequest.id}]);assert.equal(t.log.traces.filter(event=>event.event==='repair_requested').length,1);assert.equal(t.log.remote,0);assert.equal(t.log.fallback,0);const published=t.log.shown[0].say;t.session.handle({type:'response.output_text.delta',response_id:'retired-response',delta:'SAY: Replace this\n'});await settle();assert.equal(t.log.shown[0].say,published);}finally{t.session.stop();}
- });
- test(`${company.name}: repeated unsafe repair ends explicitly unavailable without filler`,async()=>{
-  const t=controller(context),bad=`${inquiry}Once we've checked whether it matches and you approve, I'll email it.`;
-  try{t.session.requestNextMove(context);t.respond(bad);await settle();t.respond(bad);await settle();assert.deepEqual(t.log.shown,[]);assert.equal(t.creates().length,2);assert.equal(t.log.traces.filter(event=>event.event==='failed').length,1);assert.equal(t.log.traces.filter(event=>event.event==='repair_requested').length,1);assert.equal(t.log.fallback,0);}finally{t.session.stop();}
- });
+ test(`${company.name}: a rejected weakened gate gets one local stable answer`,async()=>{
+ const t=controller(context),bad=`${inquiry}Once we've checked whether it matches and you approve, I'll email it.`;try{t.session.requestNextMove(context);t.respond(bad);await settle();const spoken=assertLocalPressCompletion(t.log,t.creates(),bad);assert.equal(t.log.remote,0);t.session.handle({type:'response.output_text.delta',response_id:'retired-response',delta:'SAY: Replace this\n'});await settle();assert.equal(t.log.shown[0].say,spoken);}finally{t.session.stop();}
+});
+ test(`${company.name}: late unsafe text cannot replace the local completion`,async()=>{
+ const t=controller(context),bad=`${inquiry}Once we've checked whether it matches and you approve, I'll email it.`;try{t.session.requestNextMove(context);t.respond(bad);await settle();const spoken=assertLocalPressCompletion(t.log,t.creates(),bad);t.respond(bad);await settle();assert.equal(t.log.shown.length,1);assert.equal(t.log.shown[0].say,spoken);assert.equal(t.creates().length,1);}finally{t.session.stop();}
+});
 }

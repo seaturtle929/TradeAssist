@@ -6,6 +6,28 @@ Run from the TradeAssist repository:
 npm run check:conversations -- --baseline=fb8e23c --candidate=working
 ```
 
+For stable completion of each intentional press, compare `--baseline=58e376e`.
+The current product contract completes a rejected, failed or timed-out request
+with a controlled local line rather than an unavailable card or another model
+repair. Reports record `replyOrigin`, `generatedMoveCorrect`,
+`localCompletionSafe` and `originalDraftBlocked` separately. A local completion
+counts as a button response, never as successful model generation. Negative
+controls must still reject the injected unsafe draft; they may now complete with
+the build's own local factory. The original sales-move rubric and its failures
+remain in the report even when a local response completes the button request.
+
+Focused offline lifecycle checks:
+
+```sh
+node --no-warnings --experimental-loader ./scripts/regression/typescript-loader.mjs --test tests/local-press-reply.test.mjs tests/manual-press-completion.test.mjs tests/live-stable-press-completion.test.mjs
+```
+
+The local deadline is 1,500 ms, leaving render headroom within the 1.8-second
+speech-end target. Live requests charge observed transcription time to that
+budget and never answer provisional words. If final recognition never arrives,
+the completed press asks for repetition. Timing from synthetic controller events
+or scripted browser transports does not establish real ASR/model performance.
+
 For the reviewed-send, deferral and report-condition follow-up, use the explicit
 `--baseline=178465b` and `--holdouts` flags. Previously opened reserved cases are
 regressions, not unseen evidence; author a fresh private variation only after the

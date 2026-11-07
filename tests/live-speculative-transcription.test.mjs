@@ -86,9 +86,9 @@ test('Rep speech changes relevant context and invalidates a hidden candidate',as
 test('Missing final is bounded and never promotes the provisional complete-looking words',async()=>{
  const t=fixture({queuedTranscriptionTimeoutMs:80,transcriptionTimeoutMs:130});try{
   await t.speculate('Thank you, goodbye.');const old=t.created();t.finish(old,'Thank you, goodbye.');await sleep(110);
-  assert.equal(t.log.shown.length,0);assert.equal(t.creates().length,1);assert.equal(t.log.traces.filter(event=>event.event==='queue_released').length,0);
-  assert.equal(t.log.traces.findLast(event=>event.event==='queue_wait_timeout').status,'waiting_for_final');
-  assert.match(t.log.statuses.at(-1).message,/could not finish transcribing/);
+  assert.equal(t.log.shown.length,1);assert.equal(t.log.shown[0].value.say,'Sorry, could you repeat that last part?');assert.equal(t.log.shown[0].value.replyOrigin,'local');
+  assert.equal(t.creates().length,1,'The failed final does not add another provider request');assert.equal(t.log.traces.filter(event=>event.event==='queue_released').length,1);
+  assert.equal(t.log.traces.findLast(event=>event.event==='queue_wait_timeout').status,'local_clarification');
   assert.equal(t.context.turns.length,0);assert.equal(t.log.traces.filter(event=>event.event==='speculation_discarded').length,1);
  }finally{t.session.stop();}
 });
