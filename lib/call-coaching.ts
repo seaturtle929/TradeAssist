@@ -27,6 +27,7 @@ export const CALL_TYPES = [
 export function normalizeCallType(value:unknown):CallType { return CALL_TYPES.some(t=>t.id===value) ? value as CallType : "discovery"; }
 export function stageLabel(id:string,bilingual=false) { const stage=Object.prototype.hasOwnProperty.call(STAGES,id) ? STAGES[id as keyof typeof STAGES] : STAGES.discovery;return bilingual ? stage.zh : stage.en; }
 export type CoachingContext = {
+  interactionType?:import("./trade").InteractionType;projectId?:string;
   coachingRequest?:import('./on-demand-coaching').CoachingRequest;
   clientContext?:import('./client-coaching-context').ClientCoachingContext;clientId?:string;contactId?:string;
   companyConfiguration?:import('./company-configuration').CallConfigurationBinding;

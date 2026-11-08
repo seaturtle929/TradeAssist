@@ -1,3 +1,4 @@
+import {interactionCoachingRules} from './interaction-coaching.ts';
 import {projectedOnDemandTask,projectOnDemandImmediateAction,referencedCompanyFacts} from './on-demand-projection.ts';
 import {CoachingPhaseClock,type CoachingPhaseTiming} from './coaching-timing.ts';
 import {ON_DEMAND_COACHING_RULES,ON_DEMAND_LINE_FORMAT,onDemandDecisionRules,onDemandTaskContext,onDemandRepairRules,REPAIR_VIOLATION_SCOPE} from './on-demand-coaching.ts';
@@ -72,7 +73,7 @@ export function compactManualContext(input: ManualCoachInput) {
   const companyFacts = (input.brain?.facts || []).filter(fact => fact.confirmed && input.sources.some(source => source.id === fact.sourceId && normalize(source.text).includes(normalize(fact.quote)))).map(fact => ({ fact, score: queryTerms.reduce((total, term) => total + (fact.text.toLowerCase().includes(term) ? 1 : 0), 0) })).sort((left, right) => right.score - left.score).slice(0, 8).map(({ fact }) => ({ text: fact.text, sourceId: fact.sourceId, quote: fact.quote }));
   return {
     ...(input.coachingRequest?{coachingTask:onDemandTaskContext(input)}:{}),
-    callId: input.callId, manufacturer: input.manufacturer, buyer: input.buyer,
+    callId: input.callId, interactionType:input.interactionType,projectId:input.projectId, manufacturer: input.manufacturer, buyer: input.buyer,
     relationship: input.callContext?.relationship, goal: input.callContext?.goal || input.goal,
     callContext: input.callContext ? { background: input.callContext.background.slice(0, 1800), knownFacts: input.callContext.knownFacts.slice(0, 1800), doNotGuess: input.callContext.doNotGuess.slice(0, 1400) } : undefined,
     state: {
@@ -113,7 +114,7 @@ export function manualRequestFor(input: ManualCoachInput) {
   }:compact;
   return {
     model: MANUAL_TEXT_MODEL, service_tier: 'default', store: false, stream: true, reasoning: { effort: 'none' },
-    instructions: input.coachingRequest ? ON_DEMAND_COACHING_RULES+'\n'+ON_DEMAND_LINE_FORMAT+configurationInstructions(input)+onDemandDecisionRules(input)+onDemandRepairRules(input) : FOUNDATION_GENERATION_RULES + "\n" + MANUAL_REPLY_RULES + '\n' + VERIFICATION_TURN_RULES + configurationInstructions(input) + (isNeedsOnlyTurn(input) ? '\nThis buyer is describing their own needs, not requesting supplier claims. Respond to the stated need with supported relevance or one useful question; no factory deferral or unsupported capability claims.' : ''),
+    instructions: interactionCoachingRules(input)+(input.coachingRequest ? ON_DEMAND_COACHING_RULES+'\n'+ON_DEMAND_LINE_FORMAT+configurationInstructions(input)+onDemandDecisionRules(input)+onDemandRepairRules(input) : FOUNDATION_GENERATION_RULES + "\n" + MANUAL_REPLY_RULES + '\n' + VERIFICATION_TURN_RULES + configurationInstructions(input) + (isNeedsOnlyTurn(input) ? '\nThis buyer is describing their own needs, not requesting supplier claims. Respond to the stated need with supported relevance or one useful question; no factory deferral or unsupported capability claims.' : '')),
     input: JSON.stringify(projectOnDemandImmediateAction(input,{foundation:projectOnDemandImmediateAction(input,foundationLayerFor(input)),...projection})), max_output_tokens: 420,
   };
 }

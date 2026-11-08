@@ -20,6 +20,7 @@ function ready(say:string,context:CoachingContext,origin:'generated'|'local',rea
 const cleanLabel=(text?:string)=>text?.replace(/[\r\n]+/g,' ').trim().slice(0,120)||'';
 function introduction(context:CoachingContext){
  const rep=representativeIdentityFor(context)?.name,company=cleanLabel(context.manufacturer?.name);
+ if((context.interactionType||context.clientContext?.interactionType)==='text_email')return company?`Hello, I'm with ${company}.`:rep?`Hello, this is ${rep}.`:'Hello.';
  return rep&&company?`Hi, this is ${rep} from ${company}.`:company?`Hi, I'm with ${company}.`:rep?`Hi, this is ${rep}.`:'Hi, thanks for taking my call.';
 }
 
@@ -33,17 +34,18 @@ export function makeLocalPressReply(context:CoachingContext,reason='generation_f
  else if(focus.role==='conversation')say='Could you clarify that last point for me?';
  else {
   const turns=context.turns||[],participant=deriveCallParticipant(turns),route=callRouteAtRequest(context);
+  const channel=context.interactionType||context.clientContext?.interactionType||'call_meeting',written=channel==='text_email';
   const pickup=currentParticipantPickup({text,id:focus.turnId},participant);
   const greeting=pickup?.kind==='greeting_only'||isParticipantIntroduction(text);
   const identityQuestion=/\bwho(?:['’]s| is) (?:this|calling)|\bwho are you\b|\bwhat(?:['’]s| is) (?:this(?: call)?|your call) (?:about|regarding)|\bhow (?:can|may) I help\b/i.test(text);
   if(hasClearConversationRefusal(text))say='Understood. Thank you for your time.';
-  else if(participant.transferPending&&!pickup)say="Thank you, I'll hold.";
+  else if(!written&&participant.transferPending&&!pickup)say="Thank you, I'll hold.";
   else if((!text||greeting||identityQuestion)&&route?.routingNeeded){
    const target=cleanLabel(route.target?.name),role=cleanLabel(route.target?.role);
    say=introduction(context)+' '+(target?`Could you put me through to ${target}${role?` in ${role}`:''}, please?`:'Could I speak with the person who handles purchasing, please?');
   }
-  else if(identityQuestion)say=introduction(context)+" I'm calling to introduce our company.";
-  else if(!text||greeting||/^(?:hi|hello|hey|good (?:morning|afternoon|evening))[!,.\s]*$/i.test(text))say=introduction(context)+(context.manufacturer?.name||representativeIdentityFor(context)?' Thanks for taking my call.':'');
+  else if(identityQuestion)say=introduction(context)+(written?" I’d like to understand what you need.":channel==='in_person'?" I’d like to introduce our company.":" I'm calling to introduce our company.");
+  else if(!text||greeting||/^(?:hi|hello|hey|good (?:morning|afternoon|evening))[!,.\s]*$/i.test(text))say=introduction(context)+(written?' How can I help with what you’re working on?':context.manufacturer?.name||representativeIdentityFor(context)?channel==='in_person'?' Thanks for taking the time.':' Thanks for taking my call.':'');
   else if(deriveBuyerDeferral(turns)?.nextMove==='acknowledge_and_offer_next_step')say='Of course. Would it be alright if I followed up with you?';
   else if(/\b(?:goodbye|bye|have a (?:good|great|nice) (?:day|one))\b/i.test(text)&&!text.includes('?'))say='Thank you for your time. Have a good day.';
   else if(/\b(?:report|document|certificate|certification)\b/i.test(text))say="I'll check the details and get back to you.";

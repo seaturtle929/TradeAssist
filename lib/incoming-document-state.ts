@@ -1,13 +1,15 @@
 import {deriveDocumentState} from './document-state.ts';
+import {reviewedClientContext,type ClientContextCarrier} from './client-coaching-context.ts';
 type Turn={id?:string;role:string;text:string;transcriptionUncertainty?:unknown};
-type Context={turns?:Turn[]};
+type Context=ClientContextCarrier&{turns?:Turn[]};
 export type IncomingDrawingState={state:'unconfirmed'|'promised'|'buyer_reports_sent'|'received';sourceTurnIds:string[];evidence:string[]};
 const normalize=(text:string)=>text.replace(/[’‘]/g,"'");
 /** Track actions actually spoken, not suggested wording. A buyer's past send
  * report and the rep's receipt are distinct. A future/subordinate prerequisite
  * (“once we receive it”) cannot become completed receipt. */
 export function incomingDrawingState(context:Context):IncomingDrawingState{
- const record=deriveDocumentState(context).transfers.find(row=>row.document==='drawings'&&row.sender==='buyer');
+ const client=reviewedClientContext(context);
+ const record=deriveDocumentState({turns:context.turns,seed:client?.standing?.documentState}).transfers.find(row=>row.document==='drawings'&&row.sender==='buyer');
  if(!record)return {state:'unconfirmed',sourceTurnIds:[],evidence:[]};
  const state:IncomingDrawingState['state']=record.events.at(-1)?.kind==='restricted'?'unconfirmed':record.receiptStatus==='confirmed'?'received':record.sendStatus==='reported_sent'?'buyer_reports_sent':['promised','offered'].includes(record.phase)?'promised':'unconfirmed';
  const last=record.events.at(-1);return {state,sourceTurnIds:last?[last.turnId]:[],evidence:last?[last.quote]:[]};

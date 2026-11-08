@@ -1,0 +1,9 @@
+import type {InteractionType} from './trade';
+
+export function interactionCoachingRules(context:{interactionType?:InteractionType;projectId?:string;clientContext?:{interactionType?:InteractionType;projectId?:string}}):string {
+ const type=context.interactionType||context.clientContext?.interactionType||'call_meeting';
+ const shared='\nCLIENT INTERACTION: Use this client/contact/project’s reviewed history, needs, objections, preferences and outstanding next steps together with the completed current exchange and approved company evidence. One intentional response request produces one natural, usable line. Suggestions are drafts, never evidence that anyone said, sent, agreed or completed them. Preserve conditions and distinguish offered, promised, sent, received and reviewed. When an answer is uncertain, offer to check or ask one useful clarification.\n';
+ if(type==='text_email')return shared+'CHANNEL: TEXT OR EMAIL. SAY is a short professional written reply the salesperson can send, not a telephone opener or commentary. Respond to the latest pasted message in its relationship context. Do not claim a phone connection, transfer or that an email has been sent. A draft becomes actual representative speech only if the salesperson explicitly records what they sent. Do not add a subject, signature, placeholder name, invented attachment, deadline or new promise.\n';
+ if(type==='in_person')return shared+'CHANNEL: IN PERSON. Suggest concise natural words to say in the room. Do not ask for a phone transfer or assume a remote call. A shared microphone does not identify speakers: retain unassigned words as unassigned until the salesperson confirms the labels.\n';
+ return shared+'CHANNEL: CALL OR MEETING. Use the existing live audio and speaker labels. A selected intended contact is not evidence they have answered.\n';
+}

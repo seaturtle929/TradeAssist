@@ -4,15 +4,16 @@ import type {ClientCallBackground} from './client-preparation';
 import {deriveCallParticipant,routingHistoryFor,type TransferAction} from './call-participant.ts';
 import {ensureCompanyBrain,type CompanyBrainRecord,type BuyerMemory} from './company-brain.ts';
 
+export type ClientProject={id:string;clientId:string;companyId:string;name:string;status:'active'|'closed';createdAt:number;updatedAt:number};
 export type ClientCategory='developing'|'existing'|'inactive';
 export const CLIENT_CATEGORIES:readonly {id:ClientCategory;label:string}[]=[{id:'developing',label:'Developing'},{id:'existing',label:'Existing customers'},{id:'inactive',label:'Inactive'}];
 export type ClientContactMethod={id:string;label:string;value:string};
 export type ContactEvidenceReview={required:boolean;reason:string;callId:string;sourceTurnId:string;markedAt:number;reviewedAt?:number;original:{name:string;role?:string;email?:string;emailLabel?:string;phone?:string;meetingLink?:string;otherMethods?:ClientContactMethod[]}};
 export type ClientContact={review?:ContactEvidenceReview;reviewHistory?:ContactEvidenceReview[];provenance?:{source:'speech'|'rep_update'|'reviewed_recap';callId:string;sourceTurnId?:string;quote?:string;confirmedAt:number};kind?:'person'|'main_line';meetingLink?:string;otherMethods?:ClientContactMethod[];id:string;clientId:string;companyId:string;name:string;role?:string;email?:string;emailLabel?:string;phone?:string;notes?:string;archived?:boolean;createdAt:number;updatedAt:number};
-export type ClientContextEntry={association?:{originalClientId:string;originalContactId?:string;reviewedAt:number};id:string;kind:'fact'|'background'|'objection'|'open_question'|'commitment'|'manager_decision'|'update'|'inference';text:string;source:'buyer'|'rep_update'|'manager'|'inference'|'legacy';at:number;recordedAt:number;updatedAt?:number;status:'current'|'open'|'promised'|'completed'|'resolved'|'superseded'|'cancelled';scope:'client'|'contact';contactId?:string;callId?:string;sourceTurnId?:string;quote?:string;supersedesId?:string;supersededById?:string;needsReview?:boolean};
-export type ClientRecord={currentSummary?:{callId:string;at:number;reviewedAt:number;text:string};category?:ClientCategory;categoryUpdatedAt?:number;inactiveReason?:string;reopenOpportunity?:string;callBackground?:ClientCallBackground;id:string;companyId:string;name:string;contacts:ClientContact[];background:string;context:ClientContextEntry[];callIds:string[];createdAt:number;updatedAt:number;removedAt?:number;removalUpdatedAt?:number;legacy?:{buyerMemoryIds:string[];originalLabels:string[];associationStatus:'confirmed'|'needs_review';reviewReasons:string[]}};
-export type ClientHistoryItem={callId:string;at:number;contactId?:string;contactName?:string;stageId?:string;participantScope?:'selected'|'company'|'other_contact';outcome:string;summary:string;summarySource?:'ai_summary'|'rep_notes'|'manager_packet'|'rep_recap'|'unavailable';routing?:{summary:string;transferStatus?:TransferAction['status'];targetName?:string}};
-export type CallPreparationSnapshot={standing?:import('./client-standing').ClientStanding;version:1;companyId:string;clientId:string;contactId?:string;reachViaContactId?:string;reachViaContact?:Pick<ClientContact,'id'|'clientId'|'companyId'|'name'|'role'|'email'|'emailLabel'|'phone'|'kind'|'meetingLink'|'otherMethods'>;clientName?:string;contact?:Pick<ClientContact,'id'|'clientId'|'companyId'|'name'|'role'|'email'|'emailLabel'|'phone'|'kind'|'meetingLink'|'otherMethods'>;callId:string;stageId:string;configurationVersionId:string;configurationVersion:number;reviewedAt:number;clientUpdatedAt:number;category?:ClientCategory;inactiveReason?:string;reopenOpportunity?:string;callBackground?:ClientCallBackground;background:string;outsideUpdate:string;entries:ClientContextEntry[];history:ClientHistoryItem[];stage:{id:string;name:string;objective:string;playbook:string;informationToBringBack:string[]};callContext?:CallContext;fingerprint:string};
+export type ClientContextEntry={owner?:'you'|'buyer';projectId?:string;interactionType?:import('./client-interactions').InteractionType;association?:{originalClientId:string;originalContactId?:string;reviewedAt:number};id:string;kind:'fact'|'background'|'objection'|'open_question'|'commitment'|'manager_decision'|'update'|'inference';text:string;source:'buyer'|'rep_update'|'manager'|'inference'|'legacy';at:number;recordedAt:number;updatedAt?:number;status:'current'|'open'|'promised'|'completed'|'resolved'|'superseded'|'cancelled';scope:'client'|'contact';contactId?:string;callId?:string;sourceTurnId?:string;quote?:string;supersedesId?:string;supersededById?:string;needsReview?:boolean};
+export type ClientRecord={projects?:ClientProject[];currentSummary?:{callId:string;at:number;reviewedAt:number;text:string;projectId?:string;contactId?:string;interactionType?:import('./client-interactions').InteractionType};category?:ClientCategory;categoryUpdatedAt?:number;inactiveReason?:string;reopenOpportunity?:string;callBackground?:ClientCallBackground;id:string;companyId:string;name:string;contacts:ClientContact[];background:string;context:ClientContextEntry[];callIds:string[];createdAt:number;updatedAt:number;removedAt?:number;removalUpdatedAt?:number;legacy?:{buyerMemoryIds:string[];originalLabels:string[];associationStatus:'confirmed'|'needs_review';reviewReasons:string[]}};
+export type ClientHistoryItem={projectId?:string;interactionType?:import('./client-interactions').InteractionType;callId:string;at:number;contactId?:string;contactName?:string;stageId?:string;participantScope?:'selected'|'company'|'other_contact';outcome:string;summary:string;summarySource?:'ai_summary'|'rep_notes'|'manager_packet'|'rep_recap'|'unavailable';routing?:{summary:string;transferStatus?:TransferAction['status'];targetName?:string}};
+export type CallPreparationSnapshot={projectId?:string;project?:Pick<ClientProject,'id'|'name'|'status'>;interactionType?:import('./client-interactions').InteractionType;standing?:import('./client-standing').ClientStanding;version:1;companyId:string;clientId:string;contactId?:string;reachViaContactId?:string;reachViaContact?:Pick<ClientContact,'id'|'clientId'|'companyId'|'name'|'role'|'email'|'emailLabel'|'phone'|'kind'|'meetingLink'|'otherMethods'>;clientName?:string;contact?:Pick<ClientContact,'id'|'clientId'|'companyId'|'name'|'role'|'email'|'emailLabel'|'phone'|'kind'|'meetingLink'|'otherMethods'>;callId:string;stageId:string;configurationVersionId:string;configurationVersion:number;reviewedAt:number;clientUpdatedAt:number;category?:ClientCategory;inactiveReason?:string;reopenOpportunity?:string;callBackground?:ClientCallBackground;background:string;outsideUpdate:string;entries:ClientContextEntry[];history:ClientHistoryItem[];stage:{id:string;name:string;objective:string;playbook:string;informationToBringBack:string[]};callContext?:CallContext;fingerprint:string};
 export type ClientPreparationSnapshot=CallPreparationSnapshot;
 export type LegacyClientAssociation={status:'needs_review'|'confirmed';originalBuyer:string;originalManufacturerId?:string;originalClientId?:string;originalContactId?:string;reviewReasons:string[];candidateClientIds:string[];memoryIds?:string[];reviewedAt?:number};
 export type ClientContextEntryInput=Omit<ClientContextEntry,'id'|'recordedAt'|'at'|'status'>&{id?:string;at?:number;status?:ClientContextEntry['status']};
@@ -25,6 +26,7 @@ const freshId=(prefix:string)=>`${prefix}:${globalThis.crypto.randomUUID()}`;
 const normalized=(value:string)=>value.toLowerCase().replace(/[^a-z0-9@.]+/g,' ').trim();
 const assertCompany=(client:ClientRecord,companyId:string)=>{if(client.companyId!==companyId)throw Error('This client belongs to a different selling company.');};
 const assertContact=(client:ClientRecord,contactId?:string)=>{if(contactId&&!client.contacts.some(contact=>contact.id===contactId&&contact.clientId===client.id&&contact.companyId===client.companyId))throw Error('This contact does not belong to the selected client and company.');};
+const assertProject=(client:ClientRecord,projectId?:string)=>{if(projectId&&!client.projects?.some(project=>project.id===projectId&&project.clientId===client.id&&project.companyId===client.companyId))throw Error('This project does not belong to the selected client and company.');};
 const defaultStatus=(kind:ClientContextEntry['kind']):ClientContextEntry['status']=>kind==='commitment'?'promised':['open_question','manager_decision'].includes(kind)?'open':'current';
 const completedActionPattern=/\b(?:I|we)(?:'ve|’ve)?\s+(?:(?:have|had|already|just)\s+)*(?:sent|emailed|shared|provided|completed)\b/i;
 const completionStatements=(text:string)=>text.split(/(?<=[.!?;])\s+|;\s*|\s+(?:but|however)\s+|,\s*(?=(?:not|never|no)\b)|\s+and\s+(?=(?:I|we)\b)/i).filter(statement=>{
@@ -39,6 +41,15 @@ const unsupportedCompletion=(text:string)=>!explicitCompletion(text)&&(completed
 export function createClientRecord(companyId:string,name:string,now=Date.now(),id=freshId('client')):ClientRecord{
  if(!companyId||!short(name,300))throw Error('A client needs a name and selling company.');
  return {id,companyId,name:short(name,300),contacts:[],background:'',context:[],callIds:[],createdAt:now,updatedAt:now};
+}
+/** Projects are client-owned labels, never inferred from a buyer name or a
+ * product mention. Explicit stable IDs keep two opportunities separate. */
+export function upsertClientProject(client:ClientRecord,input:{id?:string;name:string;status?:'active'|'closed'},now=Date.now()):ClientRecord {
+ const name=short(input.name,300);if(!name)throw Error('A project needs a name.');
+ if(input.id)assertProject(client,input.id);
+ const id=input.id||freshId('project'),prior=client.projects?.find(project=>project.id===id);
+ const project:ClientProject={...prior,id,companyId:client.companyId,clientId:client.id,name,status:input.status||prior?.status||'active',createdAt:prior?.createdAt||now,updatedAt:now};
+ return {...clone(client),projects:[...(client.projects||[]).filter(row=>row.id!==id).map(clone),project],updatedAt:now};
 }
 /** Removal only hides a client from active lists. Keep a separate lifecycle
  * timestamp after restoration so an older backup cannot undo either action. */
@@ -87,7 +98,7 @@ export function upsertClientContact(client:ClientRecord,contact:Partial<ClientCo
  return next;
 }
 export function addClientContextEntry(client:ClientRecord,input:ClientContextEntryInput,now=Date.now()):ClientRecord{
- assertContact(client,input.contactId);
+ assertContact(client,input.contactId);assertProject(client,input.projectId);
  if(input.scope==='contact'&&!input.contactId)throw Error('A contact-specific update needs a selected contact.');
  if(input.scope==='client'&&input.contactId)throw Error('Choose client scope or contact scope explicitly.');
  const text=short(input.text);if(!text)throw Error('Write the update before saving it.');
@@ -95,14 +106,14 @@ export function addClientContextEntry(client:ClientRecord,input:ClientContextEnt
  if(input.source==='buyer'&&(!input.callId||!input.sourceTurnId||!input.quote))throw Error('A recorded buyer statement needs its call, turn and original quotation. Outside-call developments should be attributed to the salesperson.');
  const id=input.id||freshId('client-entry');
  if(client.context.some(row=>row.id===id))return clone(client);
- const entry:ClientContextEntry={...clone(input),id,text,at:input.at??now,recordedAt:now,updatedAt:now,status:input.status||defaultStatus(input.kind)};
+ const entry:ClientContextEntry={...clone(input),...input.owner?{}:input.source==='buyer'?{owner:'buyer' as const}:['rep_update','manager'].includes(input.source)&&/^\s*(?:I|we)\b/i.test(text)?{owner:'you' as const}:{},id,text,at:input.at??now,recordedAt:now,updatedAt:now,status:input.status||defaultStatus(input.kind)};
  const complete=explicitCompletion(text);
  const materialTerms=(value:string)=>[...new Set((value.toLowerCase().match(/\b(?:spec(?:s|ification(?:s)?)?|profiles?|drawings?|catalog(?:ue)?s?|quot(?:e|es|ation|ations)|test reports?|data sheets?)\b/g)||[]).map(term=>term.replace(/specifications?|specs/g,'spec').replace(/profiles/g,'profile').replace(/drawings/g,'drawing').replace(/quotes|quotations?/g,'quote')))];
  const productIds=(value:string)=>[...new Set([...(value.match(/\b[a-z]{1,6}-?\d{1,6}\b|#\d{2,6}/ig)||[]),...(value.match(/\b[A-Z]{2,8}\b/g)||[])].map(item=>item.toLowerCase()))];
  const completedIds=new Set<string>();
- for(const statement of complete&&['rep_update','manager'].includes(input.source)?completionStatements(text):[]){
+ for(const statement of complete&&['rep_update','manager','buyer'].includes(input.source)?completionStatements(text):[]){
   const sentMaterials=materialTerms(statement);
-  const candidates=client.context.filter(row=>row.kind==='commitment'&&row.status==='promised'&&row.scope===entry.scope&&row.contactId===entry.contactId&&sentMaterials.length&&materialTerms(row.text).length&&materialTerms(row.text).every(term=>sentMaterials.includes(term)));
+  const candidates=client.context.filter(row=>row.kind==='commitment'&&row.status==='promised'&&row.scope===entry.scope&&row.contactId===entry.contactId&&row.projectId===entry.projectId&&!!entry.owner&&((row.owner|| (row.source==='buyer'?'buyer':row.source==='rep_update'&&/^\s*(?:I|we)\b/i.test(row.text)?'you':undefined))===entry.owner)&&sentMaterials.length&&materialTerms(row.text).length&&materialTerms(row.text).every(term=>sentMaterials.includes(term)));
   const sentProducts=productIds(statement);
   for(const candidate of candidates){const promisedProducts=productIds(candidate.text);if(sentProducts.length?promisedProducts.length?promisedProducts.every(product=>sentProducts.includes(product)):candidates.length===1:candidates.length===1)completedIds.add(candidate.id);}
  }
@@ -112,7 +123,7 @@ export function addClientContextEntry(client:ClientRecord,input:ClientContextEnt
 export function supersedeClientEntry(client:ClientRecord,entryId:string,input:ClientContextEntryInput,now=Date.now()):ClientRecord{
  const prior=client.context.find(row=>row.id===entryId);if(!prior)throw Error('The context item no longer exists.');
  if(prior.status==='superseded')throw Error('That item has already been corrected. Edit its current replacement.');
- if(input.scope!==prior.scope||input.contactId!==prior.contactId)throw Error('Corrections must keep the original contact scope; add a separate attributed update for another person.');
+ if(input.scope!==prior.scope||input.contactId!==prior.contactId||input.projectId!==prior.projectId)throw Error('Corrections must keep the original contact scope; add a separate attributed update for another person.');
  const replacementId=input.id||freshId('client-entry');
  const next=addClientContextEntry(client,{...input,id:replacementId,supersedesId:prior.id},now);
  return {...next,context:next.context.map(row=>row.id===prior.id?{...row,status:'superseded',supersededById:replacementId,updatedAt:now}:row)};
@@ -122,22 +133,22 @@ export function resolveClientEntry(client:ClientRecord,entryId:string,status:'co
  if(!short(updateText))throw Error('Record what changed; a promise alone does not prove completion.');
  if(status==='completed'&&unsupportedCompletion(updateText))throw Error('A future, conditional or incomplete action cannot be marked completed. Record what actually happened.');
  const evidenceId=freshId('client-entry');
- const next=addClientContextEntry(client,{id:evidenceId,kind:'update',text:updateText,source,scope:prior.scope,...prior.contactId?{contactId:prior.contactId}:{},at:now,status:'current',...status==='superseded'?{needsReview:true}:{}},now);
+ const next=addClientContextEntry(client,{id:evidenceId,kind:'update',text:updateText,source,scope:prior.scope,...prior.projectId?{projectId:prior.projectId}:{},...prior.interactionType?{interactionType:prior.interactionType}:{},...prior.contactId?{contactId:prior.contactId}:{},at:now,status:'current',...status==='superseded'?{needsReview:true}:{}},now);
  return {...next,context:next.context.map(row=>row.id===entryId?{...row,status,supersededById:evidenceId,updatedAt:now}:row)};
 }
 
 /** Current relationship context remains distinct from active Company Knowledge.
  * Exclude other contacts, resolved/stale records and indiscriminate transcripts. */
-export function selectClientEntries(client:ClientRecord,options:{companyId:string;contactId?:string;query?:string;limit?:number}):ClientContextEntry[]{
- assertCompany(client,options.companyId);assertContact(client,options.contactId);
+export function selectClientEntries(client:ClientRecord,options:{companyId:string;contactId?:string;projectId?:string;query?:string;limit?:number}):ClientContextEntry[]{
+ assertCompany(client,options.companyId);assertContact(client,options.contactId);assertProject(client,options.projectId);
  const terms=[...new Set((options.query||'').toLowerCase().match(/[a-z0-9]{3,}/g)||[])];
  const limit=Math.min(40,Math.max(1,options.limit||24));
  const score=(row:ClientContextEntry)=>(['open','promised'].includes(row.status)?20:0)+terms.filter(term=>row.text.toLowerCase().includes(term)).length*3;
- return client.context.filter(row=>!['superseded','cancelled','resolved','completed'].includes(row.status)&&(row.scope==='client'||!!options.contactId&&row.contactId===options.contactId)).sort((one,two)=>score(two)-score(one)||two.at-one.at||two.recordedAt-one.recordedAt).slice(0,limit).map(clone);
+ return client.context.filter(row=>(!row.projectId||row.projectId===options.projectId)&&!['superseded','cancelled','resolved'].includes(row.status)&&!(row.status==='completed'&&row.kind==='commitment')&&(row.scope==='client'||!!options.contactId&&row.contactId===options.contactId)).sort((one,two)=>score(two)-score(one)||two.at-one.at||two.recordedAt-one.recordedAt).slice(0,limit).map(clone);
 }
-export function clientHistoryFor(client:ClientRecord,calls:CallRecord[],options:{companyId:string;contactId?:string;limit?:number;excludeCallId?:string;includeOtherContacts?:boolean}):ClientHistoryItem[]{
- assertCompany(client,options.companyId);assertContact(client,options.contactId);
- return calls.filter(call=>call.manufacturerId===client.companyId&&call.clientId===client.id&&call.id!==options.excludeCallId&&(options.includeOtherContacts||!options.contactId||call.contactId===options.contactId||!call.contactId||client.contacts.find(contact=>contact.id===call.contactId)?.kind==='main_line')).sort((one,two)=>two.startedAt-one.startedAt).slice(0,Math.min(8,Math.max(1,options.limit||4))).map(call=>({callId:call.id,at:call.startedAt,...routingHistoryFor(call.turns)?{routing:routingHistoryFor(call.turns)}:{},...call.contactId?{contactId:call.contactId,contactName:client.contacts.find(contact=>contact.id===call.contactId)?.review?.required?'Contact details awaiting review':client.contacts.find(contact=>contact.id===call.contactId)?.name||call.buyer}:{},participantScope:!call.contactId||client.contacts.find(contact=>contact.id===call.contactId)?.kind==='main_line'?'company':call.contactId===options.contactId?'selected':'other_contact',stageId:call.companyConfiguration?.selectedStageId||call.callContext?.stageId,outcome:call.outcome,summary:short(call.derivedReviewStale?'Transcript corrected after review; earlier recap and conclusions need review. Corrected conversation: '+call.turns.slice(-8).map(turn=>turn.role+': '+turn.text).join(' | '):call.wrapUp?.recap||call.summary?.overview||call.packets?.en?.summary.join(' ')||call.notes||'No reviewed summary recorded.',1000),summarySource:call.derivedReviewStale?'unavailable':call.wrapUp?.recap?'rep_recap':call.summary?.overview?'ai_summary':call.packets?.en?.summary.length?'manager_packet':call.notes?'rep_notes':'unavailable'}));
+export function clientHistoryFor(client:ClientRecord,calls:CallRecord[],options:{companyId:string;contactId?:string;projectId?:string;limit?:number;excludeCallId?:string;includeOtherContacts?:boolean}):ClientHistoryItem[]{
+ assertCompany(client,options.companyId);assertContact(client,options.contactId);assertProject(client,options.projectId);
+ return calls.filter(call=>call.manufacturerId===client.companyId&&call.clientId===client.id&&(!call.projectId||call.projectId===options.projectId)&&call.id!==options.excludeCallId&&(options.includeOtherContacts||!options.contactId||call.contactId===options.contactId||!call.contactId||client.contacts.find(contact=>contact.id===call.contactId)?.kind==='main_line')).sort((one,two)=>two.startedAt-one.startedAt).slice(0,Math.min(8,Math.max(1,options.limit||4))).map(call=>({callId:call.id,at:call.startedAt,...call.projectId?{projectId:call.projectId}:{},...call.interactionType?{interactionType:call.interactionType}:{},...routingHistoryFor(call.turns)?{routing:routingHistoryFor(call.turns)}:{},...call.contactId?{contactId:call.contactId,contactName:client.contacts.find(contact=>contact.id===call.contactId)?.review?.required?'Contact details awaiting review':client.contacts.find(contact=>contact.id===call.contactId)?.name||call.buyer}:{},participantScope:!call.contactId||client.contacts.find(contact=>contact.id===call.contactId)?.kind==='main_line'?'company':call.contactId===options.contactId?'selected':'other_contact',stageId:call.companyConfiguration?.selectedStageId||call.callContext?.stageId,outcome:call.outcome,summary:short(call.derivedReviewStale?'Transcript corrected after review; earlier recap and conclusions need review. Corrected conversation: '+call.turns.slice(-8).map(turn=>turn.role+': '+turn.text).join(' | '):call.wrapUp?.recap||call.summary?.overview||call.packets?.en?.summary.join(' ')||call.notes||'No reviewed summary recorded.',1000),summarySource:call.derivedReviewStale?'unavailable':call.wrapUp?.recap?'rep_recap':call.summary?.overview?'ai_summary':call.packets?.en?.summary.length?'manager_packet':call.notes?'rep_notes':'unavailable'}));
 }
 export function upsertClientCallRecord(calls:CallRecord[],call:CallRecord):CallRecord[]{
  const prior=calls.find(row=>row.id===call.id);
@@ -152,7 +163,7 @@ export function upsertClientCallRecord(calls:CallRecord[],call:CallRecord):CallR
  * never become buyer quotations, company facts or completed commitments. */
 export function attachCallToClient(brain:CompanyBrainRecord,call:CallRecord,target:ClientAssociationTarget,now=Date.now()):CompanyBrainRecord{
  if(brain.companyId!==call.manufacturerId)throw Error('This call belongs to a different selling company.');
- const client=brain.clients?.find(row=>row.id===target.clientId&&row.companyId===brain.companyId);if(!client)throw Error('Select a client in this selling company.');assertContact(client,target.contactId);
+ const client=brain.clients?.find(row=>row.id===target.clientId&&row.companyId===brain.companyId);if(!client)throw Error('Select a client in this selling company.');assertContact(client,target.contactId);assertProject(client,call.projectId);
  let next=clone(client);
  // A reviewed wrap-up is the authority for what this session contributes to
  // current memory. Do not recreate rejected suggestions from its transcript.
@@ -166,7 +177,7 @@ export function attachCallToClient(brain:CompanyBrainRecord,call:CallRecord,targ
    const contactId=corrected&&item.contactId?target.contactId:item.contactId;
    const kind:ClientContextEntry['kind']=item.kind==='agreed'?'commitment':item.kind==='decision'?'manager_decision':item.kind==='uncertain'?'open_question':item.kind==='completed'?'update':'fact';
    const source=item.source==='buyer'&&item.sourceTurnId&&item.quote?'buyer':item.source==='inference'?'inference':'rep_update';
-   next=addClientContextEntry(next,{...corrected?{association:{originalClientId:association!.sourceClientId,originalContactId:item.contactId||association!.sourceContactId,reviewedAt:association!.reviewedAt}}:{},id,kind,text:item.text,source,callId:call.id,sourceTurnId:item.sourceTurnId,quote:item.quote,scope:contactId?'contact':'client',...contactId?{contactId}:{},at:item.at,status:item.kind==='agreed'?'promised':item.kind==='completed'?'completed':['uncertain','decision'].includes(item.kind)?'open':'current',...source==='inference'?{needsReview:true}:{}},now);
+   next=addClientContextEntry(next,{...corrected?{association:{originalClientId:association!.sourceClientId,originalContactId:item.contactId||association!.sourceContactId,reviewedAt:association!.reviewedAt}}:{},id,kind,text:item.text,source,...item.owner?{owner:item.owner}:item.source==='buyer'?{owner:'buyer' as const}:item.source==='rep_update'?{owner:'you' as const}:{},callId:call.id,...call.projectId?{projectId:call.projectId}:{},...call.interactionType?{interactionType:call.interactionType}:{},sourceTurnId:item.sourceTurnId,quote:item.quote,scope:contactId?'contact':'client',...contactId?{contactId}:{},at:item.at,status:item.kind==='agreed'?'promised':item.kind==='completed'?'completed':['uncertain','decision'].includes(item.kind)?'open':'current',...source==='inference'?{needsReview:true}:{}},now);
   }
   next={...next,callIds:[...new Set([...next.callIds,call.id])],updatedAt:now};
   return {...brain,clients:(brain.clients||[]).map(row=>row.id===next.id?next:clone(row)),updatedAt:now};
@@ -187,7 +198,7 @@ export function attachCallToClient(brain:CompanyBrainRecord,call:CallRecord,targ
   if(turn.role==='buyer'&&!promise&&!question&&!relevant)continue;
   const kind:ClientContextEntry['kind']=promise?'commitment':turn.role==='you'?'update':pending?'open_question':/\b(?:concern|worried|too (?:high|expensive)|not interested|failed|problem|risk|supplier)\b/i.test(text)?'objection':'fact';
   const rememberedText=question&&!pending?`Historical buyer question: ${text}${finalQuestionState?' (not pending in the final question queue)':' (answer status not recorded; do not assume it remains open)'}`:text;
-  next=addClientContextEntry(next,{id,kind,text:rememberedText,source:turn.role==='buyer'?'buyer':'rep_update',callId:call.id,sourceTurnId:turn.id,quote:text,scope,...target.contactId?{contactId:target.contactId}:{},at:turn.at,status:promise?'promised':pending?'open':'current',...question&&!pending&&!finalQuestionState?{needsReview:true}:{}},now);
+  next=addClientContextEntry(next,{id,kind,text:rememberedText,source:turn.role==='buyer'?'buyer':'rep_update',owner:turn.role==='buyer'?'buyer':'you',callId:call.id,...call.projectId?{projectId:call.projectId}:{},...call.interactionType?{interactionType:call.interactionType}:{},sourceTurnId:turn.id,quote:text,scope,...target.contactId?{contactId:target.contactId}:{},at:turn.at,status:promise?'promised':pending?'open':'current',...question&&!pending&&!finalQuestionState?{needsReview:true}:{}},now);
  }
  for(const decision of call.decisionsNeeded||[]){
   const id=`call:${call.id}:decision:${decision.id}`,prior=next.context.find(row=>row.id===id),status:ClientContextEntry['status']=decision.checked?'resolved':'open';
@@ -298,6 +309,8 @@ export function mergeClientRecords(local:ClientRecord,incoming:ClientRecord):Cli
  };
  const contacts=mergeRows(older.contacts,winner.contacts,row=>row.updatedAt||0);
  for(const contact of contacts)if(contact.companyId!==local.companyId||contact.clientId!==local.id)throw Error('A backup contact belongs to another client or company.');
+ const projects=mergeRows(older.projects||[],winner.projects||[],row=>row.updatedAt||0);
+ for(const project of projects)if(project.companyId!==local.companyId||project.clientId!==local.id)throw Error('A backup project belongs to another client or company.');
  const context=mergeRows(older.context,winner.context,row=>row.updatedAt??row.recordedAt??row.at);
  const entries=new Map(context.map(row=>[row.id,row]));
  for(const replacement of context){
@@ -305,10 +318,11 @@ export function mergeClientRecords(local:ClientRecord,incoming:ClientRecord):Cli
   const prior=entries.get(replacement.supersedesId);
   if(prior&&prior.scope===replacement.scope&&prior.contactId===replacement.contactId&&(!prior.supersededById||prior.supersededById===replacement.id||(replacement.updatedAt??replacement.recordedAt)>=(entries.get(prior.supersededById)?.updatedAt??entries.get(prior.supersededById)?.recordedAt??0))){prior.status='superseded';prior.supersededById=replacement.id;prior.updatedAt=Math.max(prior.updatedAt??0,replacement.updatedAt??replacement.recordedAt);}
  }
+ for(const entry of context)if(entry.projectId&&!projects.some(project=>project.id===entry.projectId))throw Error('A backup update references a project outside this client.');
  for(const entry of context)if(entry.scope==='contact'&&(!entry.contactId||!contacts.some(contact=>contact.id===entry.contactId)))throw Error('A backup update references a contact outside this client.');
  const newerLegacy=winner.legacy||older.legacy,olderLegacy=older.legacy;
  const legacy=newerLegacy?{...clone(olderLegacy||newerLegacy),...clone(newerLegacy),buyerMemoryIds:[...new Set([...(olderLegacy?.buyerMemoryIds||[]),...newerLegacy.buyerMemoryIds])],originalLabels:[...new Set([...(olderLegacy?.originalLabels||[]),...newerLegacy.originalLabels])],reviewReasons:newerLegacy.associationStatus==='confirmed'?[]:[...new Set([...(olderLegacy?.reviewReasons||[]),...newerLegacy.reviewReasons])]}:undefined;
- const merged={...clone(older),...clone(winner),id:local.id,companyId:local.companyId,contacts,context,callIds:[...new Set([...local.callIds,...incoming.callIds])],createdAt:Math.min(local.createdAt,incoming.createdAt),updatedAt:Math.max(local.updatedAt,incoming.updatedAt),...legacy?{legacy}:{}};
+ const merged={...clone(older),...clone(winner),id:local.id,companyId:local.companyId,contacts,...projects.length?{projects}:{},context,callIds:[...new Set([...local.callIds,...incoming.callIds])],createdAt:Math.min(local.createdAt,incoming.createdAt),updatedAt:Math.max(local.updatedAt,incoming.updatedAt),...legacy?{legacy}:{}};
  const summaries=[local.currentSummary,incoming.currentSummary].filter((summary):summary is NonNullable<ClientRecord['currentSummary']>=>!!summary).sort((a,b)=>b.at-a.at||b.reviewedAt-a.reviewedAt);
  if(summaries[0])merged.currentSummary=clone(summaries[0]);
  const categoryTime=(client:ClientRecord)=>client.categoryUpdatedAt??0;

@@ -58,3 +58,32 @@ At the November 3 GitHub setup, a clean export passed TypeScript and the product
 The app reads server credentials locally; configure them outside Git. Never print a full API key, include it in a diagnostic bundle or paste it into a pull request. When identification is necessary, show only a masked last-four-character suffix.
 
 Browser localStorage/IndexedDB, runtime persistence, company imports and isolated test workspaces are separate from source control. Preserve them during branch changes and restarts. Tests must not write calls, feedback or Golden Moments into the user's normal workspace.
+
+## Client interaction MVP
+
+The primary journey is Clients → open a client → choose In person, Call or
+meeting, or Text or email → interact with the copilot → review and save memory.
+A contact and optional project belong to that client. Phone routing applies to
+calls; pasted exchanges use explicit Client:/You: labels. Unassigned text/audio
+does not establish a buyer fact. Suggested wording never becomes actual speech
+or a sent message by itself.
+
+All channels reuse the existing CallRecord, reviewed wrap-up, Company Brain
+client records and durable workspace transaction. The optional interactionType,
+projectId and known-speaker owner fields preserve legacy records without a
+reset. Historical records without a channel are displayed as Call or meeting.
+Review corrections, dated manual updates and relevant contact/project history
+feed the same preparation and Suggest next move request. Company technical
+claims still require Company Knowledge; a client-memory update cannot approve
+a general product claim. Sending, receipt, review and report coverage remain
+separate.
+
+Run `npm run check:interactions` for the focused offline journey and channel
+checks. It uses authored fictional data and scripted provider events, with no
+paid requests or browser storage. The full conversation suite and stable-press
+checks remain required for shared coaching changes. Browser demonstrations must
+use a separate origin/profile, per AGENTS.md.
+
+The MVP captures pasted text/email; it does not connect to a mailbox or send a
+message. Spoken channels reuse current audio capture. Shared microphones require
+confirmed speaker labels; automatic in-room diarization is not implemented.

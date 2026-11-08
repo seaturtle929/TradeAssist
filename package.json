@@ -14,7 +14,8 @@
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate",
     "check:types": "tsc --noEmit --incremental false",
-    "check:privacy": "node scripts/repository-privacy-check.mjs --index"
+    "check:privacy": "node scripts/repository-privacy-check.mjs --index",
+    "check:interactions": "node --no-warnings --experimental-loader ./scripts/regression/typescript-loader.mjs --test tests/client-interaction-memory.test.mjs tests/client-interaction-coaching.test.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",

@@ -220,6 +220,9 @@ export function preparedPurchasingParticipant(participant:CallParticipant,knownF
  * legacy call that already contains an actual substantive two-way exchange is
  * not sent backwards to a gatekeeper script; a new contact starts fresh. */
 export function coldCallGateFor(context:GateContext):{kind:ColdCallGateKind;participant:CallParticipant}|null {
+  // A pasted exchange is already addressed correspondence, not a phone line
+  // awaiting a transfer. Keep role/authority unknowns without a call-routing move.
+  if('interactionType' in context&&context.interactionType==='text_email')return null;
   const callContext=context.callContext&&typeof context.callContext==='object'?context.callContext as {relationship?:string;stageId?:string;knownFacts?:string;doNotGuess?:string}:{};
   if(callContext.relationship&&callContext.relationship!=='first_contact'||context.callType&&!['discovery','gatekeeper'].includes(String(context.callType))||callContext.stageId&&!['cold_call','opening','gatekeeper'].includes(callContext.stageId))return null;
   const participant=preparedPurchasingParticipant(context.conversationState?.participant||deriveCallParticipant(context.turns||[]),callContext.knownFacts,callContext.doNotGuess);

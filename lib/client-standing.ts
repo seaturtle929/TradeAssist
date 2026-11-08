@@ -3,6 +3,7 @@ import type {ClientRecord,ClientContextEntry} from './client-records';
 import type {CallRecord} from './trade';
 import type {PreparationStage} from './client-preparation';
 import {isDocumentRequest} from './document-call-evidence.ts';
+import {deriveBuyerNeeds} from './buyer-needs.ts';
 
 export type ClientStanding={documentState?:DocumentState;version:1;companyId:string;clientId:string;source?:{callId:string;at:number;reviewedAt:number};summary:string;reached:string;buyerRequested:string[];repOwes:string[];buyerOwes:string[];unknowns:string[];sendStatus:'pending'|'sent'|'unknown';receiptStatus:'confirmed'|'unconfirmed';reviewStatus:'confirmed'|'unconfirmed';contact?:{name:string;role?:string;email?:string};documents:string[];outsideUpdate?:string;evidence:{callId:string;at:number;text:string;kind:'reviewed_recap'|'quote'|'rep_update'}[]};
 const clean=(text:string)=>text.replace(/\\r\\n|\\n/g,'\n').replace(/[‘’]/g,"'").replace(/[\t ]+/g,' ').trim();
@@ -63,14 +64,15 @@ function reviewedContact(recap:string,client:ClientRecord):ClientStanding['conta
 /** The reviewed recap is the current client account, not a collection of
  * unchecked extraction candidates. Older quotes remain evidence, never a
  * competing current summary. No transcript reconstruction overrides an edit. */
-export function buildClientStanding(input:{client:ClientRecord;calls:CallRecord[];outsideUpdate?:string;now?:number;excludeCallId?:string}):ClientStanding {
+export function buildClientStanding(input:{client:ClientRecord;calls:CallRecord[];outsideUpdate?:string;now?:number;excludeCallId?:string;projectId?:string;contactId?:string}):ClientStanding {
  const {client}=input,now=input.now??Date.now();
- const call=input.calls.filter(row=>row.manufacturerId===client.companyId&&row.clientId===client.id&&row.id!==input.excludeCallId&&!row.derivedReviewStale&&row.wrapUp?.reviewedAt&&row.wrapUp.reviewedAt<=now&&row.startedAt<=now).sort((a,b)=>b.startedAt-a.startedAt||(b.wrapUp!.reviewedAt!-a.wrapUp!.reviewedAt!))[0];
+ const call=input.calls.filter(row=>row.manufacturerId===client.companyId&&row.clientId===client.id&&(!row.projectId||row.projectId===input.projectId)&&(!input.contactId||!row.contactId||row.contactId===input.contactId||client.contacts.find(contact=>contact.id===row.contactId)?.kind==='main_line')&&row.id!==input.excludeCallId&&!row.derivedReviewStale&&row.wrapUp?.reviewedAt&&row.wrapUp.reviewedAt<=now&&row.startedAt<=now).sort((a,b)=>b.startedAt-a.startedAt||(b.wrapUp!.reviewedAt!-a.wrapUp!.reviewedAt!))[0];
  const saved=client.currentSummary;
  const source=call?{callId:call.id,at:call.startedAt,reviewedAt:call.wrapUp!.reviewedAt!}:undefined;
  const rawRecap=call?(saved?.callId===call.id&&saved.reviewedAt>=call.wrapUp!.reviewedAt!?saved.text:call.wrapUp!.recap):'';
  const recap=clean(rawRecap);
  const outsideUpdate=clean(input.outsideUpdate||'');
+ const manualUpdates=client.context.filter(entry=>!entry.callId&&!entry.needsReview&&!entry.supersededById&&['rep_update','manager'].includes(entry.source)&&['current','completed'].includes(entry.status)&&(!entry.projectId||entry.projectId===input.projectId)&&(entry.scope==='client'||!!input.contactId&&entry.contactId===input.contactId)&&entry.at<=now&&entry.recordedAt<=now&&entry.recordedAt>=(source?.reviewedAt||0)&&(entry.at>=(source?.at||0)||!!entry.supersedesId)).sort((a,b)=>a.at-b.at||a.recordedAt-b.recordedAt);
  const base:ClientStanding={version:1,companyId:client.companyId,clientId:client.id,...source?{source}:{},summary:'No reviewed call recap yet.',reached:'Not recorded.',buyerRequested:[],repOwes:[],buyerOwes:[],unknowns:[],sendStatus:'unknown',receiptStatus:'unconfirmed',reviewStatus:'unconfirmed',documents:[],evidence:[],...outsideUpdate?{outsideUpdate:(input.outsideUpdate||'').trim()}:{}};
  if(!call||!recap)return base;
  base.evidence=[{callId:call.id,at:source!.at,text:rawRecap,kind:'reviewed_recap'},...call.turns.filter(turn=>!turn.transcriptionUncertainty).map(turn=>({callId:call.id,at:turn.at,text:`${turn.role==='you'?'Salesperson':turn.role==='buyer'?'Buyer':'Unattributed'}: ${turn.text}`,kind:'quote' as const}))];
@@ -122,15 +124,18 @@ export function buildClientStanding(input:{client:ClientRecord;calls:CallRecord[
  if(contact?.role==='Purchasing'&&!parts.some(part=>!uncertain.test(part)&&/\b(?:final (?:decision|approval) (?:authority|maker)|sole decision maker)\b/i.test(part)))base.unknowns.push('Final decision authority is unconfirmed; purchasing responsibility alone does not establish it.');
  const clientNames=unique([client.name,client.name.replace(/\s*[—–-]\s*Test\s*$/i,''),client.name.split(/\s+/)[0]]).map(value=>value.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'));
  const usePattern=new RegExp('\\b(?:buyer|contact|customer|we|I|'+clientNames.join('|')+')\\b.{0,40}\\b(?:uses?|buy|buys|need|needs|require|requires)\\b.{0,100}\\b(?:for|in)\\b','i');
- const useKnown=parts.some(part=>!uncertain.test(part)&&!/^Salesperson|^Reason for calling/i.test(part)&&usePattern.test(part));
+ const retainedBuyerEntries=client.context.filter(entry=>entry.source==='buyer'&&entry.status==='current'&&['fact','background','update'].includes(entry.kind)&&!entry.needsReview&&!entry.supersededById&&(!entry.projectId||entry.projectId===input.projectId)&&(entry.scope==='client'||!!input.contactId&&entry.contactId===input.contactId)&&entry.at<=now&&entry.recordedAt<=now);
+ const reviewedAccounts=input.calls.filter(row=>row.manufacturerId===client.companyId&&row.clientId===client.id&&row.id!==input.excludeCallId&&!row.derivedReviewStale&&row.wrapUp?.reviewedAt&&row.wrapUp.reviewedAt<=now&&row.startedAt<=now&&(!row.projectId||row.projectId===input.projectId)&&(!input.contactId||!row.contactId||row.contactId===input.contactId||client.contacts.find(contact=>contact.id===row.contactId)?.kind==='main_line')).map(row=>({at:row.startedAt,text:row.wrapUp!.recap}));
+ const retainedNeeds=deriveBuyerNeeds({callContext:{knownFacts:[...reviewedAccounts,...retainedBuyerEntries.map(entry=>({at:entry.at,text:entry.text}))].sort((a,b)=>a.at-b.at).map(entry=>entry.text).join('\n')}});
+ const useKnown=!!retainedNeeds.facts.application||parts.some(part=>!uncertain.test(part)&&!/^Salesperson|^Reason for calling/i.test(part)&&usePattern.test(part));
  if(!useKnown)base.unknowns.push('Product usage and requirements are unconfirmed.');
  // The editable reviewed account is authoritative. Its paired structured
  // handoffs carry the same action states as live coaching, never raw omitted
  // speech or a previous unchecked extraction. Coverage needs source authority,
  // so reviewed speech alone leaves it unknown.
  const documentState=call.wrapUp?.documentState&&call.wrapUp.documentStateRecap===rawRecap?structuredClone(call.wrapUp.documentState):documentStateFromReviewedRecap(recap,{buyerNames:contact?[contact.name]:client.contacts.filter(row=>row.kind!=='main_line'&&!row.review?.required).map(row=>row.name)});
- if(documentState.transfers.length){
-  const update=deriveDocumentState({seed:documentState,turns:outsideUpdate?[{id:'reviewed-rep-update',role:'you',text:outsideUpdate,source:'rep_update'}]:[]});
+ if(documentState.transfers.length||manualUpdates.length||outsideUpdate){
+  const update=deriveDocumentState({seed:documentState,turns:[...manualUpdates.map(entry=>({id:'client-update:'+entry.id,role:'you',text:entry.text,source:'rep_update' as const})),...outsideUpdate?[{id:'reviewed-rep-update',role:'you',text:outsideUpdate,source:'rep_update' as const}]:[]]});
   base.documentState=update;
   const outgoing=update.transfers.filter(row=>row.sender==='you'&&row.phase!=='cancelled'&&row.events.some(event=>['requested','promised','sent','received'].includes(event.kind))),checks=update.transfers.filter(row=>row.sender==='you'&&row.phase==='checking'),incoming=update.transfers.filter(row=>row.sender==='buyer'&&row.phase!=='cancelled');
   const offers=update.transfers.filter(row=>row.sender==='you'&&row.phase==='offered'&&!row.events.some(event=>['requested','promised','sent','received'].includes(event.kind)));
@@ -158,6 +163,10 @@ export function buildClientStanding(input:{client:ClientRecord;calls:CallRecord[
    .filter(part=>!(receiptUpdate&&/\b(?:receipt|received)\b/i.test(part)&&/\b(?:pending|unconfirmed|not confirmed|not received|unknown)\b/i.test(part)))
    .filter(part=>!(reviewUpdate&&/\breview(?:ed)?\b/i.test(part)&&/\b(?:pending|unconfirmed|not confirmed|not reviewed|unknown|will|plans?|planned)\b/i.test(part)));
   base.summary=[...retained,...reportedDocumentSend(outsideUpdate)?[`The salesperson reports sending the ${joined(documents)}.`]:[],`Latest reported status: receipt is ${base.receiptStatus}; review is ${base.reviewStatus}.`].join(' ');
+ }
+ if(manualUpdates.length){
+  base.summary+='\n'+manualUpdates.map(entry=>`Salesperson update (${new Date(entry.at).toISOString()}): ${entry.text}`).join('\n');
+  base.evidence.push(...manualUpdates.map(entry=>({callId:'',at:entry.at,text:entry.text,kind:'rep_update' as const})));
  }
  return base;
 }

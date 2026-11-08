@@ -1,9 +1,11 @@
+export type InteractionType = 'in_person'|'call_meeting'|'text_email';
 export type Source = { id: string; title: string; text: string; addedAt: string; originUrl?: string; originKind?: "google-drive"; syncedAt?: string };
 export type BuyerBrief = { company:string; website:string; summary:string; facts:{text:string;sourceUrl:string}[]; hypotheses:{painPoint:string;reason:string;question:string}[]; sources:{title:string;url:string}[]; researchedAt:string };
 export type Manufacturer = { brain?:import("./company-brain").CompanyBrainRecord; id: string; name: string; products: string; introduction: string; sources: Source[];stageMap?:import("./call-purpose").StageDefinition[];exampleLines?:import("./call-purpose").ExampleLine[] };
 export type Turn = { transcriptionUncertainty?:{reason:string;message:string}; id: string; text: string; role: "buyer" | "you" | "conversation"; at: number; translationZh?:string; corrections?:{originalText:string;originalRole:Turn['role'];text:string;role:Turn['role'];reason:string;at:number;source:'manager_review'}[] };
 export type Guidance = { replyOrigin?:'generated'|'local'; localReason?:string; usageUnconfirmed?:boolean; verificationStatus?:'not_required'|'pending'|'verified'|'rejected'|'unavailable'; learningAttribution?:import("./generation-foundation").LearningAttribution; say: string; ask: string; intent: string; nextStep: string; caution: string; evidence: { sourceId: string; quote: string }[]; missing: string[]; stageId?:string; stage?:string; moment?:string; move?:string; backup?:string; why?:string; buyerIntent?:string; verified?:boolean;phase?:"bridge"|"answer"|"landing";questionEcho?:string;analysisReady?:boolean;scriptComplete?:boolean };
 export type CallRecord = {
+  interactionType?:InteractionType;projectId?:string;
   transcriptionDiagnostics?:{sessions:unknown[];turns:Record<string,unknown>[]};
   derivedReviewStale?:boolean;
   wrapUp?:import('./client-workflow').CallWrapUp;

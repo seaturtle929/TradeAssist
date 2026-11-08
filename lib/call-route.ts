@@ -1,7 +1,7 @@
 import {deriveCallParticipant} from './call-participant.ts';
 import type {ClientCoachingContext} from './client-coaching-context';
 
-type RouteContext={clientContext?:ClientCoachingContext;brain?:unknown;coachingRequest?:{listeningSession?:{currentTurnIds:string[]};partials?:unknown[];pendingSpeech?:unknown[];transcriptState?:string};turns?:{id?:string;role:string;text:string;transcriptionUncertainty?:unknown}[]};
+type RouteContext={interactionType?:import('./trade').InteractionType;clientContext?:ClientCoachingContext;brain?:unknown;coachingRequest?:{listeningSession?:{currentTurnIds:string[]};partials?:unknown[];pendingSpeech?:unknown[];transcriptState?:string};turns?:{id?:string;role:string;text:string;transcriptionUncertainty?:unknown}[]};
 const capturedUnfinishedSpeech=(context:RouteContext)=>!!(context.coachingRequest?.partials?.length||context.coachingRequest?.pendingSpeech?.length||['partial','pending'].includes(context.coachingRequest?.transcriptState||''));
 const nameKey=(value:string)=>value.toLowerCase().replace(/[^a-z'-]+/g,' ').trim();
 const sameName=(a:string,b:string)=>{const x=nameKey(a),y=nameKey(b);return !!x&&!!y&&(x===y||(!x.includes(' ')||!y.includes(' '))&&x.split(' ')[0]===y.split(' ')[0]);};
@@ -10,7 +10,9 @@ const sameName=(a:string,b:string)=>{const x=nameKey(a),y=nameKey(b);return !!x&
  * Current speaker identity comes only from this call's confirmed speech. */
 export function callRouteAtRequest(context:RouteContext){
  const nested=context.brain&&typeof context.brain==='object'&&'clientContext' in context.brain?context.brain.clientContext as ClientCoachingContext|undefined:undefined;
- const client=context.clientContext||nested,route=client?.reachViaContact||(client?.contact?.kind==='main_line'?client.contact:undefined);
+ const client=context.clientContext||nested;
+ if((context.interactionType||client?.interactionType||'call_meeting')!=='call_meeting')return;
+ const route=client?.reachViaContact||(client?.contact?.kind==='main_line'?client.contact:undefined);
  if(route?.kind!=='main_line')return;
  const target=client?.contact?.kind==='person'?client.contact:undefined;
  const currentIds=context.coachingRequest?.listeningSession?.currentTurnIds;

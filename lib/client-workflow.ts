@@ -8,9 +8,9 @@ import {routingHistoryFor} from './call-participant.ts';
 import {attachCallToClient,updateClientRecord,upsertClientContact,upsertClientCallRecord,type ClientCategory,type ClientRecord,type ClientContact} from './client-records.ts';
 
 export type WrapUpMemoryKind='discussed'|'agreed'|'completed'|'uncertain'|'decision';
-export type WrapUpMemory={id:string;text:string;kind:WrapUpMemoryKind;source:'buyer'|'rep_update'|'inference';sourceTurnId?:string;quote?:string;at:number;contactId?:string;confirmed:boolean};
+export type WrapUpMemory={owner?:'you'|'buyer';projectId?:string;id:string;text:string;kind:WrapUpMemoryKind;source:'buyer'|'rep_update'|'inference';sourceTurnId?:string;quote?:string;at:number;contactId?:string;confirmed:boolean};
 export type WrapUpContact={source?:'speech'|'rep_update'|'reviewed_recap';id:string;name:string;email?:string;emailLabel?:string;phone?:string;role?:string;sourceTurnId:string;quote:string;confirmed:boolean;reviewDecision?:'include'|'exclude'};
-export type CallWrapUp={documentState?:DocumentState;documentStateRecap?:string;version:1;callId:string;companyId:string;clientId:string;recap:string;outcome:string;notes:string;memory:WrapUpMemory[];contacts:WrapUpContact[];categoryUpdate?:{category?:ClientCategory;inactiveReason?:string;reopenOpportunity?:string};reviewedAt?:number};
+export type CallWrapUp={projectId?:string;interactionType?:import('./trade').InteractionType;documentState?:DocumentState;documentStateRecap?:string;version:1;callId:string;companyId:string;clientId:string;recap:string;outcome:string;notes:string;memory:WrapUpMemory[];contacts:WrapUpContact[];categoryUpdate?:{category?:ClientCategory;inactiveReason?:string;reopenOpportunity?:string};reviewedAt?:number};
 export type ClientCallWrapUp=CallWrapUp;
 const clone=<T>(value:T):T=>structuredClone(value);
 // A routing contact repeating/requesting the rep's details is not offering a buyer contact.
@@ -127,13 +127,13 @@ export function proposeCallWrapUp(call:CallRecord,client:ClientRecord):CallWrapU
  const repAddresses=new Set(reliableTurns.filter(turn=>turn.role==='you').flatMap(turn=>turn.text.match(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/ig)||[]).map(address=>address.toLowerCase()));
  const echoesRepContact=(turn:Turn)=>turn.role==='buyer'&&!documentRequests.has(turn.id)&&(repContactCheck(turn.text)||(turn.text.match(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/ig)||[]).some(address=>repAddresses.has(address.toLowerCase()))&&!/\bmy (?:email|address)\b/i.test(turn.text));
  const selected=client.contacts.find(row=>row.id===call.contactId);
- const memory:WrapUpMemory[]=reliableTurns.filter(turn=>turn.role!=='conversation'&&!echoesRepContact(turn)&&(turn.role==='buyer'?documentRequests.has(turn.id)||relevant.test(turn.text)||uncertainty.test(turn.text)||promise.test(turn.text)||possibleAction.test(turn.text):documentAgreements.has(turn.id)||promise.test(turn.text)||completed.test(turn.text))).map(turn=>({id:`turn:${turn.id}`,text:documentAgreements.has(turn.id)?`Salesperson agreed to send the ${documentAgreements.get(turn.id)!.documents.join(' and ')}. Spoken: “${turn.text}”`:turn.text,kind:documentAgreements.has(turn.id)?'agreed':kindFor(turn),source:turn.role==='buyer'?'buyer' as const:'rep_update' as const,sourceTurnId:turn.id,quote:turn.text,at:turn.at,...call.contactId&&selected?.kind!=='main_line'?{contactId:call.contactId}:{},confirmed:false}));
+ const memory:WrapUpMemory[]=reliableTurns.filter(turn=>turn.role!=='conversation'&&!echoesRepContact(turn)&&(turn.role==='buyer'?documentRequests.has(turn.id)||relevant.test(turn.text)||uncertainty.test(turn.text)||promise.test(turn.text)||possibleAction.test(turn.text):documentAgreements.has(turn.id)||promise.test(turn.text)||completed.test(turn.text))).map(turn=>({id:`turn:${turn.id}`,text:documentAgreements.has(turn.id)?`Salesperson agreed to send the ${documentAgreements.get(turn.id)!.documents.join(' and ')}. Spoken: “${turn.text}”`:turn.text,kind:documentAgreements.has(turn.id)?'agreed':kindFor(turn),source:turn.role==='buyer'?'buyer' as const:'rep_update' as const,owner:turn.role==='buyer'?'buyer' as const:'you' as const,sourceTurnId:turn.id,quote:turn.text,at:turn.at,...call.projectId?{projectId:call.projectId}:{},...call.contactId&&selected?.kind!=='main_line'?{contactId:call.contactId}:{},confirmed:false}));
  const routing=routingHistoryFor(reliableTurns);
  if(!routing&&review.unknowns.length)memory.push({id:'review-unknowns',text:review.unknowns.join(' '),kind:'uncertain',source:'inference',at:call.turns.at(-1)?.at||call.startedAt,confirmed:false});
  if(routing)memory.push({id:'routing-status',text:routing.summary,kind:'uncertain',source:'inference',at:call.turns.at(-1)?.at||call.startedAt,confirmed:false});
  for(const decision of call.decisionsNeeded||[])memory.push({id:`decision:${decision.id}`,text:decision.text,kind:'decision',source:'inference',at:call.startedAt,confirmed:false});
  const contacts=proposeReviewedCallContacts(call,client);
- const draft:CallWrapUp={documentState:review.documentState,documentStateRecap:review.recap,version:1,callId:call.id,companyId:client.companyId,clientId:client.id,recap:review.recap,outcome:review.outcome,notes:call.notes,memory,contacts};
+ const draft:CallWrapUp={...call.projectId?{projectId:call.projectId}:{},...call.interactionType?{interactionType:call.interactionType}:{},documentState:review.documentState,documentStateRecap:review.recap,version:1,callId:call.id,companyId:client.companyId,clientId:client.id,recap:review.recap,outcome:review.outcome,notes:call.notes,memory,contacts};
  const recap=conciseWrapUpDraft(call,client,draft);return {...draft,recap,documentStateRecap:recap};
 }
 /** One idempotent session save, preserving participant IDs and historical turns.
@@ -141,9 +141,12 @@ export function proposeCallWrapUp(call:CallRecord,client:ClientRecord):CallWrapU
 export function saveClientCallWrapUp(brain:CompanyBrainRecord,calls:CallRecord[],call:CallRecord,wrapUp:CallWrapUp,now=Date.now()):{brain:CompanyBrainRecord;calls:CallRecord[];call:CallRecord} {
  if(brain.companyId!==call.manufacturerId||wrapUp.companyId!==brain.companyId||wrapUp.callId!==call.id||wrapUp.clientId!==call.clientId)throw Error('The wrap-up belongs to another call, client or selling company.');
  let client=brain.clients?.find(row=>row.id===call.clientId&&row.companyId===brain.companyId);if(!client)throw Error('Select a client before saving the call.');
+ if(call.projectId&&!client.projects?.some(project=>project.id===call.projectId&&project.clientId===client!.id&&project.companyId===brain.companyId))throw Error('The interaction project does not belong to this client.');
+ if(wrapUp.projectId!==undefined&&wrapUp.projectId!==call.projectId)throw Error('The reviewed memory belongs to another project.');
  if(call.contactId&&!client.contacts.some(contact=>contact.id===call.contactId))throw Error('The call participant is not a contact of this client.');
  for(const item of wrapUp.memory.filter(row=>row.confirmed)){
   if(!item.text.trim())throw Error('A confirmed memory update needs text.');
+  if(item.projectId!==undefined&&item.projectId!==call.projectId)throw Error('A memory update belongs to another project.');
   if(item.contactId&&!client.contacts.some(contact=>contact.id===item.contactId))throw Error('A memory update belongs to another contact.');
   if(item.source==='buyer'){
    const turn=call.turns.find(row=>row.id===item.sourceTurnId&&row.role==='buyer');
@@ -159,12 +162,12 @@ export function saveClientCallWrapUp(brain:CompanyBrainRecord,calls:CallRecord[]
  if(wrapUp.categoryUpdate)client=updateClientRecord(client,{...wrapUp.categoryUpdate,category:wrapUp.categoryUpdate.category??null},now);
  const review=deriveCallReview({...call,outcome:wrapUp.outcome});
  const reviewedRecap=wrapUp.recap.trim()?wrapUp.recap:review.recap;
- const savedWrapUp:CallWrapUp={...clone(wrapUp),documentState:wrapUp.documentState&&wrapUp.documentStateRecap===reviewedRecap?clone(wrapUp.documentState):documentStateFromReviewedRecap(reviewedRecap,{buyerNames:client.contacts.filter(row=>row.kind!=='main_line'&&!row.review?.required).map(row=>row.name)}),documentStateRecap:reviewedRecap,contacts:contactResult.contacts,recap:wrapUp.recap.trim()?wrapUp.recap:review.recap,outcome:review.outcome,memory:wrapUp.memory.map(item=>({...clone(item),...item.source==='buyer'&&item.text.trim()!==item.quote?.trim()?{source:'rep_update' as const}:{}})),reviewedAt:now};
+ const savedWrapUp:CallWrapUp={...clone(wrapUp),...call.projectId?{projectId:call.projectId}:{},...call.interactionType?{interactionType:call.interactionType}:{},documentState:wrapUp.documentState&&wrapUp.documentStateRecap===reviewedRecap?clone(wrapUp.documentState):documentStateFromReviewedRecap(reviewedRecap,{buyerNames:client.contacts.filter(row=>row.kind!=='main_line'&&!row.review?.required).map(row=>row.name)}),documentStateRecap:reviewedRecap,contacts:contactResult.contacts,recap:wrapUp.recap.trim()?wrapUp.recap:review.recap,outcome:review.outcome,memory:wrapUp.memory.map(item=>({...clone(item),...call.projectId?{projectId:call.projectId}:{},...item.source==='buyer'&&item.text.trim()!==item.quote?.trim()?{source:'rep_update' as const}:{}})),reviewedAt:now};
  const saved:CallRecord={...clone(call),derivedReviewStale:false,wrapUp:savedWrapUp,notes:wrapUp.notes,outcome:savedWrapUp.outcome};
  // Earlier imports of this same session may already have extracted memory. The
  // reviewed selection replaces only this session's derived entries; no other
  // call or manually authored historical evidence is altered.
- client={...client,...!client.currentSummary||call.startedAt>=client.currentSummary.at?{currentSummary:{callId:call.id,at:call.startedAt,reviewedAt:now,text:savedWrapUp.recap}}:{},context:client.context.filter(row=>row.callId!==call.id||!row.id.startsWith(`call:${call.id}:`)&&!row.id.startsWith(`wrapup:${call.id}:`))};
+ client={...client,...!client.currentSummary||call.startedAt>=client.currentSummary.at?{currentSummary:{callId:call.id,at:call.startedAt,reviewedAt:now,text:savedWrapUp.recap,...call.projectId?{projectId:call.projectId}:{},...call.contactId?{contactId:call.contactId}:{},...call.interactionType?{interactionType:call.interactionType}:{}}}:{},context:client.context.filter(row=>row.callId!==call.id||!row.id.startsWith(`call:${call.id}:`)&&!row.id.startsWith(`wrapup:${call.id}:`))};
  const updated={...brain,clients:(brain.clients||[]).map(row=>row.id===client!.id?client!:clone(row))};
  return {brain:attachCallToClient(updated,saved,{clientId:client.id,contactId:call.contactId},now),calls:upsertClientCallRecord(calls,saved),call:saved};
 }

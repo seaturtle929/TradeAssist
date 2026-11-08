@@ -113,6 +113,12 @@ function applyTurns(result:BuyerNeeds,turns:NeedTurn[],source:'transcript'|'cont
   for(const snippet of pieces){
    const keys=classifications(snippet);
    if(source==='context'){
+    // A reviewed application goal is prepared context, not proof of current
+    // usage, technical suitability or an approved product match. Reuse the
+    // existing scoped negation handling so a later withdrawal clears it.
+    const goal=targetNegation(snippet,/\b(?:explor(?:e|es|ing)|evaluat(?:e|es|ing)|consider(?:s|ing)?|develop(?:s|ing)?|design(?:s|ing)?|build(?:s|ing)?|test(?:s|ing)?|needs?|requir(?:e|es)|us(?:e|es|ing)|buy(?:s|ing)?)\b[^.!?]{0,110}\b(?:for|in)\s+(?!(?:(?:our|their|the|a|an)\s+)?(?:review|approval|reference|information)\b)\S+/i);
+    if(goal.onlyNegative){delete result.facts.application;const at=keys.indexOf('application');if(at>=0)keys.splice(at,1);}
+    else if(goal.positive&&!question(snippet)&&!/^\s*(?:if|suppose|supposing|hypothetically|imagine)\b/i.test(snippet)&&!keys.includes('application'))keys.push('application');
     const label=snippet.match(/^\s*(current use|application|buyer priority|priority|difficulty|problem|impact|practical effect|evaluation|approval criteria|timing|current supplier)\s*:/i)?.[1]?.toLowerCase();
     const labelled:Record<string,BuyerNeedKey>={'current use':'application',application:'application','buyer priority':'priority',priority:'priority',difficulty:'difficulty',problem:'difficulty',impact:'impact','practical effect':'impact',evaluation:'evaluation','approval criteria':'evaluation',timing:'timing','current supplier':'current_supplier'};
     if(label&&labelled[label]&&!keys.includes(labelled[label]))keys.push(labelled[label]);
